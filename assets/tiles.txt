@@ -1,0 +1,158 @@
+# Playfield tiles for ANTIC mode 4 (4 colours). Each tile is 4 pixels wide and 8 rows tall.
+#
+#   tile <id> <NAME> <map-char>
+#   <8 rows of 4 digits>      0 = background, 1 = COLOR0, 2 = COLOR1, 3 = COLOR2
+#
+# <NAME> becomes the assembler constant T_<NAME>; <map-char> is what you type in level files.
+# Ids must be below 128 (ids 128+ would switch pixel value 3 to COLOR3).
+
+tile 0 EMPTY .
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+
+tile 1 BRICK #
+1111
+2232
+2232
+3333
+2322
+2322
+3333
+2222
+
+tile 2 LADDER H
+2002
+2002
+2112
+2002
+2002
+2002
+2112
+2002
+
+tile 3 ITEM *
+0000
+0110
+1221
+1221
+1221
+0110
+0000
+0000
+
+tile 4 SPIKE ^
+0000
+0000
+0110
+0110
+1331
+1331
+3333
+3333
+
+# Digits for the score display (3 pixels wide in a 4 pixel cell).
+tile 16 DIGIT0 0
+0000
+3330
+3030
+3030
+3030
+3330
+0000
+0000
+
+tile 17 DIGIT1 1
+0000
+0300
+3300
+0300
+0300
+3330
+0000
+0000
+
+tile 18 DIGIT2 2
+0000
+3330
+0030
+3330
+3000
+3330
+0000
+0000
+
+tile 19 DIGIT3 3
+0000
+3330
+0030
+0330
+0030
+3330
+0000
+0000
+
+tile 20 DIGIT4 4
+0000
+3030
+3030
+3330
+0030
+0030
+0000
+0000
+
+tile 21 DIGIT5 5
+0000
+3330
+3000
+3330
+0030
+3330
+0000
+0000
+
+tile 22 DIGIT6 6
+0000
+3330
+3000
+3330
+3030
+3330
+0000
+0000
+
+tile 23 DIGIT7 7
+0000
+3330
+0030
+0030
+0030
+0030
+0000
+0000
+
+tile 24 DIGIT8 8
+0000
+3330
+3030
+3330
+3030
+3330
+0000
+0000
+
+tile 25 DIGIT9 9
+0000
+3330
+3030
+3330
+0030
+3330
+0000
+0000

@@ -1,0 +1,5 @@
+build/
+src/gen/
+.task/
+.DS_Store
+__pycache__/

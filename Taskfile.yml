@@ -1,0 +1,69 @@
+version: '3'
+
+# atarigame: Atari XL/XE single-screen platformer. Assembled with ca65/ld65 (cc65),
+# packed to a .xex by tools/mkxex.py, run in the atari800 emulator.
+
+vars:
+  NAME: atarigame
+  BUILD_DIR: build
+
+tasks:
+  default:
+    desc: List all tasks
+    cmds:
+      - task --list
+    silent: true
+
+  assets:
+    desc: Convert assets/*.txt into src/gen/*.inc
+    cmds:
+      - python3 tools/build_assets.py
+    sources:
+      - assets/**/*.txt
+      - tools/build_assets.py
+    generates:
+      - src/gen/tiles.inc
+      - src/gen/charset.inc
+      - src/gen/sprites.inc
+      - src/gen/levels.inc
+
+  build:
+    desc: Assemble, link and pack build/atarigame.xex
+    deps: [assets]
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - ca65 -I src -l {{.BUILD_DIR}}/{{.NAME}}.lst -o {{.BUILD_DIR}}/main.o src/main.s
+      - >-
+        ld65 -C cfg/atari-xex.cfg -m {{.BUILD_DIR}}/{{.NAME}}.map
+        -Ln {{.BUILD_DIR}}/{{.NAME}}.lbl {{.BUILD_DIR}}/main.o
+      - >-
+        python3 tools/mkxex.py -o {{.BUILD_DIR}}/{{.NAME}}.xex --labels {{.BUILD_DIR}}/{{.NAME}}.lbl
+        0x2000={{.BUILD_DIR}}/code.bin 0x4000={{.BUILD_DIR}}/charset.bin 0x4400={{.BUILD_DIR}}/dlist.bin
+
+  build-test:
+    desc: Build build/atarigame-test.xex, which reads its joystick from RAM (for tools/headless.py)
+    deps: [assets]
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}/test
+      - ca65 -D TEST -I src -o {{.BUILD_DIR}}/test/main.o src/main.s
+      - >-
+        ld65 -C cfg/atari-xex-test.cfg -Ln {{.BUILD_DIR}}/test/{{.NAME}}.lbl {{.BUILD_DIR}}/test/main.o
+      - >-
+        python3 tools/mkxex.py -o {{.BUILD_DIR}}/{{.NAME}}-test.xex --labels {{.BUILD_DIR}}/test/{{.NAME}}.lbl
+        0x2000={{.BUILD_DIR}}/test/code.bin 0x4000={{.BUILD_DIR}}/test/charset.bin 0x4400={{.BUILD_DIR}}/test/dlist.bin
+
+  run:
+    desc: Run in the atari800 emulator (XL/XE, 64 KB)
+    deps: [build]
+    cmds:
+      - atari800 -xl -nobasic -run {{.BUILD_DIR}}/{{.NAME}}.xex
+
+  test:
+    desc: Run the tool tests
+    cmds:
+      - python3 -m unittest discover -s tests -v
+
+  clean:
+    desc: Remove build output and generated sources
+    cmds:
+      - rm -rf {{.BUILD_DIR}} src/gen/*.inc
