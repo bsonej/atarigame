@@ -26,6 +26,8 @@ tasks:
       - src/gen/charset.inc
       - src/gen/sprites.inc
       - src/gen/levels.inc
+      - src/gen/font.inc
+      - src/gen/screens.inc
 
   build:
     desc: Assemble, link and pack build/atarigame.xex
@@ -38,7 +40,7 @@ tasks:
         -Ln {{.BUILD_DIR}}/{{.NAME}}.lbl {{.BUILD_DIR}}/main.o
       - >-
         python3 tools/mkxex.py -o {{.BUILD_DIR}}/{{.NAME}}.xex --labels {{.BUILD_DIR}}/{{.NAME}}.lbl
-        0x2000={{.BUILD_DIR}}/code.bin 0x4000={{.BUILD_DIR}}/charset.bin 0x4400={{.BUILD_DIR}}/dlist.bin
+        0x2000={{.BUILD_DIR}}/code.bin 0x6000={{.BUILD_DIR}}/charset.bin 0x6400={{.BUILD_DIR}}/dlist.bin
 
   build-test:
     desc: Build build/atarigame-test.xex, which reads its joystick from RAM (for tools/headless.py)
@@ -50,7 +52,7 @@ tasks:
         ld65 -C cfg/atari-xex-test.cfg -Ln {{.BUILD_DIR}}/test/{{.NAME}}.lbl {{.BUILD_DIR}}/test/main.o
       - >-
         python3 tools/mkxex.py -o {{.BUILD_DIR}}/{{.NAME}}-test.xex --labels {{.BUILD_DIR}}/test/{{.NAME}}.lbl
-        0x2000={{.BUILD_DIR}}/test/code.bin 0x4000={{.BUILD_DIR}}/test/charset.bin 0x4400={{.BUILD_DIR}}/test/dlist.bin
+        0x2000={{.BUILD_DIR}}/test/code.bin 0x6000={{.BUILD_DIR}}/test/charset.bin 0x6400={{.BUILD_DIR}}/test/dlist.bin
 
   run:
     desc: Run in the atari800 emulator (XL/XE, 64 KB)

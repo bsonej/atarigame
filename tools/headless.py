@@ -28,9 +28,10 @@ LABELS = ROOT / "build" / "test" / "atarigame.lbl"
 UP, DOWN, LEFT, RIGHT, FIRE = 0x01, 0x02, 0x04, 0x08, 0x10
 
 GROUND, AIR, CLIMB = 0, 1, 2
-SCREEN = 0x4500
+TITLE, PLAY, DYING, SPAWN, CLEAR, OVER = range(6)  # the game's modes
 COLS, ROWS = 40, 24
-PM0Y = 0x5400 + 32
+PM_YOFF = 32
+SPAWN_FRAMES, DIE_FRAMES, CLEAR_FRAMES = 48, 80, 60
 
 
 def read_labels(path: Path) -> dict[str, int]:
@@ -68,6 +69,8 @@ class Game:
         self._send("C 6F0 0F\nC 6F1 01\n" + f"BPC {self.labels['frame_end']:X}\nCONT\n")
         self._wait(rf"PC={self.labels['frame_end']:04X}", 20)
         self.frames = 0
+        self.screen_addr = self.labels["SCREEN"]
+        self.pm0 = self.labels["PM0"]
         self._refresh()
 
     # ---- plumbing ----------------------------------------------------------
@@ -123,6 +126,46 @@ class Game:
     def idle(self, n: int = 1) -> None:
         self.step(0, n)
 
+    def run(self, n: int, buttons: int = 0, chunk: int = 50) -> None:
+        """Run ``n`` frames with constant input, fast: the CONTs are pipelined and state is read once per chunk."""
+        stick = 0x0F & ~(buttons & 0x0F)
+        trig = 0x00 if buttons & FIRE else 0x01
+        pc = rf"PC={self.labels['frame_end']:04X}"
+        left = n
+        while left > 0:
+            k = min(chunk, left)
+            self._send(f"C 6F0 {stick:02X}\nC 6F1 {trig:02X}\n" + "CONT\n" * k)
+            for _ in range(k):
+                self._wait(pc, 30)
+            self.frames += k
+            left -= k
+        self._refresh()
+
+    def run_until(self, cond, limit: int = 3000, buttons: int = 0, every: int = 5) -> int:
+        """Run until ``cond(game)`` is true, checking every ``every`` frames. Returns the frames run."""
+        ran = 0
+        while ran < limit:
+            if cond(self):
+                return ran
+            self.run(every, buttons, chunk=every)
+            ran += every
+        raise AssertionError(f"condition not met within {limit} frames")
+
+    def start_game(self) -> None:
+        """From the title: press fire, then wait out the 'come to life' animation until play begins."""
+        assert self.mode == TITLE, f"not on the title screen (mode {self.mode})"
+        self.step(FIRE)
+        self.idle()
+        self.run_until(lambda g: g.mode == PLAY, limit=SPAWN_FRAMES + 20, every=1)
+
+    @property
+    def score16(self) -> int:
+        return self.zp[self.labels["score"] - 0x80] | (self.zp[self.labels["score"] + 1 - 0x80] << 8)
+
+    def word(self, name: str) -> int:
+        a = self.labels[name] - 0x80
+        return self.zp[a] | (self.zp[a + 1] << 8)
+
     def poke(self, name_or_addr, value: int) -> None:
         addr = self.labels[name_or_addr] if isinstance(name_or_addr, str) else name_or_addr
         self._send(f"C {addr:X} {value:02X}\n")
@@ -134,17 +177,16 @@ class Game:
 
     def screen(self) -> list[str]:
         """The 24 screen rows as lists of tile ids, joined as hex strings (two digits per tile)."""
-        raw = self.mem(SCREEN, 1024)
+        raw = self.mem(self.screen_addr, 1024)
         return [raw[r * COLS : (r + 1) * COLS].hex() for r in range(ROWS)]
 
     def tile(self, col: int, row: int) -> int:
-        return self.mem(SCREEN + row * COLS, 256)[col]
+        return self.mem(self.screen_addr + row * COLS, 256)[col]
 
     def sprite(self) -> bytes:
         """The 16 bytes of Player 0 around the player's current line."""
-        raw = self.mem(PM0Y & ~0xFF, 256)
-        off = (PM0Y & 0xFF) + self.py
-        return raw[off : off + 16]
+        raw = self.mem(self.pm0, 512)
+        return raw[PM_YOFF + self.py : PM_YOFF + self.py + 16]
 
     def __getattr__(self, name: str):
         labels = self.__dict__.get("labels", {})
@@ -169,7 +211,9 @@ def main() -> int:
         print("build the test ROM first:  task build-test", file=sys.stderr)
         return 1
     with Game() as g:
-        print(f"start: px={g.px} py={g.py} state={g.state} left={g.left}")
+        print(f"title: mode={g.mode} hiscore={g.word('hiscore')}")
+        g.start_game()
+        print(f"start: px={g.px} py={g.py} state={g.state} left={g.left} lives={g.lives} level={g.level}")
         g.step(RIGHT, 10)
         print(f"after 10 frames right: px={g.px} py={g.py}")
     return 0

@@ -1,0 +1,26 @@
+#! Game over screen. 40x24. The game writes the score digits (row 10, column 22), the hi-score digits
+#! (row 12, column 22), NEW HIGH SCORE (row 15) and PRESS FIRE (row 18).
+
+########################################
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#              game over               #
+#                                      #
+#                                      #
+#            SCORE                     #
+#                                      #
+#            HI-SCORE                  #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+#                                      #
+########################################

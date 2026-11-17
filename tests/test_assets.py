@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 import tempfile
@@ -18,6 +19,11 @@ EMPTY_TILE = TILE.format(id=0, name="EMPTY", ch=".")
 BRICK_TILE = TILE.format(id=1, name="BRICK", ch="#")
 ITEM_TILE = TILE.format(id=3, name="ITEM", ch="*")
 SPRITE = "frame stand\n" + "\n".join(["#..#"] * 16)
+
+
+FONT_A = "glyph A\n.#.\n#.#\n###\n#.#\n#.#\n"
+FONT_0 = "glyph 0\n###\n#.#\n#.#\n#.#\n###\n"
+FONT_DASH = "glyph -\n...\n...\n###\n...\n...\n"
 
 
 def level(rows: list[str]) -> str:
@@ -53,14 +59,160 @@ class Project:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
+class Font(unittest.TestCase):
+    def setUp(self) -> None:
+        self.p = Project()
+        self.addCleanup(self.p.cleanup)
+
+    def build_with(self, font: str) -> Path:
+        self.p.write("assets/font.txt", font)
+        return self.p.build()
+
+    def test_ids_digits_16_letters_32_others_from_58(self) -> None:
+        self.p.write("assets/font.txt", FONT_0 + FONT_A + FONT_DASH)
+        glyphs = {g["char"]: g["id"] for g in ba.parse_font(self.p.dir / "assets" / "font.txt")}
+        self.assertEqual(glyphs, {"0": 16, "A": 32, "-": 58})
+
+    def test_charmap_maps_text_and_lowercase_is_the_second_colour(self) -> None:
+        out = self.build_with(FONT_0 + FONT_A)
+        text = (out / "font.inc").read_text()
+        self.assertIn(".charmap 65, 32", text)  # A
+        self.assertIn(".charmap 97, 160", text)  # a = same glyph, bit 7 set
+        self.assertIn(".charmap 48, 16", text)  # 0
+        self.assertIn(".charmap 32, 0", text)  # space is the empty tile
+        self.assertNotIn(".charmap 111", text)
+
+    def test_glyph_pixels_are_drawn_in_the_tile_with_value_3(self) -> None:
+        out = self.build_with(FONT_A)
+        flat = [int(v, 16) for v in re.findall(r"\$([0-9A-F]{2})", (out / "charset.inc").read_text())]
+        glyph = flat[32 * 8 : 33 * 8]
+        # rows .#. #.# ### #.# #.# placed on lines 1..7 as [r0, r0, r1, r2, r2, r3, r4], blank first line
+        row = {".#.": 0b00110000, "#.#": 0b11001100, "###": 0b11111100}
+        self.assertEqual(glyph, [0, row[".#."], row[".#."], row["#.#"], row["###"], row["###"], row["#.#"], row["#.#"]])
+
+    def test_font_must_not_collide_with_tiles(self) -> None:
+        self.p.write("assets/tiles.txt", self.p.dir.joinpath("assets/tiles.txt").read_text() + "\n" + TILE.format(id=32, name="CLASH", ch="~") + "\n")
+        self.p.write("assets/font.txt", FONT_A)
+        with self.assertRaises(ba.AssetError) as cm:
+            self.p.build()
+        self.assertIn("collides", str(cm.exception))
+
+    def test_bad_glyphs_are_rejected(self) -> None:
+        for text, message in (
+            ("glyph A\n.#.\n#.#\n", "needs 5"),
+            ("glyph A\n.#.\n#.#\n###\n#.#\n#.\n", "3 characters"),
+            ("glyph a\n.#.\n#.#\n###\n#.#\n#.#\n", "uppercase"),
+            (FONT_A + FONT_A, "duplicate glyph"),
+            (".#.\n", "before any 'glyph'"),
+        ):
+            with self.subTest(message):
+                self.p.write("assets/font.txt", text)
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.p.build()
+                self.assertIn(message, str(cm.exception))
+
+
+class Screens(unittest.TestCase):
+    def setUp(self) -> None:
+        self.p = Project()
+        self.addCleanup(self.p.cleanup)
+        self.p.write("assets/font.txt", FONT_0 + FONT_A + FONT_DASH + "glyph H\n#.#\n#.#\n###\n#.#\n#.#\n")
+        (self.p.dir / "assets" / "screens").mkdir()
+
+    def build_screen(self, rows: list[str], name: str = "title") -> list[int]:
+        self.p.write(f"assets/screens/{name}.txt", "\n".join(rows) + "\n")
+        out = self.p.build()
+        text = (out / "screens.inc").read_text()
+        body = text.split(f"screen_{name}:")[1]
+        return [int(v, 16) for v in re.findall(r"\$([0-9A-F]{2})", body)][:960]
+
+    def test_text_tiles_and_blanks_become_bytes(self) -> None:
+        data = self.build_screen(["A0-aH #*"])
+        self.assertEqual(data[:8], [32, 16, 58, 32 | 0x80, 39, 0, 1, 3])
+
+    def test_letters_win_over_tile_characters(self) -> None:
+        data = self.build_screen(["H"])
+        self.assertEqual(data[0], 32 + 7)  # the letter H, not the ladder tile
+
+    def test_short_screens_are_padded_to_24_rows_of_40(self) -> None:
+        data = self.build_screen(["A"])
+        self.assertEqual(len(data), 960)
+        self.assertEqual(data[1:], [0] * 959)
+
+    def test_a_row_starting_with_hash_space_is_data_not_a_comment(self) -> None:
+        data = self.build_screen(["#  A", "#! a comment"])
+        self.assertEqual(data[:4], [1, 0, 0, 32])
+        self.assertEqual(data[40:44], [0, 0, 0, 0], "the comment is not a row")
+
+    def test_screens_are_named_after_their_files(self) -> None:
+        self.build_screen(["A"], name="gameover")
+        self.assertIn("screen_gameover:", (self.p.dir / "gen" / "screens.inc").read_text())
+
+    def test_bad_screens_are_rejected(self) -> None:
+        for rows, message in (
+            (["?"], "unknown character"),
+            (["A" * 41], "wide"),
+            (["A"] * 25, "at most 24"),
+        ):
+            with self.subTest(message):
+                self.p.write("assets/screens/title.txt", "\n".join(rows) + "\n")
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.p.build()
+                self.assertIn(message, str(cm.exception))
+
+
+class LevelTables(unittest.TestCase):
+    def setUp(self) -> None:
+        self.p = Project()
+        self.addCleanup(self.p.cleanup)
+
+    def test_levels_are_ordered_naturally_and_tabulated(self) -> None:
+        for n in (10, 2):
+            self.p.write(f"assets/levels/level{n}.txt", level(good_rows()))
+        text = self.p.build().joinpath("levels.inc").read_text()
+        self.assertIn("LEVEL_COUNT = 3", text)
+        self.assertIn("level_lo:    .byte <level1,<level2,<level10", text)
+        self.assertIn("level_items: .byte LEVEL1_ITEMS,LEVEL2_ITEMS,LEVEL10_ITEMS", text)
+        self.assertIn("level_sx:    .byte 8,8,8", text)  # spawn column 2 -> pixel 8
+        self.assertIn("level_sy:    .byte 176,176,176", text)  # row 22 -> line 176
+
+    def test_levels_may_have_at_most_99_items(self) -> None:
+        rows = good_rows()
+        rows[3] = "*" * 40
+        rows[4] = "*" * 40
+        rows[5] = "*" * 40
+        self.p.write("assets/levels/level1.txt", level(rows))
+        with self.assertRaises(ba.AssetError) as cm:
+            self.p.build()
+        self.assertIn("too many items", str(cm.exception))
+
+
 class RealAssets(unittest.TestCase):
     def test_project_assets_convert(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ba.build(ROOT, Path(tmp))
             names = {p.name for p in Path(tmp).iterdir()}
-            self.assertEqual(names, {"tiles.inc", "charset.inc", "sprites.inc", "levels.inc"})
+            self.assertEqual(names, {"tiles.inc", "charset.inc", "font.inc", "sprites.inc", "levels.inc", "screens.inc"})
             self.assertIn("T_BRICK", (Path(tmp) / "tiles.inc").read_text())
+            self.assertIn("T_DIGIT0     = 16", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("level1_spawn", (Path(tmp) / "levels.inc").read_text())
+            self.assertIn("screen_title", (Path(tmp) / "screens.inc").read_text())
+            self.assertIn("screen_gameover", (Path(tmp) / "screens.inc").read_text())
+
+    def test_every_project_level_is_listed_in_the_level_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ba.build(ROOT, Path(tmp))
+            text = (Path(tmp) / "levels.inc").read_text()
+            n = len(list((ROOT / "assets" / "levels").glob("*.txt")))
+            self.assertIn(f"LEVEL_COUNT = {n}", text)
+            self.assertIn("level_lo:    .byte <level1,<level2", text)
+            self.assertIn("level_sx:", text)
+
+    def test_the_project_font_covers_the_text_the_game_uses(self) -> None:
+        glyphs = ba.parse_font(ROOT / "assets" / "font.txt")
+        chars = {g["char"] for g in glyphs}
+        for needed in set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-!"):
+            self.assertIn(needed, chars)
 
 
 class Validation(unittest.TestCase):

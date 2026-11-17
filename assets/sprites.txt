@@ -1,5 +1,6 @@
 # Player sprite frames (hardware Player 0). Each frame is 16 rows of 4 pixels: # = lit, . = clear.
-# Frame order matters: the game expects 0=stand 1=walk A 2=walk B (also used in the air) 3=climb A 4=climb B.
+# Frame order matters: the game expects 0=stand 1=walk A 2=walk B (also used in the air) 3=climb A 4=climb B
+# 5=die A 6=die B (the death animation alternates between these two).
 
 frame stand
 .##.
@@ -90,3 +91,39 @@ frame climb_b
 .##.
 .##.
 .##.
+
+frame die_a
+#..#
+#..#
+.##.
+####
+.##.
+.##.
+####
+.##.
+.##.
+.##.
+#..#
+#..#
+#..#
+#..#
+#..#
+#..#
+
+frame die_b
+....
+....
+....
+....
+....
+....
+....
+....
+.##.
+####
+.##.
+####
+####
+.##.
+#..#
+#..#
