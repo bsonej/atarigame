@@ -19,7 +19,9 @@ task test         # asset-tool tests + headless game-logic tests
 task --list
 ```
 
-Controls: joystick 1 (arrow keys + left Ctrl in atari800). Up/down on a ladder to climb, fire to jump.
+Controls (set in `~/.atari800.cfg`, `SDL2_JOY_0_*`, for a laptop without a keypad): arrow keys move, Up/Down climb
+ladders, Space jumps. atari800's stock mapping was keypad 8/5/4/6 and right Ctrl. The game starts by itself; there
+is no title screen. In the emulator: F5 warm reset, F9 quit.
 
 ## Layout
 
