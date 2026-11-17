@@ -1539,6 +1539,12 @@ new_game:
         sta lvlidx
         lda #1
         sta level
+.ifdef START_MAP                ; `task run-map -- N`: a game that starts on map N (for trying maps out)
+        lda #START_MAP-1
+        sta lvlidx
+        lda #START_MAP
+        sta level
+.endif
         lda #START_LIVES
         sta lives
         jmp begin_level

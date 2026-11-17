@@ -66,6 +66,19 @@ tasks:
     cmds:
       - atari800 -xl -nobasic -run {{.BUILD_DIR}}/{{.NAME}}.xex
 
+  run-map:
+    desc: "Run with games starting on map N, e.g. `task run-map -- 4` (its own .xex, build/atarigame-map.xex)"
+    deps: [assets]
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}/map
+      - ca65 -D START_MAP={{.CLI_ARGS}} -I src -o {{.BUILD_DIR}}/map/main.o src/main.s
+      - >-
+        ld65 -C cfg/atari-xex.cfg -Ln {{.BUILD_DIR}}/map/{{.NAME}}.lbl {{.BUILD_DIR}}/map/main.o
+      - >-
+        python3 tools/mkxex.py -o {{.BUILD_DIR}}/{{.NAME}}-map.xex --labels {{.BUILD_DIR}}/map/{{.NAME}}.lbl
+        0x2000={{.BUILD_DIR}}/code.bin 0x6000={{.BUILD_DIR}}/charset.bin 0x6400={{.BUILD_DIR}}/dlist.bin
+      - atari800 -xl -nobasic -run {{.BUILD_DIR}}/{{.NAME}}-map.xex
+
   test:
     desc: Run the tool tests
     cmds:

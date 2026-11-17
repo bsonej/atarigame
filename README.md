@@ -39,6 +39,7 @@ brew install cc65 atari800 go-task    # ca65/ld65, the emulator, the task runner
 ```sh
 task run          # build build/atarigame.xex and start it in atari800
 task build        # just build
+task run-map -- 4   # run with games starting on map 4 (to try the factory parts without clearing 1-3)
 task check-levels # are all items on every map reachable? (a quick static check, see below)
 task test         # asset-tool tests + headless game tests (about 12 minutes)
 task --list
