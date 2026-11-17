@@ -638,14 +638,14 @@ class LevelClear(Base):
 
     def test_levels_wrap_around_but_the_counter_keeps_counting(self) -> None:
         g = self.g
-        g.poke("level", 3)
-        g.poke("lvlidx", 2)  # the last map
+        g.poke("level", 5)
+        g.poke("lvlidx", 4)  # the last map (there are five)
         g.step(RIGHT, 20)
         g.poke("left", 1)
         g.run(40, RIGHT)
         g.run(CLEAR_FRAMES + 2)
-        self.assertEqual((g.mode, g.level, g.lvlidx), (SPAWN, 4, 0))
-        self.assertEqual(self.row(0)[18:20], "04")
+        self.assertEqual((g.mode, g.level, g.lvlidx), (SPAWN, 6, 0))
+        self.assertEqual(self.row(0)[18:20], "06")
 
 
 # ---------------------------------------------------------------------------

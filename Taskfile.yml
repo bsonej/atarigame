@@ -23,11 +23,17 @@ tasks:
       - tools/build_assets.py
     generates:
       - src/gen/tiles.inc
+      - src/gen/tileflags.inc
       - src/gen/charset.inc
       - src/gen/sprites.inc
       - src/gen/levels.inc
       - src/gen/font.inc
       - src/gen/screens.inc
+
+  check-levels:
+    desc: Check that every item in assets/levels/*.txt can be reached (an approximation)
+    cmds:
+      - python3 tools/levelcheck.py
 
   build:
     desc: Assemble, link and pack build/atarigame.xex

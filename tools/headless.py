@@ -172,6 +172,24 @@ class Game:
         self._wait(r"Changed \d+ bytes")
         self._refresh()
 
+    def poke_bytes(self, addr: int, data) -> None:
+        """Write several bytes at once (the monitor's C command takes a list)."""
+        data = bytes(data)
+        for i in range(0, len(data), 64):
+            chunk = data[i : i + 64]
+            self._send(f"C {addr + i:X} " + " ".join(f"{b:02X}" for b in chunk) + "\n")
+            self._wait(r"Changed \d+ bytes")
+        self._refresh()
+
+    def put_tiles(self, col: int, row: int, tiles) -> None:
+        """Write map bytes into screen RAM starting at (col,row); the game reads its map from there."""
+        self.poke_bytes(self.screen_addr + row * COLS + col, tiles)
+
+    def bss(self, name: str, count: int = 1) -> bytes:
+        """``count`` bytes of the BSS table ``name`` (they live outside the zero page window)."""
+        addr = self.labels[name]
+        return self._dump(addr & ~0xFF, 256)[addr & 0xFF : (addr & 0xFF) + count]
+
     def mem(self, addr: int, count: int = 256) -> bytes:
         return self._dump(addr, count)
 

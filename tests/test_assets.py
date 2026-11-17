@@ -187,14 +187,127 @@ class LevelTables(unittest.TestCase):
         self.assertIn("too many items", str(cm.exception))
 
 
+def flagged(id: int, name: str, ch: str, flags: str = "") -> str:
+    """A tile definition with flags on its header line."""
+    return "\n".join([f"tile {id} {name} {ch} {flags}".rstrip()] + ["0000"] * 8)
+
+
+SOLID_BRICK = flagged(1, "BRICK", "#", "solid")
+
+
+class Components(unittest.TestCase):
+    """Tile flags, alt-colour tiles, and pegs."""
+
+    def setUp(self) -> None:
+        self.p = Project()
+        self.addCleanup(self.p.cleanup)
+
+    def tiles(self, *extra: str) -> None:
+        self.p.write("assets/tiles.txt", "\n".join([EMPTY_TILE, SOLID_BRICK, ITEM_TILE, *extra]) + "\n")
+
+    def flags(self) -> list[int]:
+        text = self.p.build().joinpath("tileflags.inc").read_text()
+        return [int(x.strip("$"), 16) for x in re.findall(r"\$[0-9A-Fa-f]{2}", text)]
+
+    def test_flags_land_in_the_table_at_the_map_byte(self) -> None:
+        self.tiles(flagged(5, "PLAT", "=", "oneway"),
+                   flagged(7, "ICE", "~", "solid alt"))
+        flags = self.flags()
+        self.assertEqual(len(flags), 256)
+        self.assertEqual((flags[0], flags[1], flags[3]), (0, 1, 0))
+        self.assertEqual(flags[5], 2)  # one-way
+        self.assertEqual(flags[7 | 0x80], 1)  # alt tiles are stored with bit 7 set
+        self.assertEqual(flags[7], 0)
+
+    def test_alt_tiles_are_stored_with_bit_7_but_drawn_from_the_base_glyph(self) -> None:
+        self.tiles(flagged(7, "ICE", "~", "solid alt"))
+        out = self.p.build()
+        self.assertIn("T_ICE", out.joinpath("tiles.inc").read_text())
+        self.assertIn("= 135", out.joinpath("tiles.inc").read_text())
+        rows = [r for r in self.p.dir.joinpath("assets/levels/level1.txt").read_text().splitlines()]
+        rows[10] = "~" + rows[10][1:]
+        self.p.write("assets/levels/level1.txt", level(rows))
+        text = self.p.build().joinpath("levels.inc").read_text()
+        self.assertIn("$87", text)
+
+    def test_none_gives_a_tile_no_map_character(self) -> None:
+        self.tiles(flagged(10, "SPARK", "none"))
+        self.assertIn("T_SPARK", self.p.build().joinpath("tiles.inc").read_text())
+        rows = good_rows()
+        rows[5] = "?" + rows[5][1:]
+        self.p.write("assets/levels/level1.txt", level(rows))
+        with self.assertRaises(ba.AssetError):
+            self.p.build()
+
+    def test_unknown_or_conflicting_flags_are_rejected(self) -> None:
+        for extra, message in (
+            (flagged(5, "X", "=", "sticky"), "unknown tile flag"),
+            (flagged(5, "X", "=", "solid oneway"), "both solid and oneway"),
+            (flagged(5, "X", "p"), "map character"),
+        ):
+            with self.subTest(message):
+                self.tiles(extra)
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.p.build()
+                self.assertIn(message, str(cm.exception))
+
+    def peg_level(self, rows: dict[int, str]) -> str:
+        base = good_rows()
+        for r, text in rows.items():
+            base[r] = text
+        self.tiles()
+        self.p.write("assets/levels/level1.txt", level(base))
+        return self.p.build().joinpath("levels.inc").read_text()
+
+    def test_a_peg_sweeps_the_block_it_stands_on(self) -> None:
+        text = self.peg_level({
+            19: "." * 10 + "#" * 8 + "." * 22,
+            18: "." * 11 + "p" + "." * 28,
+        })
+        # block columns 10-17; the marker at column 11 is nearer the left end, so it starts there going right
+        self.assertIn("level1_pegs:\n        .byte 1,40,144,40,68,1", text)
+
+    def test_a_peg_nearer_the_right_end_starts_there_and_goes_left(self) -> None:
+        text = self.peg_level({
+            19: "." * 10 + "#" * 8 + "." * 22,
+            18: "." * 16 + "p" + "." * 23,
+        })
+        self.assertIn("level1_pegs:\n        .byte 1,68,144,40,68,255", text)
+
+    def test_a_platform_ends_where_something_stands_on_it(self) -> None:
+        text = self.peg_level({
+            19: "." * 10 + "#" * 8 + "." * 22,
+            18: "." * 14 + "#" + "." * 2 + "p" + "." * 22,
+        })
+        self.assertIn(".byte 1,68,144,60,68,255", text)  # columns 15-17 only (pixels 60-68)
+
+    def test_levels_without_pegs_have_an_empty_peg_list(self) -> None:
+        self.tiles()
+        text = self.p.build().joinpath("levels.inc").read_text()
+        self.assertIn("level1_pegs:\n        .byte 0", text)
+        self.assertIn("level_pg_lo:", text)
+
+    def test_bad_pegs_are_rejected(self) -> None:
+        cases = (
+            ({18: "." * 11 + "p" + "." * 28}, "solid block under"),
+            ({19: "." * 10 + "#" + "." * 29, 18: "." * 10 + "p" + "." * 29}, "only one tile wide"),
+            ({19: "#" * 40, 18: "p" + "." * 5 + "p" + "." * 5 + "p" + "." * 27}, "at most 2"),
+        )
+        for rows, message in cases:
+            with self.subTest(message):
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.peg_level(rows)
+                self.assertIn(message, str(cm.exception))
+
+
 class RealAssets(unittest.TestCase):
     def test_project_assets_convert(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ba.build(ROOT, Path(tmp))
             names = {p.name for p in Path(tmp).iterdir()}
-            self.assertEqual(names, {"tiles.inc", "charset.inc", "font.inc", "sprites.inc", "levels.inc", "screens.inc"})
+            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "charset.inc", "font.inc", "sprites.inc", "levels.inc", "screens.inc"})
             self.assertIn("T_BRICK", (Path(tmp) / "tiles.inc").read_text())
-            self.assertIn("T_DIGIT0     = 16", (Path(tmp) / "tiles.inc").read_text())
+            self.assertIn("T_DIGIT0       = 16", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("level1_spawn", (Path(tmp) / "levels.inc").read_text())
             self.assertIn("screen_title", (Path(tmp) / "screens.inc").read_text())
             self.assertIn("screen_gameover", (Path(tmp) / "screens.inc").read_text())

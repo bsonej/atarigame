@@ -1,11 +1,19 @@
 # Playfield tiles for ANTIC mode 4 (4 colours). Each tile is 4 pixels wide and 8 rows tall.
 #
-#   tile <id> <NAME> <map-char>
-#   <8 rows of 4 digits>      0 = background, 1 = COLOR0, 2 = COLOR1, 3 = COLOR2
+#   tile <id> <NAME> <map-char> [solid] [oneway] [alt]
+#   <8 rows of 4 digits>      0 = background, 1 = COLOR0, 2 = COLOR1, 3 = COLOR2 (COLOR3 for an alt tile)
 #
-# <NAME> becomes the assembler constant T_<NAME>; <map-char> is what you type in level files.
-# Ids must be below 128 (ids 128+ would switch pixel value 3 to COLOR3).
-# Ids 16-25 and 32+ belong to the text font (assets/font.txt).
+# <NAME> becomes the assembler constant T_<NAME>; <map-char> is what you type in level files
+# (write 'none' for tiles that are only ever made by the game, like the flash frame of a fuse).
+#
+#   solid   blocks movement, bumps heads, and can be stood on (bricks, stairs, belts, ...)
+#   oneway  can be stood on from above only; you can jump up through it and walk through it
+#   alt     drawn in the second colour (COLOR3) for pixel value 3: the map byte is id + 128, so
+#           T_<NAME> is that byte. Use it for a tile that needs a colour the others do not have.
+#
+# Ids must be below 128. Ids 16-25 and 32-61 belong to the text font (assets/font.txt); the conveyor
+# belts must stay at 64-71 (the game animates those glyphs, and the order is fixed: right slow,
+# right, right fast, right accelerating, then the same for left).
 
 tile 0 EMPTY .
 0000
@@ -17,7 +25,7 @@ tile 0 EMPTY .
 0000
 0000
 
-tile 1 BRICK #
+tile 1 BRICK # solid
 1111
 2232
 2232
@@ -56,3 +64,203 @@ tile 4 SPIKE ^
 1331
 3333
 3333
+
+# ---- factory components ---------------------------------------------------------------------
+
+# A thin platform: stand on it, jump up through it.
+tile 5 PLATFORM = oneway
+3333
+2222
+0000
+0000
+0000
+0000
+0000
+0000
+
+# One step: walk into it to climb it, walk off it to step down.
+tile 6 STAIR S solid
+3333
+2222
+2222
+1111
+3333
+2222
+2222
+1111
+
+# Ice: you speed up slowly and glide a long way.
+tile 7 ICE ~ solid alt
+3333
+3303
+3033
+3330
+3303
+3033
+3330
+3333
+
+# A roller: slippery, but you stop sooner than on ice.
+tile 8 ROLLER o solid
+3333
+2332
+3223
+3223
+3223
+3223
+2332
+1111
+
+# A bomb block: stand on it and it flashes, then blows up, and sets off bomb blocks next to it.
+tile 9 EXPLOSIVE X solid
+1111
+1331
+3113
+3113
+3113
+3113
+1331
+1111
+
+tile 10 EXPLOSIVE_B none solid
+3333
+3113
+1331
+1331
+1331
+1331
+3113
+3333
+
+tile 11 BOOM none
+3003
+0330
+3333
+0330
+3333
+0330
+3003
+0000
+
+# A vanishing block: stand on it and it flickers, vanishes, and comes back later.
+tile 12 VANISH v solid
+3333
+2332
+2002
+2002
+2002
+2002
+2332
+3333
+
+tile 13 VANISH_B none solid
+2222
+0000
+0200
+0000
+0020
+0000
+0000
+2222
+
+# Chutes: they carry you along and down the diagonal chain of tiles.
+tile 14 SLIDE_R \ solid
+3333
+2200
+0220
+0022
+2002
+2200
+0220
+0022
+
+tile 15 SLIDE_L / solid
+3333
+0022
+0220
+2200
+2002
+0022
+0220
+2200
+
+# Conveyor belts (ids 64-71). The two top rows are redrawn by the game to make the belt move.
+tile 64 CONV_R_SLOW } solid
+3222
+3222
+2222
+2222
+2222
+2222
+2222
+1111
+
+tile 65 CONV_R > solid
+3222
+3222
+1111
+1111
+1111
+1111
+1111
+2222
+
+tile 66 CONV_R_FAST ) solid
+3222
+3222
+3333
+3333
+3333
+3333
+3333
+1111
+
+tile 67 CONV_R_ACC ] solid
+3222
+3222
+1313
+3131
+1313
+3131
+1313
+3131
+
+tile 68 CONV_L_SLOW { solid
+3222
+3222
+2222
+2222
+2222
+2222
+2222
+1111
+
+tile 69 CONV_L < solid
+3222
+3222
+1111
+1111
+1111
+1111
+1111
+2222
+
+tile 70 CONV_L_FAST ( solid
+3222
+3222
+3333
+3333
+3333
+3333
+3333
+1111
+
+tile 71 CONV_L_ACC [ solid
+3222
+3222
+1313
+3131
+1313
+3131
+1313
+3131

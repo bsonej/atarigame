@@ -19,6 +19,8 @@
         .exportzp px, py, state, jt, fall, score, hiscore, left, lives, level, lvlidx
         .exportzp mode, demo, demo_n, timer, mtimer, frame, drawn, deaths, joy, anim, moved, flash
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
+        .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n
+        .export tt_col, tt_row, tt_t, tt_ph, tt_kind, pg_x, pg_y, pg_min, pg_max, pg_dir, pg_wait, cph
 
         .include "gen/tiles.inc"
         .include "gen/font.inc"                 ; .charmap: .byte "TEXT" gives glyph ids
@@ -38,6 +40,8 @@ STICK0  = $0278
 STRIG0  = $0284
 .endif
 PCOLR0  = $02C0
+PCOLR1  = $02C1
+PCOLR2  = $02C2
 COLOR0  = $02C4         ; playfield colour for pixel value 1
 COLOR1  = $02C5         ; ... value 2
 COLOR2  = $02C6         ; ... value 3
@@ -45,6 +49,7 @@ COLOR3  = $02C7         ; ... value 3 in a glyph with bit 7 set (lowercase text)
 COLOR4  = $02C8         ; background
 CHBAS   = $02F4
 HPOSP0  = $D000
+HPOSP1  = $D001         ; HPOSP2 follows: pegs are Player 1 and 2
 SIZEP0  = $D008
 GRACTL  = $D01D
 PAL     = $D014         ; bits 1-3 are zero on a PAL machine
@@ -84,6 +89,23 @@ JOY_DOWN  = $02
 JOY_LEFT  = $04
 JOY_RIGHT = $08
 JOY_FIRE  = $10
+
+T_CONV_FIRST = T_CONV_R_SLOW    ; the eight belt tiles are consecutive, see assets/tiles.txt
+CONV_GLYPHS  = CHARSET_ADDR + T_CONV_FIRST * 8
+
+KIND_EXPL   = 0         ; timed tiles
+KIND_VANISH = 1
+PH_FUSE     = 0
+PH_GONE     = 1
+PH_BOOM     = 2
+FUSE_EXPL   = 45        ; frames from stepping on a bomb block to the blast
+FUSE_VANISH = 30        ; ... from stepping on a vanishing block until it goes
+VANISH_BACK = 180       ; ... until it comes back
+CHAIN_FUSE  = 8         ; a bomb block next to a blast goes off this soon
+BOOM_FRAMES = 8
+PEG_WAIT    = 40        ; frames a peg rests at each end of its block
+SLICK_MAX   = 20        ; top speed on ice and rollers, in 1/16 pixel per frame
+DEMO_LEVELS = 3         ; the attract AI plays the first this many maps (it knows nothing of the factory parts)
 
 MAX_FALL   = 64         ; falling further than this (pixels) kills
 SPR_H      = 16
@@ -155,6 +177,42 @@ a_pc:     .res 1
 a_lc:     .res 1
 a_best:   .res 1
 a_cost:   .res 1
+under:    .res 1        ; map byte under the middle of the feet
+vx:       .res 1        ; sliding speed, signed, in 1/16 pixel per frame
+vfrac:    .res 1
+cfrac:    .res 1        ; belt drift remainder
+cacc:     .res 1        ; speed of an accelerating belt
+cacc_t:   .res 1
+cdir:     .res 1        ; 0 = drifting right, 1 = left
+s_acc:    .res 1
+s_fric:   .res 1
+s_fmask:  .res 1
+fcount:   .res 1
+gtick:    .res 1        ; frames of play (pegs move every other one)
+pg_n:     .res 1        ; pegs in this level
+pg_i:     .res 1
+tt_i:     .res 1        ; timed tile scratch
+tt_j:     .res 1
+tt_c:     .res 1
+tt_r:     .res 1
+tt_k:     .res 1
+tt_f:     .res 1
+ov_x:     .res 1
+ov_y:     .res 1
+
+        .segment "BSS"
+tt_col:   .res 8        ; timed tiles (bomb blocks and vanishing blocks that have been stepped on)
+tt_row:   .res 8
+tt_t:     .res 8        ; frames left in the current phase
+tt_ph:    .res 8        ; PH_FUSE, PH_GONE, PH_BOOM, or $FF = free slot
+tt_kind:  .res 8
+pg_x:     .res 2        ; pegs: left edge in pixels
+pg_y:     .res 2        ;       top line
+pg_min:   .res 2
+pg_max:   .res 2
+pg_dir:   .res 2        ;       1 = right, $FF = left
+pg_wait:  .res 2
+cph:      .res 8        ; animation phase of each belt tile
 
 ; ---------------------------------------------------------------------------
         .macro SETDST addr
@@ -212,6 +270,20 @@ start:
 @pal:   lda #50
 @fps:   sta fps
 
+        ldx #7
+        lda #0
+@cph:   sta cph,x
+        dex
+        bpl @cph
+        sta pg_n
+        sta cacc_t
+        sta cfrac
+        sta vx
+        sta vfrac
+        sta fcount
+        sta gtick
+        lda #4
+        sta cacc
         jsr clear_pm
         lda #<dlist
         sta SDLSTL
@@ -247,6 +319,7 @@ mainloop:
         lda mode_tab+1,x
         sta vec+1
         jsr run_mode
+        jsr animate_belts
         jsr update_fx
 frame_end:
         jmp mainloop
@@ -374,12 +447,31 @@ get_tile:
 @solid: lda #T_BRICK
         rts
 
-; C set if the tile at (tx,ty) can be stood on: brick, or the very top of a ladder.
+; C set if the tile at (tx,ty) is solid (blocks movement). A = the tile.
+get_solid:
+        jsr get_tile
+        tax
+        lda tile_flags,x
+        and #1
+        beq @no
+        txa
+        sec
+        rts
+@no:    txa
+        clc
+        rts
+
+; C set if the tile at (tx,ty) can be stood on: a solid tile, the top edge of a one-way
+; platform, or the very top of a ladder.
 tile_standable:
         jsr get_tile
-        cmp #T_BRICK
-        beq @yes
-        cmp #T_LADDER
+        tax
+        lda tile_flags,x
+        lsr a                   ; bit 0 (solid) -> carry
+        bcs @yes
+        lsr a                   ; bit 1 (one-way) -> carry
+        bcs @top
+        cpx #T_LADDER
         bne @no
         lda ty
         and #7
@@ -392,6 +484,11 @@ tile_standable:
         cmp #T_LADDER
         beq @no
 @yes:   sec
+        rts
+@top:   lda ty
+        and #7
+        bne @no
+        sec
         rts
 @no:    clc
         rts
@@ -476,10 +573,14 @@ update_player:
 @ground:
         jsr ground_below
         bcs @standing
+        jsr step_down           ; a stair or chute one tile lower: walk down it
+        bcs @standing
         lda #S_AIR              ; walked off an edge
         sta state
         lda #0
         sta fall
+        sta vx
+        sta vfrac
         lda #$FF
         sta jt
         rts
@@ -499,16 +600,331 @@ update_player:
 @nodown:
         lda joy
         and #JOY_FIRE
-        beq @walk
+        beq @surface
         lda joyprev
         and #JOY_FIRE
-        bne @walk               ; need a fresh press
+        bne @surface            ; need a fresh press
         lda #0
         sta jt
         sta fall
+        sta vx
+        sta vfrac
         lda #S_AIR
         sta state
-@walk:  jmp do_horiz
+        jmp do_horiz
+@surface:
+        jsr surface_drift       ; belts and chutes carry you; sets `under`
+        lda under
+        ldx #0
+        cmp #T_ICE
+        beq @slick
+        inx
+        cmp #T_ROLLER
+        beq @slick
+        lda #0
+        sta vx
+        sta vfrac
+        jmp do_horiz
+@slick: jmp slick_move
+
+; C set (and py += 8) if a stair or chute lies exactly one tile below the feet.
+step_down:
+        lda py
+        clc
+        adc #24
+        sta ty
+        lda px
+        sta tx
+        jsr get_tile
+        jsr is_step
+        bcs @yes
+        lda py
+        clc
+        adc #24
+        sta ty
+        lda px
+        clc
+        adc #3
+        sta tx
+        jsr get_tile
+        jsr is_step
+        bcc @no
+@yes:   lda py
+        clc
+        adc #8
+        sta py
+        sec
+        rts
+@no:    clc
+        rts
+
+; C set if tile A is a stair or a chute.
+is_step:
+        cmp #T_STAIR
+        beq @y
+        cmp #T_SLIDE_R
+        beq @y
+        cmp #T_SLIDE_L
+        beq @y
+        clc
+        rts
+@y:     sec
+        rts
+
+; C set if the player may climb one tile: nothing solid in the row above the head at either
+; edge of the body or at A, the pixel column being stepped into.
+step_check:
+        sta tmp2
+        lda py
+        sec
+        sbc #1
+        sta ty
+        lda px
+        sta tx
+        jsr get_solid
+        bcs @no
+        lda px
+        clc
+        adc #3
+        sta tx
+        jsr get_solid
+        bcs @no
+        lda tmp2
+        sta tx
+        jsr get_solid
+        bcs @no
+        sec
+        rts
+@no:    clc
+        rts
+
+; ---- what the surface under the feet does ---------------------------------------------------
+; Belts and chutes drift the player (in 1/16 pixel per frame: slow 8, normal 16, fast 32; an
+; accelerating belt starts at 4 and gains 1 every 4 frames up to 32). Sets `under`.
+surface_drift:
+        ldx #0                  ; probe under the middle of the feet, then under each foot: a
+@probe: stx tt_j                ; diagonal chute is under one foot before it is under the middle
+        lda px
+        clc
+        adc probe_dx,x
+        sta tx
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+        jsr get_tile
+        ldx tt_j
+        bne @n0
+        sta tt_k                ; remember the middle tile
+@n0:    sta under
+        jsr is_surface
+        bcs @found
+        ldx tt_j
+        inx
+        cpx #3
+        bcc @probe
+        lda tt_k
+        sta under
+@found: lda under
+        cmp #T_SLIDE_R
+        beq @sr
+        cmp #T_SLIDE_L
+        beq @sl
+        sec
+        sbc #T_CONV_FIRST
+        cmp #8
+        bcs @none               ; (anything below the belt ids wraps round to a big number)
+        tax
+        lda conv_dir,x
+        sta cdir
+        lda conv_spd,x
+        bne @fixed
+        inc cacc_t              ; accelerating belt
+        lda cacc_t
+        and #3
+        bne @gotacc
+        lda cacc
+        cmp #32
+        bcs @gotacc
+        inc cacc
+@gotacc:
+        lda cacc
+        jmp @drift
+@fixed: pha
+        lda #4
+        sta cacc
+        lda #0
+        sta cacc_t
+        pla
+        jmp @drift
+@sr:    lda #0
+        sta cdir
+        beq @slide
+@sl:    lda #1
+        sta cdir
+@slide: lda #4
+        sta cacc
+        lda #0
+        sta cacc_t
+        lda #32
+        jmp @drift
+@none:  lda #4
+        sta cacc
+        lda #0
+        sta cacc_t
+        sta cfrac
+        rts
+@drift: clc
+        adc cfrac
+        sta cfrac
+@loop:  lda cfrac
+        cmp #16
+        bcc @done
+        sec
+        sbc #16
+        sta cfrac
+        lda cdir
+        bne @left
+        jsr push_right
+        jmp @loop
+@left:  jsr push_left
+        jmp @loop
+@done:  rts
+
+; C set if tile A does something to a player standing on it: a belt, chute, ice or roller.
+is_surface:
+        cmp #T_SLIDE_R
+        beq @y
+        cmp #T_SLIDE_L
+        beq @y
+        cmp #T_ICE
+        beq @y
+        cmp #T_ROLLER
+        beq @y
+        sec
+        sbc #T_CONV_FIRST
+        cmp #8
+        bcc @y
+        clc
+        rts
+@y:     sec
+        rts
+
+; Move one pixel with all the usual collision, without the walking animation.
+push_right:
+        lda moved
+        pha
+        lda anim
+        pha
+        jsr move_right
+        pla
+        sta anim
+        pla
+        sta moved
+        rts
+
+push_left:
+        lda moved
+        pha
+        lda anim
+        pha
+        jsr move_left
+        pla
+        sta anim
+        pla
+        sta moved
+        rts
+
+; Ice and rollers (X = 0 ice, 1 roller): speed up gradually, glide when you let go.
+slick_move:
+        lda slick_acc,x
+        sta s_acc
+        lda slick_fric,x
+        sta s_fric
+        lda slick_fmask,x
+        sta s_fmask
+        inc fcount
+        lda joy
+        and #JOY_RIGHT
+        beq @noright
+        lda vx
+        clc
+        adc s_acc
+        bmi @setr               ; still moving left
+        cmp #SLICK_MAX+1
+        bcc @setr
+        lda #SLICK_MAX
+@setr:  sta vx
+        jmp @move
+@noright:
+        lda joy
+        and #JOY_LEFT
+        beq @coast
+        lda vx
+        sec
+        sbc s_acc
+        bpl @setl               ; still moving right
+        cmp #256-SLICK_MAX
+        bcs @setl
+        lda #256-SLICK_MAX
+@setl:  sta vx
+        jmp @move
+@coast: lda fcount              ; no input: friction, on some frames
+        and s_fmask
+        bne @move
+        lda vx
+        beq @move
+        bmi @cneg
+        sec
+        sbc s_fric
+        bpl @setc
+        lda #0
+        beq @setc
+@cneg:  clc
+        adc s_fric
+        bmi @setc
+        lda #0
+@setc:  sta vx
+@move:  lda vx
+        bne @go
+        rts
+@go:    bmi @mneg
+        clc
+        adc vfrac
+        sta vfrac
+@r:     lda vfrac
+        cmp #16
+        bcc @rts
+        sbc #16
+        sta vfrac
+        lda px
+        pha
+        jsr move_right
+        pla
+        cmp px
+        bne @r
+        beq @stop
+@mneg:  eor #$FF
+        clc
+        adc #1                  ; |vx|
+        clc
+        adc vfrac
+        sta vfrac
+@l:     lda vfrac
+        cmp #16
+        bcc @rts
+        sbc #16
+        sta vfrac
+        lda px
+        pha
+        jsr move_left
+        pla
+        cmp px
+        bne @l
+@stop:  lda #0
+        sta vx
+        sta vfrac
+@rts:   rts
 
 ; Snap onto the ladder column and start climbing.
 start_climb:
@@ -549,16 +965,14 @@ up_air:
         sec
         sbc #1
         sta ty
-        jsr get_tile
-        cmp #T_BRICK
-        beq @apex               ; bumped our head
+        jsr get_solid
+        bcs @apex               ; bumped our head
         lda px
         clc
         adc #3
         sta tx
-        jsr get_tile
-        cmp #T_BRICK
-        beq @apex
+        jsr get_solid
+        bcs @apex
         dec py
         dec tmp2
         bne @rise
@@ -607,9 +1021,8 @@ up_climb:
         sec
         sbc #1
         sta ty
-        jsr get_tile
-        cmp #T_BRICK
-        beq @done               ; ceiling
+        jsr get_solid
+        bcs @done               ; ceiling
         lda py
         clc
         adc #15
@@ -639,9 +1052,8 @@ up_climb:
         clc
         adc #SPR_H
         sta ty
-        jsr get_tile
-        cmp #T_BRICK
-        beq @floor
+        jsr get_solid
+        bcs @floor
         inc py
         inc anim
         inc moved
@@ -677,24 +1089,35 @@ move_right:
         sta tx
         lda py
         sta ty
-        jsr get_tile
-        cmp #T_BRICK
-        beq @blk
+        jsr get_solid
+        bcs @blk
         lda py
         clc
         adc #8
         sta ty
-        jsr get_tile
-        cmp #T_BRICK
-        beq @blk
-        lda py
+        jsr get_solid
+        bcc @feet
+        cmp #T_STAIR            ; on the ground the body and feet probes are in the same tile row,
+        beq @stair              ; so a stair shows up in either
+        jmp @blk
+@feet:  lda py
         clc
         adc #15
         sta ty
-        jsr get_tile
-        cmp #T_BRICK
-        beq @blk
-        inc px
+        jsr get_solid
+        bcc @go
+        cmp #T_STAIR
+        bne @blk
+@stair: lda state
+        bne @blk                ; stairs are only climbed on the ground
+        lda tx
+        jsr step_check
+        bcc @blk
+        lda py
+        sec
+        sbc #8
+        sta py
+@go:    inc px
         inc anim
         inc moved
 @blk:   rts
@@ -707,24 +1130,35 @@ move_left:
         sta tx
         lda py
         sta ty
-        jsr get_tile
-        cmp #T_BRICK
-        beq @blk
+        jsr get_solid
+        bcs @blk
         lda py
         clc
         adc #8
         sta ty
-        jsr get_tile
-        cmp #T_BRICK
-        beq @blk
-        lda py
+        jsr get_solid
+        bcc @feet
+        cmp #T_STAIR            ; on the ground the body and feet probes are in the same tile row,
+        beq @stair              ; so a stair shows up in either
+        jmp @blk
+@feet:  lda py
         clc
         adc #15
         sta ty
-        jsr get_tile
-        cmp #T_BRICK
-        beq @blk
-        dec px
+        jsr get_solid
+        bcc @go
+        cmp #T_STAIR
+        bne @blk
+@stair: lda state
+        bne @blk                ; stairs are only climbed on the ground
+        lda tx
+        jsr step_check
+        bcc @blk
+        lda py
+        sec
+        sbc #8
+        sta py
+@go:    dec px
         inc anim
         inc moved
 @blk:   rts
@@ -844,6 +1278,12 @@ mode_play:
         cmp #M_PLAY
         bne @draw
         jsr check_tiles
+        lda mode
+        cmp #M_PLAY
+        bne @draw
+        jsr arm_under           ; bomb blocks and vanishing blocks under the feet
+        jsr update_timed
+        jsr update_pegs
         lda mode
         cmp #M_PLAY
         bne @draw
@@ -991,7 +1431,8 @@ mode_clear:
 @nolevel:
         inc lvlidx
         lda lvlidx
-        cmp #LEVEL_COUNT
+        ldx demo
+        cmp wrap_tab,x          ; a demo stays on the maps the AI can play
         bcc @go
         lda #0
         sta lvlidx
@@ -1080,7 +1521,7 @@ enter_attract:
         clc
         adc #1
         sta level
-        cmp #LEVEL_COUNT
+        cmp #DEMO_LEVELS
         bcc @s
         lda #0
 @s:     sta demo_n              ; (level - 1) is demo_n before this call; next run uses the next map
@@ -1165,6 +1606,18 @@ begin_level:
         sta ptr+1
         jsr copy_map
         jsr hud_labels
+        jsr clear_pm
+        jsr timed_reset
+        jsr load_pegs
+        lda #0
+        sta vx
+        sta vfrac
+        sta cfrac
+        sta fcount
+        sta gtick
+        sta cacc_t
+        lda #4
+        sta cacc
         ldx lvlidx
         lda level_sx,x
         sta px
@@ -1217,12 +1670,15 @@ game_colors:
         sta COLOR1              ; brown
         lda #$0E
         sta COLOR2              ; white
-        lda #$96
-        sta COLOR3
+        lda #$AA
+        sta COLOR3              ; cyan: ice
         lda #$00
         sta COLOR4              ; black
         lda #$1E
         sta PCOLR0              ; yellow player
+        lda #$46
+        sta PCOLR1              ; red pegs
+        sta PCOLR2
         rts
 
 title_colors:
@@ -1259,7 +1715,10 @@ hide_player:
         jsr clear_pm
         lda #0
         sta HPOSP0
+        sta HPOSP1
+        sta HPOSP1+1
         sta oldpy
+        sta pg_n
         rts
 
 ; ---------------------------------------------------------------------------
@@ -1454,6 +1913,486 @@ update_fx:
         rts
 @off:   lda #0
         sta AUDC1
+        rts
+
+; ---------------------------------------------------------------------------
+; Timed tiles: bomb blocks and vanishing blocks. Stepping on one starts a fuse; the table holds the
+; blocks that are doing something. A bomb block flashes, then blows up (killing anything in the blast
+; zone, one tile either side and two above, and setting off bomb blocks next to it). A vanishing
+; block flickers, vanishes, and comes back once the player is out of the way.
+timed_reset:
+        ldx #7
+        lda #$FF
+@l:     sta tt_ph,x
+        dex
+        bpl @l
+        rts
+
+; Start the fuse of the bomb or vanishing block under the feet, if there is one.
+arm_under:
+        lda state
+        bne @rts                ; only when standing
+        lda px
+        sta tx
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+        jsr arm_at
+        lda px
+        clc
+        adc #3
+        sta tx
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+        jmp arm_at
+@rts:   rts
+
+; Arm the tile at (tx,ty) if it is a bomb or vanishing block.
+arm_at:
+        jsr get_tile
+        cmp #T_EXPLOSIVE
+        beq @e
+        cmp #T_EXPLOSIVE_B
+        beq @e
+        cmp #T_VANISH
+        beq @v
+        cmp #T_VANISH_B
+        beq @v
+        rts
+@e:     lda #KIND_EXPL
+        sta tt_k
+        lda #FUSE_EXPL
+        bne @go
+@v:     lda #KIND_VANISH
+        sta tt_k
+        lda #FUSE_VANISH
+@go:    sta tt_f
+        lda tx
+        lsr a
+        lsr a
+        sta tt_c
+        lda ty
+        lsr a
+        lsr a
+        lsr a
+        sta tt_r
+        ; fall through
+
+; Put tile (tt_c,tt_r) of kind tt_k in the table with fuse tt_f, unless it is already there.
+arm_cell:
+        ldx #7
+@find:  lda tt_ph,x
+        cmp #$FF
+        beq @nx
+        lda tt_col,x
+        cmp tt_c
+        bne @nx
+        lda tt_row,x
+        cmp tt_r
+        beq @rts
+@nx:    dex
+        bpl @find
+        ldx #7
+@free:  lda tt_ph,x
+        cmp #$FF
+        beq @put
+        dex
+        bpl @free
+@rts:   rts
+@put:   lda tt_c
+        sta tt_col,x
+        lda tt_r
+        sta tt_row,x
+        lda tt_k
+        sta tt_kind,x
+        lda tt_f
+        sta tt_t,x
+        lda #PH_FUSE
+        sta tt_ph,x
+        lda #3
+        sta snd
+        lda #$60
+        sta sndf
+        rts
+
+; Write tile A into the screen cell of slot X.
+set_cell:
+        pha
+        ldy tt_row,x
+        lda row_lo,y
+        clc
+        adc tt_col,x
+        sta ptr
+        lda row_hi,y
+        adc #0
+        sta ptr+1
+        pla
+        ldy #0
+        sta (ptr),y
+        rts
+
+; C set if the player overlaps the tile of slot X.
+player_in_cell:
+        lda tt_col,x
+        asl a
+        asl a
+        sta ov_x
+        lda tt_row,x
+        asl a
+        asl a
+        asl a
+        sta ov_y
+        lda px
+        clc
+        adc #3
+        cmp ov_x
+        bcc @no
+        lda ov_x
+        clc
+        adc #3
+        cmp px
+        bcc @no
+        lda py
+        clc
+        adc #15
+        cmp ov_y
+        bcc @no
+        lda ov_y
+        clc
+        adc #7
+        cmp py
+        bcc @no
+        sec
+        rts
+@no:    clc
+        rts
+
+update_timed:
+        ldx #7
+@slot:  lda tt_ph,x
+        cmp #$FF
+        beq @next
+        cmp #PH_GONE
+        beq @gone
+        bcs @boom               ; PH_BOOM
+        dec tt_t,x              ; ---- fuse burning
+        beq @burst
+        lda tt_kind,x
+        bne @vflick
+        lda tt_t,x              ; bomb block: flash every 4 frames
+        and #4
+        beq @e0
+        lda #T_EXPLOSIVE_B
+        bne @put
+@e0:    lda #T_EXPLOSIVE
+        bne @put
+@vflick:
+        lda tt_t,x              ; vanishing block: flicker every 2 frames
+        and #2
+        beq @v0
+        lda #T_VANISH_B
+        bne @put
+@v0:    lda #T_VANISH
+@put:   jsr set_cell
+        jmp @next
+@burst: lda tt_kind,x
+        bne @vanish
+        jsr explode
+        jmp @next
+@vanish:
+        lda #T_EMPTY
+        jsr set_cell
+        lda #PH_GONE
+        sta tt_ph,x
+        lda #VANISH_BACK
+        sta tt_t,x
+        jmp @next
+@gone:  dec tt_t,x
+        bne @next
+        jsr player_in_cell      ; do not come back inside the player
+        bcs @wait
+        lda #T_VANISH
+        jsr set_cell
+        lda #$FF
+        sta tt_ph,x
+        jmp @next
+@wait:  lda #1
+        sta tt_t,x
+        jmp @next
+@boom:  dec tt_t,x
+        bne @next
+        lda #T_EMPTY
+        jsr set_cell
+        lda #$FF
+        sta tt_ph,x
+@next:  dex
+        bmi @done
+        jmp @slot
+@done:  rts
+
+; The bomb block of slot X goes off.
+explode:
+        lda #PH_BOOM
+        sta tt_ph,x
+        lda #BOOM_FRAMES
+        sta tt_t,x
+        lda #T_BOOM
+        jsr set_cell
+        lda #14
+        sta snd
+        lda #$28
+        sta sndf
+        lda #$28                ; orange flash
+        sta flashc
+        lda #5
+        sta flash
+        lda tt_col,x            ; blast zone: from one tile left of the block to one tile right,
+        asl a                   ; from two tiles above it to its bottom
+        asl a
+        sec
+        sbc #4
+        sta ov_x
+        lda tt_row,x
+        asl a
+        asl a
+        asl a
+        sec
+        sbc #16
+        bcs @top
+        lda #0
+@top:   sta ov_y
+        lda px
+        clc
+        adc #3
+        cmp ov_x
+        bcc @safe
+        lda ov_x
+        clc
+        adc #11
+        cmp px
+        bcc @safe
+        lda py
+        clc
+        adc #15
+        cmp ov_y
+        bcc @safe
+        lda tt_row,x
+        asl a
+        asl a
+        asl a
+        clc
+        adc #7
+        cmp py
+        bcc @safe
+        stx tt_i
+        jsr die
+        ldx tt_i
+@safe:  stx tt_i                ; chain reaction: bomb blocks next to this one
+        ldy #3
+@nb:    sty tt_j
+        ldx tt_i
+        lda tt_col,x
+        clc
+        adc nb_dc,y
+        sta tt_c
+        lda tt_row,x
+        clc
+        adc nb_dr,y
+        sta tt_r
+        lda tt_c
+        asl a
+        asl a
+        sta tx
+        lda tt_r
+        asl a
+        asl a
+        asl a
+        sta ty
+        jsr get_tile
+        cmp #T_EXPLOSIVE
+        beq @arm
+        cmp #T_EXPLOSIVE_B
+        bne @nbnext
+@arm:   lda #KIND_EXPL
+        sta tt_k
+        lda #CHAIN_FUSE
+        sta tt_f
+        jsr arm_cell
+@nbnext:
+        ldy tt_j
+        dey
+        bpl @nb
+        ldx tt_i
+        rts
+
+; ---------------------------------------------------------------------------
+; Pegs (Player 1 and 2): each sweeps along its block, pausing at the ends, and carries along any
+; player it overlaps from behind. Jump over it, or leave by a ladder.
+load_pegs:
+        ldx lvlidx
+        lda level_pg_lo,x
+        sta ptr
+        lda level_pg_hi,x
+        sta ptr+1
+        lda #0
+        sta HPOSP1
+        sta HPOSP1+1
+        ldy #0
+        lda (ptr),y
+        sta pg_n
+        beq @rts
+        iny
+        ldx #0
+@peg:   lda (ptr),y
+        sta pg_x,x
+        iny
+        lda (ptr),y
+        sta pg_y,x
+        iny
+        lda (ptr),y
+        sta pg_min,x
+        iny
+        lda (ptr),y
+        sta pg_max,x
+        iny
+        lda (ptr),y
+        sta pg_dir,x
+        iny
+        lda #PEG_WAIT
+        sta pg_wait,x
+        inx
+        cpx pg_n
+        bcc @peg
+        ldx #0                  ; draw the peg shapes (they never change shape or height)
+@draw:  stx pg_i
+        txa
+        clc
+        adc #>(PM0Y + $100)
+        sta ptr+1
+        lda #<(PM0Y + $100)
+        sta ptr
+        ldy pg_y,x
+        ldx #0
+@s:     lda peg_shape,x
+        sta (ptr),y
+        iny
+        inx
+        cpx #8
+        bcc @s
+        ldx pg_i
+        lda pg_x,x
+        clc
+        adc #48
+        sta HPOSP1,x
+        inx
+        cpx pg_n
+        bcc @draw
+@rts:   rts
+
+update_pegs:
+        lda pg_n
+        beq @rts
+        inc gtick
+        ldx #0
+@peg:   lda pg_wait,x
+        beq @mv
+        dec pg_wait,x
+        jmp @push
+@mv:    lda gtick               ; half a pixel per frame
+        and #1
+        bne @push
+        lda pg_x,x
+        clc
+        adc pg_dir,x
+        sta pg_x,x
+        cmp pg_max,x
+        beq @end
+        cmp pg_min,x
+        bne @push
+@end:   lda #PEG_WAIT           ; at the end of the block: rest, then turn round
+        sta pg_wait,x
+        lda pg_dir,x
+        eor #$FE                ; 1 <-> $FF
+        sta pg_dir,x
+@push:  lda pg_x,x
+        clc
+        adc #48
+        sta HPOSP1,x
+        jsr peg_push
+        inx
+        cpx pg_n
+        bcc @peg
+@rts:   rts
+
+; Push the player along if peg X overlaps it and the player is ahead of the peg.
+peg_push:
+        lda px                  ; overlap in x ...
+        clc
+        adc #3
+        cmp pg_x,x
+        bcc @no
+        lda pg_x,x
+        clc
+        adc #3
+        cmp px
+        bcc @no
+        lda py                  ; ... and in y
+        clc
+        adc #15
+        cmp pg_y,x
+        bcc @no
+        lda pg_y,x
+        clc
+        adc #7
+        cmp py
+        bcc @no
+        stx pg_i
+        lda pg_dir,x
+        bmi @left
+        lda px                  ; moving right: only if the player is not behind the peg
+        cmp pg_x,x
+        bcc @done
+        jsr push_right
+        jmp @done
+@left:  lda px
+        cmp pg_x,x
+        beq @pl
+        bcs @done
+@pl:    jsr push_left
+@done:  ldx pg_i
+@no:    rts
+
+; ---------------------------------------------------------------------------
+; Conveyor belts: one bright pixel marches across each belt tile (right or left, at the belt's own
+; pace), by rewriting two rows of the belt glyphs in the character set.
+animate_belts:
+        ldx #7
+@k:     lda RTCLOK+2
+        and conv_mask,x
+        bne @next
+        lda conv_dir,x
+        bne @left
+        inc cph,x
+        jmp @draw
+@left:  dec cph,x
+@draw:  lda cph,x
+        and #3
+        tay
+        lda belt_pat,y
+        pha
+        txa
+        asl a
+        asl a
+        asl a
+        tay
+        pla
+        sta CONV_GLYPHS,y
+        sta CONV_GLYPHS+1,y
+@next:  dex
+        bpl @k
         rts
 
 ; ---------------------------------------------------------------------------
@@ -1778,6 +2717,7 @@ ai_ground:
         .include "gen/sprites.inc"      ; defines SPR_COUNT and spr_frames
         .include "gen/levels.inc"       ; the maps and the level tables
         .include "gen/screens.inc"      ; screen_title, screen_gameover
+        .include "gen/tileflags.inc"    ; tile_flags: bit 0 solid, bit 1 one-way
 
 row_lo: .repeat 24, i
         .byte <(SCREEN + i * 40)
@@ -1797,6 +2737,23 @@ die_dy:  .byte $FC,$FC,$FD,$FD,$FE,$FE,$FF,$FF,0,1,1,2,2,3,3,4,4,5,5
 DIE_LEN = * - die_dy
 
 clear_notes: .byte $79,$5F,$4B,$3C
+
+; Belts, by tile id - 64: drift direction, drift speed (0 = accelerating), animation period - 1.
+conv_dir:  .byte 0,0,0,0,1,1,1,1
+conv_spd:  .byte 8,16,32,0,8,16,32,0
+conv_mask: .byte 7,3,1,3,7,3,1,3
+belt_pat:  .byte $EA,$BA,$AE,$AB        ; one bright pixel (3) in a row of 2s, in each of 4 places
+
+; Ice, roller: acceleration per frame, friction per step, friction on frames where (count & mask) = 0.
+slick_acc:   .byte 2,4
+slick_fric:  .byte 1,2
+slick_fmask: .byte 1,0
+
+probe_dx:  .byte 2,0,3                  ; where under the feet to look: middle, left, right
+peg_shape: .byte $60,$F0,$F0,$F0,$F0,$F0,$F0,$90
+nb_dc:     .byte $FF,1,0,0              ; the four neighbours of a block: left, right, up, down
+nb_dr:     .byte 0,0,$FF,1
+wrap_tab:  .byte LEVEL_COUNT,DEMO_LEVELS
 
 ; Points (offset from px,py) that collect items.
 pt_dx:  .byte 0,3,0,3,0,3
