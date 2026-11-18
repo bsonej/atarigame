@@ -4,7 +4,7 @@
     python3 tools/levelcheck.py [level files...]     (default: assets/levels/*.txt)
 
 The level is treated as a graph of "standing cells" (the tile under the player's feet). From each
-cell the player can walk, climb stairs and ladders, step down chutes, fall off edges (at most 8 tiles)
+cell the player can walk, climb ladders (stairs and chutes are jumped up onto), step down chutes, fall off edges (at most 8 tiles)
 and jump (up 2 tiles, over gaps up to 5 tiles wide). Bomb blocks and vanishing blocks count as
 solid, belts and ice do not change where you can go, and pegs and spikes are ignored (the player is
 expected to jump them, so spikes are only checked for headroom; and a chute can be reached by a jump from below
@@ -22,8 +22,8 @@ import build_assets as ba  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 ROWS, COLS = 24, 40
-SOLID = set("#W S~oXv\\/>)]<([{}".replace(" ", ""))
-ONEWAY = set("=")
+SOLID = set("#W ~oXv>)]<([{}".replace(" ", ""))
+ONEWAY = set("=S\\/")  # thin platforms, steps and chutes: stand on top, walk and jump up through
 MAX_FALL_TILES = 8  # 64 pixels
 # widest jump by number of tiles risen: up 0 / 1 / 2 tiles
 JUMP_REACH = {0: 5, 1: 4, 2: 3}
@@ -103,11 +103,9 @@ class Level:
             n = c + d
             if self.valid(n, r):
                 out.append((n, r))
-            elif self.t(n, r - 1) == "S" and self.valid(n, r - 1) and not self.solid(c, r - 3):
-                out.append((n, r - 1))  # up a stair
             elif not self.solid(n, r - 1) and not self.solid(n, r - 2) and 0 < n < COLS - 1:
-                if self.t(n, r + 1) in "S\\/" and self.valid(n, r + 1):
-                    out.append((n, r + 1))  # down a stair or chute
+                if self.t(n, r + 1) in "\\/" and self.valid(n, r + 1):
+                    out.append((n, r + 1))  # down a chute
                 else:
                     land = self.fall_to(n, r)
                     if land:

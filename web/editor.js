@@ -1,10 +1,10 @@
 // The level editor: drag parts from the palette onto the board, test-play the level right in the page, and
 // save it as assets/levels/<name>.txt for the real game to pick up (task build / task run-map).
 
-import { COLS, ROWS, makeTables, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows } from './model.js';
+import { COLS, ROWS, makeTables, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows, applyCaps, applyDots } from './model.js';
 import { Game, MODE, JOY, STATE } from './engine.js';
 import { Atlas, COLORS, cellSize, drawMap, drawTile, drawSprite, drawHud, PEG_SHAPE } from './render.js';
-import { GROUPS, STAMPS } from './palette.js';
+import { GROUPS, STAMPS, DOOR_NAMES, DOOR_CELLS, SCENE_W, SCENE_H, sceneFor } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
 const DRAFT_KEY = 'factoryEditor.draft';
@@ -364,25 +364,61 @@ function clearSelection() {
 
 const ITEMS = [];
 
-function iconFor(item, size) {
+/**
+ * A picture of some tiles as they look in the game: compiled the way the asset tool does it (end caps, dots), coloured
+ * row by row like the playfield (`baseRow` is the screen row whose hue the top row of the picture gets, so the
+ * swatches are as colourful as the board), on black.
+ * @param cells [column, row, tile name or 'PEG'] from the picture's top left
+ */
+function sceneCanvas(cells, w, h, cell, baseRow) {
   const cv = document.createElement('canvas');
-  cv.width = cv.height = size;
+  cv.width = w * cell;
+  cv.height = h * cell;
   const g = cv.getContext('2d');
   g.imageSmoothingEnabled = false;
   g.fillStyle = COLORS.bg;
-  g.fillRect(0, 0, size, size);
-  if (item.kind === 'tile') drawTile(g, atlas, tables.T[item.name], 0, 0, size);
-  else if (item.kind === 'peg') {
-    drawTile(g, atlas, tables.T.BRICK, 0, size * 0.25, size * 0.75);
-    drawSprite(g, PEG_SHAPE, 0, 0, size, COLORS.peg, 8);
-  } else if (item.kind === 'start') drawSprite(g, sprites[0], 0, 0, size / 2, COLORS.player, 16);
-  else if (item.kind === 'erase') {
+  g.fillRect(0, 0, cv.width, cv.height);
+  const at = (c, r) => (r + 8) * COLS + c + 10; // somewhere in the middle of a map, clear of the screen edges
+  const data = new Array(COLS * ROWS).fill(0);
+  for (const [c, r, name] of cells) if (name !== 'PEG') data[at(c, r)] = tables.T[name];
+  let map = applyCaps(data, tables.caps);
+  map = applyDots(data, map, tables.dots, tables.solid);
+  atlas.levelIndex = 0;
+  for (let r = 0; r < h; r++)
+    for (let c = 0; c < w; c++) {
+      const b = map[at(c, r)];
+      if (b) drawTile(g, atlas, b, c * cell, r * cell, cell, 1, baseRow + r);
+    }
+  for (const [c, r, name] of cells) if (name === 'PEG') drawSprite(g, PEG_SHAPE, c * 4, r * 8, cell, COLORS.peg, 8);
+  return cv;
+}
+
+let swatchRow = 1;
+
+function iconFor(item, size) {
+  const baseRow = 1 + ((swatchRow += 3) % 18); // a different hue for each swatch, stepping round the rainbow
+  const cell = size / SCENE_W;
+  if (item.kind === 'tile') return sceneCanvas(sceneFor(item), SCENE_W, SCENE_H, cell, baseRow);
+  const cv = sceneCanvas([], SCENE_W, SCENE_H, cell, baseRow);
+  const g = cv.getContext('2d');
+  if (item.kind === 'peg') {
+    const sc = sceneCanvas([[0, 1, 'BRICK'], [1, 1, 'BRICK'], [2, 1, 'BRICK'], [3, 1, 'BRICK'], [1, 0, 'PEG']], SCENE_W, SCENE_H, cell, baseRow);
+    return sc;
+  }
+  if (item.kind === 'start') {
+    const sc = sceneCanvas([[0, 2, 'BRICK'], [1, 2, 'BRICK'], [2, 2, 'BRICK'], [3, 2, 'BRICK']], SCENE_W, SCENE_H, cell, baseRow);
+    drawSprite(sc.getContext('2d'), sprites[0], 6, 0, cell, COLORS.player, 16);
+    return sc;
+  }
+  if (item.kind === 'erase') {
     g.strokeStyle = '#c55';
     g.lineWidth = 3;
-    g.strokeRect(4, 4, size - 8, size - 8);
+    const w = cv.width;
+    const h = cv.height;
+    g.strokeRect(6, 6, w - 12, h - 12);
     g.beginPath();
-    g.moveTo(4, 4);
-    g.lineTo(size - 4, size - 4);
+    g.moveTo(6, 6);
+    g.lineTo(w - 6, h - 6);
     g.stroke();
   }
   return cv;
@@ -391,20 +427,7 @@ function iconFor(item, size) {
 function stampPreview(stamp) {
   const w = Math.max(...stamp.cells.map((c) => c[0])) + 1;
   const h = Math.max(...stamp.cells.map((c) => c[1])) + 1;
-  const cell = 12;
-  const cv = document.createElement('canvas');
-  cv.width = w * cell;
-  cv.height = h * cell;
-  const g = cv.getContext('2d');
-  g.imageSmoothingEnabled = false;
-  g.fillStyle = COLORS.bg;
-  g.fillRect(0, 0, cv.width, cv.height);
-  for (const [c, r, name] of stamp.cells) {
-    if (name === 'PEG') {
-      drawSprite(g, PEG_SHAPE, c * 4, r * 8, cell, COLORS.peg, 8);
-    } else drawTile(g, atlas, tables.T[name], c * cell, r * cell, cell);
-  }
-  return cv;
+  return sceneCanvas(stamp.cells, w, h, 12, 1 + ((swatchRow += 3) % 18));
 }
 
 function addItem(item) {
@@ -443,7 +466,7 @@ function buildPalette() {
     for (const it of g.items) {
       addItem(it);
       const btn = make(it, document.createElement('div'));
-      btn.append(iconFor(it, 32));
+      btn.append(iconFor(it, 64));
       box.append(btn);
     }
     root.append(box);
@@ -655,6 +678,8 @@ function drawGhost(cell) {
     else if (name === 'ERASE') {
       ctx.fillStyle = 'rgba(255,255,255,0.2)';
       ctx.fillRect(cc * cell, rr * cell, cell, cell);
+    } else if (name === 'DOOR_BL') {
+      DOOR_CELLS.forEach(([dc, dr], k) => inside(cc + dc, rr - dr) && drawTile(ctx, atlas, tables.T[DOOR_NAMES[k]], (cc + dc) * cell, (rr - dr) * cell, cell, 0.65));
     } else drawTile(ctx, atlas, tables.T[name], cc * cell, rr * cell, cell, 0.65);
   };
   if (S.stroke && S.stroke.kind === 'rect') {
@@ -741,7 +766,7 @@ function drawPlay() {
   atlas.levelIndex = p.levelIndex;
   ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
-  drawMap(ctx, atlas, g.map, cell);
+  drawMap(ctx, atlas, g.map, cell, 1, tables.door ? { bytes: tables.door, fade: tables.fade, phase: g.doorPhase, steps: g.fadeSteps } : null);
   for (const peg of g.pegs) drawSprite(ctx, PEG_SHAPE, peg.x, peg.y, cell, COLORS.peg, 8);
   if (g.mode !== MODE.OVER && g.py < 200) {
     let colour = COLORS.player;

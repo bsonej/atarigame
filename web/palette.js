@@ -37,8 +37,8 @@ export const GROUPS = [
     title: 'Climb and slide',
     items: [
       { kind: 'tile', name: 'LADDER', tip: 'Ladder: climb with up and down' },
-      { kind: 'tile', name: 'STAIR', tip: 'Stair: walk up and down one-tile steps' },
-      { kind: 'tile', name: 'SLIDE_R', tip: 'Chute that carries you right (and down a diagonal run of them)' },
+      { kind: 'tile', name: 'STAIR', tip: 'Step: a thin ledge to jump up onto (you can walk straight past it and jump up through it)' },
+      { kind: 'tile', name: 'SLIDE_R', tip: 'Chute that carries you right (and down a diagonal run of them); you can walk past it and jump up through it' },
       { kind: 'tile', name: 'SLIDE_L', tip: 'Chute that carries you left' },
     ],
   },
@@ -55,12 +55,16 @@ export const GROUPS = [
     title: 'Level',
     items: [
       { kind: 'tile', name: 'ITEM', tip: 'Item: collect these and all the dots to open the door' },
-      { kind: 'tile', name: 'DOOR', tip: 'Exit door (one per level, stand it on a platform): opens when everything is collected' },
+      { kind: 'tile', name: 'DOOR_BL', tip: 'Exit door, a police box 2 tiles wide and 3 tall (one per level; this is its bottom left tile, stand it on a platform with room above and to the right). It appears when everything is collected' },
       { kind: 'start', tip: 'Player start (one per level)' },
       { kind: 'erase', tip: 'Eraser (also: right mouse button)' },
     ],
   },
 ];
+
+/** The exit door's six tiles, bottom left first, and where each goes (column, rows up) from the bottom left one. */
+export const DOOR_NAMES = ['DOOR_BL', 'DOOR_BR', 'DOOR_ML', 'DOOR_MR', 'DOOR_TL', 'DOOR_TR'];
+export const DOOR_CELLS = [[0, 0], [1, 0], [0, 1], [1, 1], [0, 2], [1, 2]];
 
 const row = (name, n) => Array.from({ length: n }, (_, i) => [i, 0, name]);
 const diag = (name, n, rising) => Array.from({ length: n }, (_, i) => [i, rising ? n - 1 - i : i, name]);
@@ -76,8 +80,8 @@ export const STAMPS = [
   { label: 'Bombs', cells: row('EXPLOSIVE', 4), tip: '4 bomb blocks: setting one off chains to its neighbours' },
   { label: 'Vanishing', cells: row('VANISH', 4), tip: '4 vanishing blocks' },
   { label: 'Ladder', cells: Array.from({ length: 5 }, (_, i) => [0, i, 'LADDER']), tip: 'A ladder 5 tiles tall' },
-  { label: 'Stairs up right', cells: diag('STAIR', 4, true), tip: 'Stairs rising to the right (needs a free tile above your head)' },
-  { label: 'Stairs up left', cells: diag('STAIR', 4, false), tip: 'Stairs rising to the left' },
+  { label: 'Stairs up right', cells: diag('STAIR', 4, true), tip: 'Steps rising to the right: jump up each one' },
+  { label: 'Stairs up left', cells: diag('STAIR', 4, false), tip: 'Steps rising to the left' },
   { label: 'Chute right', cells: diag('SLIDE_R', 4, false), tip: 'A chute sloping down to the right' },
   { label: 'Chute left', cells: diag('SLIDE_L', 4, true), tip: 'A chute sloping down to the left' },
   { label: 'Peg block', cells: [...row('BRICK', 8).map(([c, , n]) => [c, 1, n]), [1, 0, 'PEG']], tip: 'A block with a peg on it that patrols to the far end' },
@@ -90,4 +94,26 @@ export function offeredTiles() {
   for (const g of GROUPS) for (const it of g.items) if (it.kind === 'tile') names.add(it.name);
   for (const s of STAMPS) for (const [, , n] of s.cells) names.add(n);
   return names;
+}
+
+/**
+ * A little scene of the playfield for a palette swatch: the part in place, as it looks in the game (end caps,
+ * dots, and the part on something to stand on). 4 columns by 3 rows of [column, row, tile name].
+ */
+export const SCENE_W = 4;
+export const SCENE_H = 3;
+export function sceneFor(item) {
+  const floor = (r) => row('BRICK', SCENE_W).map(([c, , n]) => [c, r, n]);
+  const name = item.name;
+  switch (name) {
+    case 'WALL': return [[1, 0, name], [1, 1, name], [1, 2, name]];
+    case 'LADDER': return [[1, 0, name], [1, 1, name], [1, 2, name]];
+    case 'STAIR': return [[0, 2, name], [1, 1, name], [2, 0, name]];
+    case 'SLIDE_R': return [[0, 0, name], [1, 1, name], [2, 2, name]];
+    case 'SLIDE_L': return [[2, 0, name], [1, 1, name], [0, 2, name]];
+    case 'SPIKE': return [...floor(2), [1, 1, name], [2, 1, name]];
+    case 'ITEM': return [...floor(2), [1, 1, name]];
+    case 'DOOR_BL': return DOOR_CELLS.map(([dc, dr], k) => [1 + dc, 2 - dr, DOOR_NAMES[k]]);
+    default: return row(name, SCENE_W).map(([c, , n]) => [c, 1, n]);
+  }
 }

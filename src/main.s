@@ -21,7 +21,7 @@
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
         .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir
         .export tt_col, tt_row, tt_t, tt_ph, tt_kind, tt_orig, pg_x, pg_y, pg_min, pg_max, pg_dir, pg_wait, cph
-        .export pal0, pal1, pal2, pal3, dli_row, dli_n, ai_kind
+        .export pal0, pal1, pal2, pal3, dli_row, dli_n, ai_kind, door_open, door_dir, door_phase, door_art
 
         .include "gen/tiles.inc"
         .include "gen/font.inc"                 ; .charmap: .byte "TEXT" gives glyph ids
@@ -102,6 +102,10 @@ JOY_FIRE  = $10
 F_DOT     = 4           ; tile_flags bit: a platform tile with a dot in it (assets/tiles.txt)
 
 T_CONV_FIRST = T_CONV_R_SLOW    ; the eight belt tiles are consecutive, see assets/tiles.txt
+; the exit door: six glyphs with consecutive ids (alt tiles: the map byte is the id + 128), drawn a step at a time
+DOOR_GLYPHS  = CHARSET_ADDR + (T_DOOR_BL & $7F) * 8
+        .assert (T_DOOR_TR & $7F) - (T_DOOR_BL & $7F) = 5, error, "the six door tiles need consecutive ids"
+FADE_STEPS   = 16
 CONV_GLYPHS  = CHARSET_ADDR + T_CONV_FIRST * 8
 
 KIND_EXPL   = 0         ; timed tiles
@@ -237,6 +241,16 @@ ai_kind:  .res 1        ; the AI's target: 0 = item or door, 1 = a dot
 a_row:    .res 1
 a_k:      .res 1
 a_tr:     .res 1
+door_open: .res 1       ; 1 once everything is collected: the exit is there to walk into
+door_dir: .res 1        ; 1 = fading in, $FF = fading out, 0 = still
+door_phase: .res 1      ; how much of the door shows: 0 (none) .. FADE_STEPS (all)
+door_tick: .res 1
+door_art: .res 48       ; the door as the asset tool drew it (6 tiles of 8 bytes), copied at start
+d_i:      .res 1
+d_b:      .res 1
+d_o:      .res 1
+d_p:      .res 1
+d_t:      .res 1
 
 ; ---------------------------------------------------------------------------
         .macro SETDST addr
@@ -294,6 +308,11 @@ start:
 @pal:   lda #50
 @fps:   sta fps
 
+        ldx #47                 ; keep the door's art: its glyphs are rewritten for the fade
+@art:   lda DOOR_GLYPHS,x
+        sta door_art,x
+        dex
+        bpl @art
         ldx #7
         lda #0
 @cph:   sta cph,x
@@ -662,7 +681,7 @@ update_player:
         jmp do_horiz
 @slick: jmp slick_move
 
-; C set (and py += 8) if a stair or chute lies exactly one tile below the feet.
+; C set (and py += 8) if a chute lies exactly one tile below the feet: slide down onto it.
 step_down:
         lda py
         clc
@@ -693,10 +712,8 @@ step_down:
 @no:    clc
         rts
 
-; C set if tile A is a stair or a chute.
+; C set if tile A is a chute.
 is_step:
-        cmp #T_STAIR
-        beq @y
         cmp #T_SLIDE_R
         beq @y
         cmp #T_SLIDE_L
@@ -704,33 +721,6 @@ is_step:
         clc
         rts
 @y:     sec
-        rts
-
-; C set if the player may climb one tile: nothing solid in the row above the head at either
-; edge of the body or at A, the pixel column being stepped into.
-step_check:
-        sta tmp2
-        lda py
-        sec
-        sbc #1
-        sta ty
-        lda px
-        sta tx
-        jsr get_solid
-        bcs @no
-        lda px
-        clc
-        adc #3
-        sta tx
-        jsr get_solid
-        bcs @no
-        lda tmp2
-        sta tx
-        jsr get_solid
-        bcs @no
-        sec
-        rts
-@no:    clc
         rts
 
 ; ---- what the surface under the feet does ---------------------------------------------------
@@ -1115,6 +1105,8 @@ do_horiz:
         jmp move_left
 @rts:   rts
 
+; One step right or left if nothing solid is in the way at the head, the middle or the feet. (Stairs and chutes are
+; not solid: you walk through them, and jump up onto them.)
 move_right:
         lda px
         cmp #156
@@ -1122,39 +1114,7 @@ move_right:
         clc
         adc #4                  ; right edge after the step
         sta tx
-        lda py
-        sta ty
-        jsr get_solid
-        bcs @blk
-        lda py
-        clc
-        adc #8
-        sta ty
-        jsr get_solid
-        bcc @feet
-        cmp #T_STAIR            ; on the ground the body and feet probes are in the same tile row,
-        beq @stair              ; so a stair shows up in either
-        jmp @blk
-@feet:  lda py
-        clc
-        adc #15
-        sta ty
-        jsr get_solid
-        bcc @go
-        cmp #T_STAIR
-        bne @blk
-@stair: lda state
-        bne @blk                ; stairs are only climbed on the ground
-        lda tx
-        jsr step_check
-        bcc @blk
-        lda py
-        sec
-        sbc #8
-        sta py
-@go:    inc px
-        inc anim
-        inc moved
+        jmp step_to
 @blk:   rts
 
 move_left:
@@ -1163,6 +1123,11 @@ move_left:
         sec
         sbc #1
         sta tx
+        jmp step_to
+@blk:   rts
+
+; Walk into pixel column tx (px moves by one: the caller has put the new edge in tx) unless blocked.
+step_to:
         lda py
         sta ty
         jsr get_solid
@@ -1172,29 +1137,20 @@ move_left:
         adc #8
         sta ty
         jsr get_solid
-        bcc @feet
-        cmp #T_STAIR            ; on the ground the body and feet probes are in the same tile row,
-        beq @stair              ; so a stair shows up in either
-        jmp @blk
-@feet:  lda py
+        bcs @blk
+        lda py
         clc
         adc #15
         sta ty
         jsr get_solid
-        bcc @go
-        cmp #T_STAIR
-        bne @blk
-@stair: lda state
-        bne @blk                ; stairs are only climbed on the ground
-        lda tx
-        jsr step_check
-        bcc @blk
-        lda py
-        sec
-        sbc #8
-        sta py
-@go:    dec px
-        inc anim
+        bcs @blk
+        lda tx                  ; moving right: the new edge is past px; left: it is before it
+        cmp px
+        bcc @left
+        inc px
+        jmp @moved
+@left:  dec px
+@moved: inc anim
         inc moved
 @blk:   rts
 
@@ -1214,11 +1170,13 @@ check_tiles:
         jsr get_tile
         cmp #T_ITEM
         beq @item
-        cmp #T_DOOR_OPEN        ; the door is only open once everything is collected
-        beq @door
-        cmp #T_DOOR_OPEN_TOP
-        bne @skip
-@door:  jmp level_clear
+        cmp #T_DOOR_BL          ; any of the door's six tiles ...
+        bcc @skip
+        cmp #T_DOOR_TR+1
+        bcs @skip
+        lda door_open           ; ... once it is there
+        beq @skip
+        jmp level_clear
 @item:  lda #T_EMPTY
         ldy #0
         sta (ptr),y             ; remove it from the screen
@@ -1290,6 +1248,9 @@ level_clear:
         sta mode
         lda #0
         sta mtimer
+        sta drawn               ; he has gone through the door ...
+        lda #$FF
+        sta door_dir            ; ... which fades away behind him
         lda #FR_STAND
         sta frame
         lda #$C8                ; green flash
@@ -1298,30 +1259,77 @@ level_clear:
         sta flash
         rts
 
-; Swap every closed door on the screen for an open one.
+; Everything is collected: the exit door fades in.
 open_doors:
-        lda #<SCREEN
-        sta ptr
-        lda #>SCREEN
-        sta ptr+1
-        ldx #4
-@page:  ldy #0
-@b:     lda (ptr),y
-        cmp #T_DOOR
-        bne @top
-        lda #T_DOOR_OPEN
-        sta (ptr),y
-        bne @n                  ; (always: the new tile is not 0)
-@top:   cmp #T_DOOR_TOP
-        bne @n
-        lda #T_DOOR_OPEN_TOP
-        sta (ptr),y
-@n:     iny
-        bne @b
-        inc ptr+1
-        dex
-        bne @page
+        lda #1
+        sta door_open
+        sta door_dir
         rts
+
+; The door's six glyphs are redrawn from door_art with only the pixels whose fade step (door_thr) is below
+; door_phase: phase 0 shows nothing, FADE_STEPS shows all of it.
+door_draw:
+        ldx #47
+@byte:  stx d_i
+        lda door_art,x
+        sta d_b
+        lda #0
+        sta d_o
+        sta d_p
+@pix:   asl d_o
+        asl d_o
+        lda d_i                 ; threshold index = 4 * byte + pixel
+        asl a
+        asl a
+        clc
+        adc d_p
+        tay
+        lda d_b
+        and #$C0
+        sta d_t                 ; the pixel, in bits 7-6
+        lda door_thr,y
+        cmp door_phase
+        bcs @hidden             ; not yet its turn
+        lda d_t
+        asl a                   ; bits 7-6 down to 1-0
+        rol a
+        rol a
+        ora d_o
+        sta d_o
+@hidden:
+        asl d_b
+        asl d_b
+        inc d_p
+        lda d_p
+        cmp #4
+        bne @pix
+        ldx d_i
+        lda d_o
+        sta DOOR_GLYPHS,x
+        dex
+        bpl @byte
+        rts
+
+; Every other frame the door takes one step towards fully there (door_dir = 1) or gone ($FF).
+door_fade:
+        lda door_dir
+        beq @rts
+        inc door_tick
+        lda door_tick
+        and #1
+        bne @rts
+        lda door_phase
+        clc
+        adc door_dir
+        sta door_phase
+        ldx #0
+        cmp #FADE_STEPS
+        beq @end
+        cmp #0
+        bne @draw
+@end:   stx door_dir
+@draw:  jmp door_draw
+@rts:   rts
 
 ; Standing on a platform tile with a dot in it eats the dot (either foot counts).
 eat_dots:
@@ -1392,6 +1400,7 @@ die:
 ; ---------------------------------------------------------------------------
 ; Mode handlers: one call per frame.
 mode_play:
+        jsr door_fade
         jsr get_joy
         jsr update_player
         lda mode
@@ -1529,6 +1538,7 @@ mode_spawn:
 ; Level cleared: flash and play a rising arpeggio, then on to the next level.
 mode_clear:
         jsr inc_mtimer
+        jsr door_fade
         lda mtimer
         lsr a
         lsr a
@@ -1764,6 +1774,11 @@ begin_level:
         sta mtimer
         sta ai_have
         sta flash
+        sta door_open           ; no door yet: it appears when everything is collected
+        sta door_dir
+        sta door_phase
+        sta door_tick
+        jsr door_draw
         lda #FR_STAND
         sta frame
         lda #0
@@ -2658,8 +2673,10 @@ ai_valid:
         bne @dot
         cmp #T_ITEM
         beq @yes
-        cmp #T_DOOR_OPEN
-        beq @yes
+        cmp #T_DOOR_BL
+        bne @no
+        lda door_open
+        bne @yes
 @no:    clc
         rts
 @dot:   tax
@@ -2703,8 +2720,12 @@ ai_pick:
         stx a_k
         cmp #T_ITEM
         beq @cand
-        cmp #T_DOOR_OPEN
-        beq @cand
+        cmp #T_DOOR_BL
+        bne @dotchk
+        lda door_open           ; its bottom left tile, once it is there
+        bne @cand
+        beq @next
+@dotchk:
         tax
         lda tile_flags,x
         and #F_DOT
@@ -2751,8 +2772,9 @@ ai_pick:
         inc a_row
         lda a_row
         cmp #24
-        bne @row
-        rts
+        beq @done
+        jmp @row
+@done:  rts
 
 ; Find the ladder tile in row A nearest to column a_pc. C set and a_lc = its column when there is one.
 ai_find_ladder:
@@ -2892,7 +2914,13 @@ ai_ground:
         adc #15
         sta ty
         jsr get_tile
-        cmp #T_SPIKE
+        ldx a_k
+        cpx #4                  ; a step right in front of us (the near look only): jump up onto it
+        bne @lns
+        cmp #T_STAIR
+        bne @lns
+        jmp @jump
+@lns:   cmp #T_SPIKE
         bne @lnxt
         lda tx
         and #$FC
@@ -2942,7 +2970,13 @@ ai_ground:
         adc #15
         sta ty
         jsr get_tile
-        cmp #T_SPIKE
+        ldx a_k
+        cpx #6
+        bne @rns
+        cmp #T_STAIR
+        bne @rns
+        jmp @jump
+@rns:   cmp #T_SPIKE
         bne @rnxt
         lda tx
         and #$FC
@@ -2991,6 +3025,7 @@ ai_ground:
         .include "gen/sprites.inc"      ; defines SPR_COUNT and spr_frames
         .include "gen/levels.inc"       ; the maps and the level tables
         .include "gen/screens.inc"      ; screen_title, screen_gameover
+        .include "gen/fade.inc"         ; door_thr: when each pixel of the exit door shows
         .include "gen/tileflags.inc"    ; tile_flags: bit 0 solid, bit 1 one-way
 
 row_lo: .repeat 24, i

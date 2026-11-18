@@ -188,60 +188,85 @@ tile 4 SPIKE ^
 3333
 3333
 
-# ---- the exit door: closed until every dot and item is collected, then open. Write one D (the bottom half)
-# ---- in a map; the asset tool puts the top half above it.
-tile 117 DOOR D
-2112
-2112
-2112
-2132
-2112
-2112
-2112
-2222
+# ---- the exit door: a police box, 2 tiles wide and 3 tall. It is not in the map until every dot and item is
+# ---- collected, then it fades in, pixel by pixel; walking into it fades it out and ends the level.
+# ---- Write one D (its bottom left tile) in a map; the asset tool fills in the other five, which need an empty
+# ---- space of 2 columns by 3 rows. The ids must stay consecutive and in this order: the game redraws these
+# ---- glyphs a step at a time to do the fade. Blue is the ice colour (COLOR3), so the tiles are alt tiles.
 
-tile 118 DOOR_TOP none
-2222
-2112
-2112
-2112
-2112
-2112
-2112
-2112
+tile 117 DOOR_BL D alt
+3003
+3003
+3333
+3003
+3003
+3003
+3333
+3333
 
-tile 119 DOOR_OPEN none
-2332
-2332
-2332
-2332
-2332
-2332
-2332
-2222
+tile 118 DOOR_BR none alt
+3003
+3003
+3333
+3003
+3003
+3003
+3333
+3333
 
-tile 120 DOOR_OPEN_TOP none
-2222
-2332
-2332
-2332
-2332
-2332
-2332
-2332
+tile 119 DOOR_ML none alt
+3333
+3223
+3223
+3333
+3223
+3223
+3333
+3003
+
+tile 120 DOOR_MR none alt
+3333
+3223
+3223
+3333
+3223
+3223
+3333
+3003
+
+tile 121 DOOR_TL none alt
+0001
+0003
+0033
+0333
+3333
+0333
+0322
+0333
+
+tile 122 DOOR_TR none alt
+1000
+3000
+3300
+3330
+3333
+3330
+2230
+3330
 
 # ---- factory components ---------------------------------------------------------------------
 
-# One step: walk into it to climb it, walk off it to step down.
-tile 6 STAIR S solid
-3333
+# One step: a thin ledge, one tile higher than the last. Jump up onto it (you can jump up through it and walk
+# straight past it), walk off it to drop down.
+tile 6 STAIR S oneway
 1111
 1111
 2222
-3333
-1111
-1111
-2222
+0000
+0000
+0000
+0000
+0000
 
 # Ice: you speed up slowly and glide a long way.
 tile 7 ICE ~ solid alt
@@ -377,9 +402,10 @@ tile 13 VANISH_B none solid
 0000
 2222
 
-# Chutes: they carry you along and down the diagonal chain of tiles.
-tile 14 SLIDE_R \ solid
-3333
+# Chutes: they carry you along and down the diagonal chain of tiles. Like the steps you can walk past them
+# and jump up through them; you stand on the top edge of the tile.
+tile 14 SLIDE_R \ oneway
+0000
 2200
 0220
 0022
@@ -388,8 +414,8 @@ tile 14 SLIDE_R \ solid
 0220
 0022
 
-tile 15 SLIDE_L / solid
-3333
+tile 15 SLIDE_L / oneway
+0000
 0022
 0220
 2200

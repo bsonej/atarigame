@@ -30,7 +30,7 @@ export const rowHueByte = (palette, levelIndex, row) => {
   return v === 8 ? palette.hud : palette.hues[v];
 };
 
-const DEFAULT_PALETTE = { hues: [0x1e, 0x2c, 0x4c, 0x5c, 0x7c, 0x9c, 0xac, 0xcc], grey: 0x0a, white: 0x0e, ice: 0xac, hud: 0x2a, background: 0 };
+const DEFAULT_PALETTE = { hues: [0x1e, 0x2c, 0x4c, 0x5c, 0x7c, 0x9c, 0xac, 0xcc], grey: 0x0a, white: 0x0e, ice: 0x8a, hud: 0x2a, background: 0 };
 
 // The belts' animation (animate_belts in main.s): one bright pixel marches along rows 0-1 of the glyph.
 const BELT_PAT = [0xea, 0xba, 0xae, 0xab];
@@ -128,15 +128,34 @@ export function drawTile(ctx, atlas, byte, x, y, cell, alpha = 1, row = Math.rou
   if (alpha !== 1) ctx.globalAlpha = 1;
 }
 
-/** The map: 40x24 bytes, row 0 left to the HUD. */
-export function drawMap(ctx, atlas, map, cell, fromRow = 1) {
+/**
+ * One tile of the exit door as it looks part way through its fade: only the pixels whose fade step is below the
+ * door's current phase are there (the same table the game uses to redraw the door's glyphs).
+ * @param door {bytes: the six tile bytes, fade: step of each pixel, phase, steps}
+ */
+export function drawDoorTile(ctx, atlas, byte, x, y, cell, row, door) {
+  const k = door.bytes.indexOf(byte);
+  if (door.phase <= 0) return;
+  if (door.phase >= door.steps) return drawTile(ctx, atlas, byte, x, y, cell, 1, row);
+  const src = atlas.canvasFor(row);
+  const pw = cell / 4;
+  const ph = cell / 8;
+  for (let py = 0; py < 8; py++)
+    for (let px = 0; px < 4; px++)
+      if (door.fade[(k * 8 + py) * 4 + px] < door.phase) ctx.drawImage(src, byte * 4 + px, py, 1, 1, x + px * pw, y + py * ph, pw, ph);
+}
+
+/** The map: 40x24 bytes, row 0 left to the HUD. During play `door` says how much of the exit door shows. */
+export function drawMap(ctx, atlas, map, cell, fromRow = 1, door = null) {
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = COLORS.bg;
   ctx.fillRect(0, 0, COLS * cell, ROWS * cell);
   for (let r = fromRow; r < ROWS; r++)
     for (let c = 0; c < COLS; c++) {
       const b = map[r * COLS + c];
-      if (b) drawTile(ctx, atlas, b, c * cell, r * cell, cell, 1, r);
+      if (!b) continue;
+      if (door && door.bytes.includes(b)) drawDoorTile(ctx, atlas, b, c * cell, r * cell, cell, r, door);
+      else drawTile(ctx, atlas, b, c * cell, r * cell, cell, 1, r);
     }
 }
 

@@ -66,6 +66,8 @@ export class Game {
     this.flags = tables.flags;
     this.canon = tables.canon;
     this.convFirst = this.T.CONV_R_SLOW;
+    this.door = tables.door; // the bytes of the exit door's six tiles, bottom left first
+    this.fadeSteps = tables.fadeSteps || 16;
     this.lives = opts.lives === undefined ? START_LIVES : opts.lives;
     this.score = 0;
     this.deaths = 0;
@@ -102,6 +104,10 @@ export class Game {
     this.anim = 0;
     this.moved = 0;
     this.mtimer = 0;
+    this.doorOpen = 0; // no door yet: it fades in when everything is collected
+    this.doorDir = 0; // 1 fading in, -1 fading out
+    this.doorPhase = 0; // how much of it shows, 0..fadeSteps
+    this.doorTick = 0;
     this.frame = FRAME.STAND;
     this.drawn = 0;
     this.dyi = 0;
@@ -114,6 +120,7 @@ export class Game {
       mode: this.mode, px: this.px, py: this.py, state: this.state, left: this.left, lives: this.lives,
       score: this.score, jt: this.jt, fall: this.fall, vx: this.vx, vfrac: this.vfrac, under: this.under,
       cacc: this.cacc, mtimer: this.mtimer, frame: this.frame,
+      doorOpen: this.doorOpen, doorDir: u8(this.doorDir), doorPhase: this.doorPhase,
     };
   }
 
@@ -161,10 +168,10 @@ export class Game {
   }
 
   isStep(t) {
-    return t === this.T.STAIR || t === this.T.SLIDE_R || t === this.T.SLIDE_L;
+    return t === this.T.SLIDE_R || t === this.T.SLIDE_L;
   }
 
-  /** A stair or chute exactly one tile below the feet: walk down onto it. */
+  /** A chute exactly one tile below the feet: slide down onto it. */
   stepDown() {
     const ty = u8(this.py + 24);
     if (this.isStep(this.getTile(this.px, ty)) || this.isStep(this.getTile(u8(this.px + 3), ty))) {
@@ -172,15 +179,6 @@ export class Game {
       return true;
     }
     return false;
-  }
-
-  /** May the player climb one tile into pixel column `x`? */
-  stepCheck(x) {
-    const ty = u8(this.py - 1);
-    if (this.getSolid(this.px, ty)[0]) return false;
-    if (this.getSolid(u8(this.px + 3), ty)[0]) return false;
-    if (this.getSolid(x, ty)[0]) return false;
-    return true;
   }
 
   isSurface(t) {
@@ -206,6 +204,7 @@ export class Game {
   }
 
   modePlay(hjoy) {
+    this.doorFade();
     this.joyprev = this.joy;
     this.joy = hjoy;
     this.updatePlayer();
@@ -261,6 +260,7 @@ export class Game {
 
   modeClear() {
     this.incMtimer();
+    this.doorFade();
     if (this.mtimer >= CLEAR_FRAMES) this.events.push('cleared');
   }
 
@@ -392,26 +392,12 @@ export class Game {
     else if (this.joy & JOY.LEFT) this.moveLeft();
   }
 
-  /** The shared body of move_right / move_left: `tx` is the pixel column being stepped into. */
+  /** The shared body of move_right / move_left: `tx` is the pixel column being stepped into. Stairs and chutes are not
+   *  solid: you walk through them (and jump up onto them). */
   moveInto(tx, dir) {
     if (this.getSolid(tx, this.py)[0]) return;
-    let [solid, t] = this.getSolid(tx, u8(this.py + 8));
-    let stair = false;
-    if (solid) {
-      if (t !== this.T.STAIR) return;
-      stair = true;
-    } else {
-      [solid, t] = this.getSolid(tx, u8(this.py + 15));
-      if (solid) {
-        if (t !== this.T.STAIR) return;
-        stair = true;
-      }
-    }
-    if (stair) {
-      if (this.state !== STATE.GROUND) return; // stairs are only climbed on the ground
-      if (!this.stepCheck(tx)) return;
-      this.py = u8(this.py - 8);
-    }
+    if (this.getSolid(tx, u8(this.py + 8))[0]) return;
+    if (this.getSolid(tx, u8(this.py + 15))[0]) return;
     this.px = u8(this.px + dir);
     this.anim = u8(this.anim + 1);
     this.moved = u8(this.moved + 1);
@@ -546,8 +532,8 @@ export class Game {
       if (t === this.T.ITEM) {
         this.map[this.ptr] = this.T.EMPTY;
         this.pickup();
-      } else if (t === this.T.DOOR_OPEN || t === this.T.DOOR_OPEN_TOP) {
-        return this.levelClear(); // the door is only open once everything is collected
+      } else if (this.doorOpen && this.door && t >= this.door[0] && t <= this.door[5]) {
+        return this.levelClear(); // any of the door's six tiles, once it is there
       }
     }
     const ty = u8(this.py + 15);
@@ -574,20 +560,28 @@ export class Game {
     this.events.push('opened');
   }
 
-  /** Swap every closed door on the screen for an open one. */
+  /** Everything is collected: the exit door fades in. */
   openDoors() {
-    const T = this.T;
-    for (let i = 0; i < this.map.length; i++) {
-      if (this.map[i] === T.DOOR) this.map[i] = T.DOOR_OPEN;
-      else if (this.map[i] === T.DOOR_TOP) this.map[i] = T.DOOR_OPEN_TOP;
-    }
+    this.doorOpen = 1;
+    this.doorDir = 1;
   }
 
-  /** Walking into the open door finishes the level. */
+  /** Every other frame the door takes one step towards fully there (doorDir 1) or gone (-1). */
+  doorFade() {
+    if (this.doorDir === 0) return;
+    this.doorTick = u8(this.doorTick + 1);
+    if (this.doorTick & 1) return;
+    this.doorPhase += this.doorDir;
+    if (this.doorPhase === this.fadeSteps || this.doorPhase === 0) this.doorDir = 0;
+  }
+
+  /** Walking into the open door finishes the level: he is gone, and the door fades away behind him. */
   levelClear() {
     this.addScore(CLEAR_BONUS);
     this.mode = MODE.CLEAR;
     this.mtimer = 0;
+    this.drawn = 0;
+    this.doorDir = -1;
     this.frame = FRAME.STAND;
   }
 

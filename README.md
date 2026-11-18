@@ -20,8 +20,9 @@ ATTRACT: an AI plays for 30 s, then back to TITLE; fire starts a real game
   blinking DEMO marker where the lives are. Fire starts a real game. The 30 s are counted in frames and adapt to PAL
   (50 Hz) or NTSC (60 Hz).
 - **The goal**: walk along every platform and eat its **dots** (1 point each), take every **item** (10 points) and,
-  when nothing is left, the **exit door** opens (a cyan flash and a rising tone). Walk into it to clear the level (100
-  points). The door is shut until then, so a level is not won by running to the end.
+  when nothing is left, the **exit door** appears (a flash and a rising tone): a blue police box, 2 tiles wide and 3
+  tall, that fades in pixel by pixel. Walk into it to clear the level (100 points); it fades out the same way as you
+  go through. Until it has appeared it is not there, so a level is not won by running to the end.
 - **Lives** (3), **score** (kept when you die), **hi-score**, and the **level counter** are on the top row:
   `SCORE 00000 LEVEL 01  LIVES 3  LEFT 074` (LEFT = dots and items still to collect, up to 250 a level).
 - **Colour**: every screen row has its own hue (a display-list interrupt rewrites the four colour registers at the
@@ -45,8 +46,10 @@ Dying restores the level (all items and dots back, the door shut) but keeps your
   platform (never on an end cap), but only where the player can stand to eat it: no solid tile in the two cells above and
   no spikes (a dot under a spike would be a trap). A dot is eaten by walking over it on the ground; jumping over one
   leaves it.
-- **The door** is the `D` character (bottom half; the top half is added above it and needs an empty cell). Every level
-  needs exactly one. The door is not solid, so you can walk in front of it before it opens.
+- **The door** is the `D` character: the bottom left tile of a 2x3 box. The compiler adds the other five tiles, so the
+  two columns to its right and the two rows above must be empty. Every level needs exactly one. It is never solid. Its
+  art is six `alt` tiles (ids 117-122 in `assets/tiles.txt`); the fade rewrites their six glyphs in the character set
+  each frame from a 16-step table (`src/gen/fade.inc`, built by `tools/build_assets.py`, also sent to the editor).
 
 ## Tools
 
@@ -100,8 +103,8 @@ jump through it and can stand on it.
 | --- | --- | --- |
 | `#` | brick | solid |
 | `=` | platform | one-way: jump up through it, land on top, walk through it at body height |
-| `S` | stair | solid, but you walk up a one-tile step onto it from the side, and down it again. Needs a free tile above your head. |
-| `\` `/` | chute | solid; carries you right (`\`) or left (`/`) at 2 pixels a frame. A diagonal row of them takes you down a slope: the walk-down step works on chutes too, but you cannot walk up one |
+| `S` | stair | a thin ledge (the top 3 pixel rows of the tile). Not solid: walk past it, or jump up through it and land on top; a flight of them is climbed by jumping |
+| `\` `/` | chute | a ledge like stairs that also carries you right (`\`) or left (`/`) at 2 pixels a frame. Not solid; a diagonal row of them takes you down a slope (the walk-down step works on chutes), but you jump to go up one |
 | `{` `<` `(` | belt, left | slow (half a pixel a frame), normal (1), fast (2). Drifts you whether or not you walk |
 | `}` `>` `)` | belt, right | the same, to the right |
 | `[` `]` | accelerating belt, left / right | starts slow, gains speed every few frames up to fast, resets when you step off |
@@ -156,7 +159,7 @@ task editor        # starts tools/editor_server.py and opens http://localhost:87
 
 Build a level by dragging parts from the palette onto the board (or click a part, then click or drag on the board):
 
-- **Palette**: platforms, belts (left and right, four speeds), ice, rollers, ladders, stairs, chutes, spikes, bomb and
+- **Palette** (each swatch is a little scene compiled and drawn like the playfield: capsule ends, dots, the row's colours, the whole 2x3 door): platforms, belts (left and right, four speeds), ice, rollers, ladders, stairs, chutes, spikes, bomb and
   vanishing blocks, pegs, items and the player start, plus ready-made **stamps** (a belt run, a flight of stairs, a block
   with a peg already on it). `Shift`+drag fills a rectangle, the right mouse button erases, `V` is a select tool (drag a
   selection to move it, `Alt`+drag or `Cmd/Ctrl+C` to copy, `Delete` to clear). `Cmd/Ctrl+Z` undoes. Row 0 belongs to the
@@ -197,7 +200,7 @@ starts atari800 with its monitor on a pipe and a breakpoint on the `frame_end` l
 one frame (and `Game.run(n)` pipelines many). Tests inject joystick state, then read the game's variables and the
 screen and sprite memory. They cover the physics, the title, the spawn/death/clear animations, lives, game over,
 hi-score, the score row, dots and the door, the 30-second attract run, and the AI clearing maps 1-3 (dots, items, door) without dying. `test_engine.py` also checks that the colour tables the game's display-list interrupt loads are the editor's colours for every level, and that the interrupt fires once per row, every frame. `test_factory.py` builds small arenas
-by poking tiles into screen RAM and checks each part (platform jump-through, stair climb and ceiling, belt speeds and
+by poking tiles into screen RAM and checks each part (platform jump-through, stairs and chutes as ledges you walk past and jump onto, belt speeds and
 direction, acceleration and reset, ice and roller glide, chutes, vanishing and bomb timing and chain reaction, peg
 start/sweep/push/jump-over) and that maps 4 and 5 load. They are skipped if
 atari800 or the test build is missing. `test_engine.py` (see "Level editor") replays scripted input on both the game and the
@@ -215,9 +218,9 @@ whether the colour changes land cleanly at the start of each row (the interrupt 
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
 `render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
 (`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield) were only reasoned about. The same goes for the
-new tiles: their art, the cyan used for ice (`COLOR3`), the moving-pixel belt animation and the red pegs have never been
+new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation and the red pegs have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.
-Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 30 and 14 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,
+Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 32 and 16 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,
 crosses roller, bomb and vanishing blocks) but does not know to jump pegs or ride belts to the end, and nobody has played them. Run `task run` and, if
 the player is a few pixels off from the floor, adjust `PM_YOFF`.
 

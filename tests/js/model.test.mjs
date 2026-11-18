@@ -121,12 +121,16 @@ test('no dot goes where the player would have to stand in spikes to eat it', () 
   assert.deepEqual([4, 6, 8].map((col) => c.map[14 * 40 + col] === T.BRICK_DOT), [true, false, true]);
 });
 
-test('every level needs an exit door with room above it', () => {
+test('every level needs an exit door with room above it and beside it', () => {
   const noDoor = room().map((r) => r.replace('D', '.'));
   assert.ok(compileLevel(noDoor, tables).errors.some((e) => e.msg.includes('no exit door')));
-  const blocked = room({ '21,37': 'W' });
-  assert.ok(compileLevel(blocked, tables).errors.some((e) => e.msg.includes('needs an empty cell above')));
-  assert.deepEqual(compileLevel(room(), tables).errors, []);
+  for (const [key, ch] of [['21,37', 'W'], ['20,38', '*'], ['22,38', 'W']]) {
+    const blocked = room({ [key]: ch });
+    assert.ok(compileLevel(blocked, tables).errors.some((e) => e.msg.includes('needs an empty space')), key);
+  }
+  const ok = compileLevel(room(), tables);
+  assert.deepEqual(ok.errors, []);
+  assert.deepEqual(ok.doors, [[37, 22]]);
 });
 
 test('the palette from the server drives the row colours (assets/palette.txt)', () => {

@@ -520,31 +520,54 @@ class DotsAndDoors(unittest.TestCase):
                     self.p.build()
                 self.assertIn(message, str(cm.exception))
 
-    DOOR = (
-        "tile 40 DOOR D\n" + "\n".join(["1111"] * 8) + "\ntile 41 DOOR_TOP none\n" + "\n".join(["1111"] * 8)
-    )
+    DOOR_NAMES = ["DOOR_BL", "DOOR_BR", "DOOR_ML", "DOOR_MR", "DOOR_TL", "DOOR_TR"]
 
-    def test_a_door_gets_its_top_half_above_it(self) -> None:
-        self.tiles(self.DOOR)
+    def door_tiles(self, first: int = 40) -> str:
+        return "\n".join(
+            f"tile {first + i} {name} {'D' if i == 0 else 'none'} alt\n" + "\n".join(["1111"] * 8)
+            for i, name in enumerate(self.DOOR_NAMES)
+        )
+
+    def test_a_door_is_six_tiles_from_its_bottom_left_one(self) -> None:
+        self.tiles(self.door_tiles())
         rows = good_rows()
-        rows[22] = "..@" + "." * 34 + "D*."
+        rows[22] = "..@" + "." * 34 + "D.*"
         self.p.write("assets/levels/level1.txt", level(rows))
         text = self.p.build().joinpath("levels.inc").read_text()
         data = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text.split("level1_spawn:")[0])]
-        self.assertEqual((data[22 * 40 + 37], data[21 * 40 + 37]), (40, 41))
+        got = [data[r * 40 + c] for r in (22, 21, 20) for c in (37, 38)]
+        self.assertEqual(got, [40 + 128 + i for i in range(6)], "bottom row, middle row, top row, left to right")
 
-    def test_a_level_needs_a_door_and_room_above_it(self) -> None:
-        self.tiles(self.DOOR)
+    def test_a_level_needs_a_door_and_room_for_it(self) -> None:
+        self.tiles(self.door_tiles())
         with self.assertRaises(ba.AssetError) as cm:
             self.p.build()
         self.assertIn("no exit door", str(cm.exception))
-        rows = good_rows()
-        rows[22] = "..@" + "." * 34 + "D*."
-        rows[21] = "." * 37 + "#" + ".." 
-        self.p.write("assets/levels/level1.txt", level(rows))
+        for where in ((21, 37), (20, 38), (22, 38)):
+            with self.subTest(where):
+                rows = good_rows()
+                rows[22] = "..@" + "." * 34 + "D.*"
+                line = list(rows[where[0]])
+                line[where[1]] = "#"
+                rows[where[0]] = "".join(line)
+                self.p.write("assets/levels/level1.txt", level(rows))
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.p.build()
+                self.assertIn("empty space", str(cm.exception))
+
+    def test_the_door_tiles_need_consecutive_ids(self) -> None:
+        self.tiles(self.door_tiles().replace("tile 43 DOOR_MR", "tile 50 DOOR_MR"))
         with self.assertRaises(ba.AssetError) as cm:
             self.p.build()
-        self.assertIn("empty cell above", str(cm.exception))
+        self.assertIn("consecutive", str(cm.exception))
+
+    def test_the_door_fade_order_shows_the_same_number_of_pixels_at_every_step(self) -> None:
+        thr = ba.fade_thresholds()
+        self.assertEqual(len(thr), 6 * 8 * 4)
+        for step in range(ba.FADE_STEPS + 1):
+            self.assertEqual(sum(1 for t in thr if t < step), 12 * step)
+        text = self.p.build().joinpath("fade.inc").read_text()
+        self.assertEqual([int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text)], thr)
 
     def test_the_palette_file_is_checked_and_turned_into_an_include(self) -> None:
         good = "hues 1E 2C 4C 5C 7C 9C AC CC\ngrey 0A\nwhite 0E\nice AC\nhud 2A\nbackground 00\n"
@@ -571,7 +594,7 @@ class RealAssets(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ba.build(ROOT, Path(tmp))
             names = {p.name for p in Path(tmp).iterdir()}
-            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "charset.inc", "font.inc", "palette.inc", "sprites.inc", "levels.inc", "screens.inc"})
+            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "charset.inc", "font.inc", "palette.inc", "fade.inc", "sprites.inc", "levels.inc", "screens.inc"})
             self.assertIn("T_BRICK", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("T_DIGIT0       = 16", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("level1_spawn", (Path(tmp) / "levels.inc").read_text())

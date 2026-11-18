@@ -98,7 +98,8 @@ def random_level(seed: int) -> str:
     grid[22][c0 + 12 if c0 + 12 <= 37 else c0 - 12] = "*"
     # the exit door on the floor, on the other side of the level, with room for its top half
     door = 3 if c0 > 20 else 36
-    grid[21][door] = "."
+    for r in (20, 21, 22):  # (2 columns by 3 rows)
+        grid[r][door] = grid[r][door + 1] = "."
     grid[22][door] = "D"
     return (
         "# Level 99. 40 columns x 24 rows.\n"
@@ -158,6 +159,7 @@ class CompileParity(unittest.TestCase):
 
 
 FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "fall", "vx", "vfrac"]
+DOOR_FIELDS = {"doorOpen": "door_open", "doorDir": "door_dir", "doorPhase": "door_phase"}  # engine name -> game variable
 
 
 @needs_emulator
@@ -173,6 +175,8 @@ class EngineMatchesGame(Arena):
         g = self.g
         snap = {f: getattr(g, f) for f in FIELDS if f != "score"}
         snap["score"] = g.score16
+        for field, label in DOOR_FIELDS.items():
+            snap[field] = g.bss(label)[0]
         return snap
 
     def read_map(self) -> list[int]:
@@ -184,7 +188,7 @@ class EngineMatchesGame(Arena):
 
     def compare(self, label: str, rec: dict) -> None:
         got = self.read_game()
-        want = {f: rec["snap"][f] for f in FIELDS}
+        want = {f: rec["snap"][f] for f in [*FIELDS, *DOOR_FIELDS]}
         self.assertEqual(got, want, f"{label}: player state differs (game vs engine)")
         if want["mode"] == OVER:  # the real game now draws its game-over screen over the map
             return

@@ -81,29 +81,66 @@ test('items score ten points', () => {
   assert.equal(g.left, 1);
 });
 
-test('the last thing collected opens the door; walking into the open door clears the level with a bonus', () => {
+test('the last thing collected makes the exit door fade in; walking into it ends the level and the door fades out', () => {
   const h = play(room({ '22,3': '*' }));
   const T = tables.T;
-  const doorCells = () => [h.map[22 * 40 + 37], h.map[21 * 40 + 37]];
-  assert.deepEqual(doorCells(), [T.DOOR, T.DOOR_TOP], 'the top half comes from the compiler');
+  const door = () => [22, 21, 20].flatMap((r) => [37, 38].map((c) => h.map[r * 40 + c]));
+  assert.deepEqual(door(), [T.DOOR_BL, T.DOOR_BR, T.DOOR_ML, T.DOOR_MR, T.DOOR_TL, T.DOOR_TR], 'the compiler puts all six tiles in');
+  assert.deepEqual([h.doorOpen, h.doorPhase], [0, 0], 'nothing to see yet');
   h.left = 1;
   h.map[1 * 40 + 38] = T.EMPTY;
   run(h, 10, JOY.RIGHT);
   assert.equal(h.left, 0);
   assert.equal(h.mode, MODE.PLAY, 'collecting everything does not end the level by itself');
   assert.equal(h.score, 10);
-  assert.deepEqual(doorCells(), [T.DOOR_OPEN, T.DOOR_OPEN_TOP]);
+  assert.equal(h.doorOpen, 1);
   assert.ok(h.events.includes('opened'));
-  run(h, 200, JOY.RIGHT);
+  assert.ok(h.doorPhase > 0 && h.doorPhase < 16, 'it is fading in');
+  const before = h.doorPhase;
+  run(h, 2);
+  assert.equal(h.doorPhase, before + 1, 'one step every other frame');
+  run(h, 60);
+  assert.equal(h.doorPhase, 16, 'fully there');
+  while (h.mode === MODE.PLAY) h.step(JOY.RIGHT);
   assert.equal(h.mode, MODE.CLEAR);
   assert.equal(h.score, 110);
+  assert.equal(h.drawn, 0, 'he has gone through the door');
+  assert.equal(h.doorDir, -1, 'and it fades out behind him');
+  run(h, 40);
+  assert.equal(h.doorPhase, 0);
+  assert.equal(h.doorDir, 0);
 });
 
-test('a closed door is walked through harmlessly', () => {
+test('a door that has not appeared yet is walked through harmlessly', () => {
   const g = play(room());
   run(g, 200, JOY.RIGHT);
   assert.equal(g.mode, MODE.PLAY);
   assert.ok(g.px > 37 * 4 - 4, 'went past the door');
+});
+
+test('the door fades in evenly: every step shows twelve more of its 192 pixels', () => {
+  const f = tables.fade;
+  assert.equal(f.length, 192);
+  for (let step = 0; step <= 16; step++) assert.equal(f.filter((t) => t < step).length, 12 * step, `step ${step}`);
+});
+
+test('you walk straight past steps and chutes, and can jump up onto a step', () => {
+  for (const ch of ['S', '\\', '/']) {
+    const g = play(room({ '22,10': ch }));
+    run(g, 60, JOY.RIGHT);
+    assert.ok(g.px > 10 * 4 + 6, `walked past ${ch}`);
+    assert.equal(g.py, FLOOR_Y);
+  }
+  const g = play(room({ '22,10': 'S' }));
+  g.px = 10 * 4;
+  g.py = FLOOR_Y;
+  run(g, 2);
+  g.step(JOY.FIRE);
+  run(g, 60);
+  assert.equal(g.py, FLOOR_Y - 8, 'jumped up through the step and landed on top of it');
+  assert.equal(g.state, 0);
+  run(g, 30, JOY.RIGHT);
+  assert.equal(g.py, FLOOR_Y, 'walked off its end and dropped to the floor');
 });
 
 test('walking over a dot eats it: a point, one less to collect, and the plain tile stays', () => {

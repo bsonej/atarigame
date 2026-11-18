@@ -33,7 +33,8 @@ export function makeTables(api) {
   const dotted = new Set(Object.values(dots));
   return {
     chars, solid, caps, dots, dotted, byByte, T, flags: api.flags, canon: api.canon, tiles: api.tiles,
-    door: api.door || null, palette: api.palette || null, maxCollect: api.maxCollect || 250,
+    door: api.door || null, doorCells: api.doorCells || [], fade: api.fade || [], fadeSteps: api.fadeSteps || 16,
+    palette: api.palette || null, maxCollect: api.maxCollect || 250,
   };
 }
 
@@ -190,16 +191,17 @@ export function compileLevel(rows, tables) {
   if (stars === 0) errors.push({ msg: "no items ('*') to collect" });
   const doors = [];
   if (tables.door) {
-    const [doorBottom, doorTop] = tables.door;
+    const cells = tables.doorCells; // [column, rows up] of each of the door's six tiles from its bottom left one
     for (let i = 0; i < COLS * ROWS; i++) {
-      if (data[i] !== doorBottom) continue;
+      if (data[i] !== tables.door[0]) continue;
       const c = i % COLS;
       const r = Math.floor(i / COLS);
-      if (r < 2 || data[i - COLS] !== 0) errors.push({ msg: `the door at row ${r}, column ${c} needs an empty cell above it for its top half`, c, r });
+      const blocked = c + 1 >= COLS || r < 3 || cells.slice(1).some(([dc, dr]) => data[i + dc - dr * COLS] !== 0);
+      if (blocked) errors.push({ msg: `the door at row ${r}, column ${c} needs an empty space above and to the right of it (2 columns by 3 rows, not touching the score row or the screen edge)`, c, r });
       else doors.push([c, r]);
     }
     if (doors.length === 0 && !errors.some((e) => e.msg.startsWith('the door'))) errors.push({ msg: "no exit door ('D')" });
-    for (const [c, r] of doors) data[(r - 1) * COLS + c] = doorTop;
+    for (const [c, r] of doors) cells.forEach(([dc, dr], k) => { data[(r - dr) * COLS + c + dc] = tables.door[k]; });
   }
   const pegs = [];
   for (const [c, r] of pegMarks) {

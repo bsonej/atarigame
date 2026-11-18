@@ -13,6 +13,6 @@
 hues       1E 2C 4C 5C 7C 9C AC CC
 grey       0A
 white      0E
-ice        AC
+ice        8A
 hud        2A
 background 00

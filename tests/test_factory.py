@@ -128,51 +128,56 @@ class OneWayPlatforms(Arena):
 
 @needs_emulator
 class Stairs(Arena):
+    """Steps are thin ledges: you walk straight past them and jump up onto them."""
+
     def build(self) -> None:
         self.arena()
         for col, row in ((12, 22), (13, 21), (14, 20)):
             self.g.put_tiles(col, row, [T["STAIR"]])
 
-    def test_walk_up_and_down_a_staircase(self) -> None:
+    def test_you_walk_straight_past_a_step(self) -> None:
         g = self.g
         self.build()
-        self.stand(36)
-        g.run_until(lambda g: g.py == 144, limit=80, buttons=RIGHT, every=1)  # on the third step
-        self.assertEqual(g.state, GROUND)
-        self.assertIn(g.px, range(52, 57), "on the top step")
-        g.run_until(lambda g: g.py == FLOOR_Y, limit=80, buttons=LEFT, every=1)
-        g.run(3)
-        self.assertEqual(g.state, GROUND)
-        self.assertLess(g.px, 12 * 4)
-
-    def test_each_step_is_one_tile_high(self) -> None:
-        g = self.g
-        self.build()
-        self.stand(36)
-        heights = []
-        for _ in range(40):
-            g.step(RIGHT)
-            if not heights or g.py != heights[-1]:
-                heights.append(g.py)
-        self.assertEqual(heights[:4], [168, 160, 152, 144])
-
-    def test_stairs_do_not_climb_into_a_ceiling(self) -> None:
-        g = self.g
-        self.build()
-        g.put_tiles(13, 19, [T["BRICK"]])  # the second step would put your head in this
         self.stand(36)
         g.run(40, RIGHT)
-        self.assertEqual((g.px, g.py), (48, 160))
+        self.assertGreater(g.px, 60)
+        self.assertEqual((g.py, g.state), (FLOOR_Y, GROUND), "not carried up it")
 
-    def test_stairs_cannot_be_climbed_in_mid_air(self) -> None:
+    def test_you_jump_up_through_a_step_and_land_on_it(self) -> None:
         g = self.g
         self.build()
-        g.poke("px", 44)  # the right edge is against the first step
-        g.poke("py", 164)  # feet level with it, rising
+        self.stand(48)  # under the first step (column 12)
+        g.step(FIRE)
+        g.run_until(lambda g: g.state == GROUND, limit=60, every=1)
+        self.assertEqual((g.px, g.py), (48, FLOOR_Y - 8))
+
+    def test_a_step_is_walked_off_at_its_end(self) -> None:
+        g = self.g
+        self.build()
+        self.stand(48, FLOOR_Y - 8)  # on the first step
+        g.run(40, LEFT)
+        self.assertEqual((g.py, g.state), (FLOOR_Y, GROUND), "dropped to the floor")
+
+    def test_a_flight_of_steps_is_climbed_by_jumping(self) -> None:
+        g = self.g
+        self.build()
+        self.stand(50, FLOOR_Y - 8)  # on the first step, at its right hand end
+        g.step(FIRE)
+        g.run(6)  # rising straight up, through the second step, which is beside him
+        while g.px < 53:
+            g.step(RIGHT)
+        g.run_until(lambda g: g.state == GROUND, limit=60, every=1)
+        self.assertIn(g.py, (FLOOR_Y - 16, FLOOR_Y - 24), "up on the second or third step")
+
+    def test_a_step_does_not_hold_you_up_when_you_bump_into_it_in_the_air(self) -> None:
+        g = self.g
+        self.build()
+        g.poke("px", 44)
+        g.poke("py", 164)  # beside the first step, rising
         g.poke("state", AIR)
         g.poke("jt", 0)
         g.step(RIGHT)
-        self.assertEqual(g.px, 44, "blocked by the side of the step, not carried up it")
+        self.assertEqual(g.px, 45, "it is not solid")
 
 
 @needs_emulator
@@ -367,13 +372,22 @@ class Chutes(Arena):
         self.assertLessEqual(g.px, 108)
         self.assertEqual((g.py, g.state), (FLOOR_Y, GROUND))
 
-    def test_you_cannot_walk_up_a_chute(self) -> None:
+    def test_you_walk_straight_past_a_chute(self) -> None:
         g = self.g
         self.arena()
         g.put_tiles(12, 22, [T["SLIDE_R"]])
         self.stand(36)
         g.run(30, RIGHT)
-        self.assertEqual((g.px, g.py), (44, FLOOR_Y))  # stopped by it; only stairs can be climbed
+        self.assertEqual((g.px, g.py), (66, FLOOR_Y))  # it is not solid: no climbing it, no being stopped by it
+
+    def test_you_can_jump_up_through_a_chute_and_stand_on_it(self) -> None:
+        g = self.g
+        self.arena()
+        g.put_tiles(12, 22, [T["SLIDE_L"]])
+        self.stand(48)
+        g.step(FIRE)
+        g.run_until(lambda g: g.state == GROUND, limit=60, every=1)
+        self.assertEqual(g.py, FLOOR_Y - 8, "standing on it")
 
 
 @needs_emulator
@@ -607,7 +621,7 @@ class Pegs(Arena):
         for _ in range(60):
             g.run(10)
             xs.append(self.peg())
-        lo, hi = 23 * 4, 31 * 4  # the stair at column 23 is part of the platform it walks on
+        lo, hi = 24 * 4, 31 * 4  # the stair at column 23 is a thin ledge, not part of the block it walks along
         self.assertTrue(all(lo <= x <= hi for x, _, _ in xs), [x for x, _, _ in xs])
         self.assertEqual((min(x for x, _, _ in xs), max(x for x, _, _ in xs)), (lo, hi))
         self.assertEqual({d for _, d, _ in xs}, {1, 255})
@@ -627,7 +641,7 @@ class Pegs(Arena):
         self.stand(100, 72)  # on the block
         g.run(150)
         self.assertEqual(g.mode, PLAY)
-        self.assertLess(g.px, 100 - 8)
+        self.assertLess(g.px, 24 * 4, "pushed back to the end of the block, onto the ledge")
 
     def test_the_peg_leaves_you_alone_when_you_are_behind_it(self) -> None:
         self.goto(4)

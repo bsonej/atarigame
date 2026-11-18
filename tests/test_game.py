@@ -50,6 +50,22 @@ import build_assets as _ba  # noqa: E402
 
 _TILES = _ba.parse_tiles(ROOT / "assets" / "tiles.txt")
 TILE = {t["name"]: t["byte"] for t in _TILES}
+DOOR_NAMES = _ba.DOOR_NAMES
+TILE_ROWS = {t["name"]: t["rows"] for t in _TILES}
+DOOR_GLYPHS = 0x6000 + (TILE["DOOR_BL"] & 0x7F) * 8  # where the door's six glyphs are in the character set
+
+
+def door_glyphs(phase: int) -> bytes:
+    """What the door's 48 glyph bytes hold when `phase` of its 16 fade steps have passed (see door_thr)."""
+    thr = _ba.fade_thresholds()
+    out = bytearray()
+    for k, name in enumerate(DOOR_NAMES):
+        for y, row in enumerate(TILE_ROWS[name]):
+            byte = 0
+            for x, ch in enumerate(row):
+                byte = (byte << 2) | (int(ch) if thr[(k * 8 + y) * 4 + x] < phase else 0)
+            out.append(byte)
+    return bytes(out)
 CHAR_BYTE = {t["char"]: t["byte"] for t in _TILES if t["char"] is not None}
 _DOTTED = {dotted: plain for plain, dotted in _ba.dot_families(_TILES).items()}  # a dotted twin -> its plain tile
 LEVEL_ITEMS = [int(x) for x in re.findall(r"LEVEL\d+_ITEMS = (\d+)", (ROOT / "src" / "gen" / "levels.inc").read_text())]
@@ -450,8 +466,9 @@ class GameLogic(Base):
         expected = bytearray(tiles[c] for row in lines for c in row)
         self.assertEqual(len(expected), COLS * 24)
         for i, ch in enumerate("".join(lines)):
-            if ch == "D":  # the compiler adds the top half of the door above its bottom half
-                expected[i - COLS] = TILE["DOOR_TOP"]
+            if ch == "D":  # the compiler adds the rest of the door (2 tiles wide, 3 tall) to its bottom left tile
+                for name, (dc, dr) in zip(DOOR_NAMES, _ba.DOOR_CELLS):
+                    expected[i + dc - dr * COLS] = TILE[name]
         expected = bytes(expected)
         got = bytes(canon(b) for b in g.mem(g.screen_addr, 1024)[COLS : COLS * 24])  # ignoring the score row
         self.assertEqual(got, expected[COLS:])
@@ -642,10 +659,16 @@ class LevelClear(Base):
         self.start()
         self.strip_dots()
 
-    DOOR = (36, 7)  # level 1's exit: bottom half here, top half in the row above, on the top floor
+    DOOR = (36, 7)  # level 1's exit: its bottom left tile (2 wide, 3 tall), on the top floor
+
+    def glyphs(self) -> bytes:
+        return self.g.mem(DOOR_GLYPHS, 256)[:48]
+
+    def door_phase(self) -> int:
+        return self.g.bss("door_phase")[0]
 
     def take_the_last_item(self) -> None:
-        """Pick up one item with only that one left, which opens the door."""
+        """Pick up one item with only that one left, which makes the door appear."""
         g = self.g
         g.step(RIGHT, 20)
         g.poke("left", 1)
@@ -671,22 +694,50 @@ class LevelClear(Base):
         self.walk_into_the_door()
         self.assertEqual(self.g.mode, CLEAR)
 
-    def test_the_door_is_shut_until_everything_is_collected(self) -> None:
+    def test_the_door_is_in_the_map_but_not_on_the_screen_until_everything_is_collected(self) -> None:
         g = self.g
         col, row = self.DOOR
-        self.assertEqual((g.tile(col, row), g.tile(col, row - 1)), (TILE["DOOR"], TILE["DOOR_TOP"]))
+        cells = [g.tile(col + dc, row - dr) for dc, dr in _ba.DOOR_CELLS]
+        self.assertEqual(cells, [TILE[n] for n in DOOR_NAMES], "six tiles, 2 wide and 3 tall")
+        self.assertEqual(self.glyphs(), bytes(48), "their glyphs are blank")
         self.walk_into_the_door()
-        self.assertEqual(g.mode, PLAY, "a shut door lets you walk in front of it")
+        self.assertEqual(g.mode, PLAY, "an unopened door lets you walk through where it will be")
         self.assertEqual(g.score16, 0)
 
-    def test_taking_the_last_thing_opens_the_door(self) -> None:
+    def test_taking_the_last_thing_fades_the_door_in(self) -> None:
         g = self.g
         self.take_the_last_item()
-        col, row = self.DOOR
-        self.assertEqual((g.tile(col, row), g.tile(col, row - 1)), (TILE["DOOR_OPEN"], TILE["DOOR_OPEN_TOP"]))
-        self.assertEqual(g.mode, PLAY, "the level is not over until you walk through")
+        self.assertEqual((g.mode, g.bss("door_open")[0]), (PLAY, 1), "the level is not over until you walk through")
         self.assertGreater(g.flash, 0)
         self.assertEqual(g.score16, 10, "no bonus yet")
+        seen = {self.door_phase()}
+        for _ in range(40):
+            g.step()
+            phase = self.door_phase()
+            self.assertIn(phase - max(seen), (0, 1), "one step at a time")
+            self.assertEqual(self.glyphs(), door_glyphs(phase), f"at step {phase} exactly those pixels are there")
+            seen.add(phase)
+        self.assertEqual(max(seen), 16)
+        self.assertEqual(self.glyphs(), door_glyphs(16))
+        art = bytes(int(row, 4) for name in DOOR_NAMES for row in TILE_ROWS[name])
+        self.assertEqual(self.glyphs(), art, "all of it is the art in assets/tiles.txt")
+
+    def test_walking_into_the_door_takes_him_through_and_the_door_fades_out(self) -> None:
+        g = self.g
+        self.take_the_last_item()
+        g.run(40)
+        self.walk_into_the_door()
+        self.assertEqual(g.mode, CLEAR)
+        self.assertEqual(g.mem(g.pm0, 256), bytes(256), "he is gone from the screen")
+        phases = [self.door_phase()]
+        for _ in range(40):
+            g.step()
+            self.assertEqual(g.mode, CLEAR)
+            phases.append(self.door_phase())
+            self.assertEqual(self.glyphs(), door_glyphs(phases[-1]), f"at step {phases[-1]} exactly those pixels are there")
+        self.assertEqual(phases, sorted(phases, reverse=True), "only ever fading out")
+        self.assertEqual((phases[0], phases[-1]), (16, 0), "from all of it to none")
+        self.assertEqual(self.glyphs(), bytes(48))
 
     def test_clearing_the_level_gives_a_bonus_and_celebrates(self) -> None:
         g = self.g
