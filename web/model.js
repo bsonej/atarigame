@@ -1,7 +1,8 @@
 // Level files as the editor sees them: text <-> a grid of map characters, and the compiled map the
-// game would get (tile bytes with platform end caps, the start, the item count and the pegs).
+// game would get (tile bytes with platform end caps and dots, the door, the start, the number of things to
+// collect and the pegs).
 //
-// This is a port of the level parts of tools/build_assets.py (parse_level, peg_for, apply_caps); the
+// This is a port of the level parts of tools/build_assets.py (parse_level, peg_for, apply_caps, apply_dots); the
 // tests compare the two on every shipped level, so keep them in step.
 
 export const COLS = 40;
@@ -9,8 +10,11 @@ export const ROWS = 24;
 export const TILE_W = 4;
 export const TILE_H = 8;
 export const MAX_PEGS = 2;
+export const F_SOLID = 1;
+export const F_ONEWAY = 2;
+export const F_DOT = 4;
 
-/** What the server's /api/tiles describes, made handy: char -> byte, solid bytes, cap families. */
+/** What the server's /api/tiles describes, made handy: char -> byte, solid bytes, cap and dot families, the door. */
 export function makeTables(api) {
   const chars = {};
   const solid = new Set();
@@ -24,7 +28,13 @@ export function makeTables(api) {
   for (const t of api.tiles) byByte[t.byte] = t;
   const T = {};
   for (const t of api.tiles) T[t.name] = t.byte;
-  return { chars, solid, caps, byByte, T, flags: api.flags, canon: api.canon, tiles: api.tiles };
+  const dots = {};
+  for (const [fam, v] of Object.entries(api.dots || {})) dots[Number(fam)] = v;
+  const dotted = new Set(Object.values(dots));
+  return {
+    chars, solid, caps, dots, dotted, byByte, T, flags: api.flags, canon: api.canon, tiles: api.tiles,
+    door: api.door || null, palette: api.palette || null, maxCollect: api.maxCollect || 250,
+  };
 }
 
 /** A comment line: '# ' or a lone '#' or '#!' (map rows never contain spaces). */
@@ -58,9 +68,10 @@ export function blankRows() {
   for (let r = 0; r < ROWS; r++) {
     if (r === 0) rows.push('.'.repeat(COLS));
     else if (r === ROWS - 1) rows.push('#'.repeat(COLS));
-    else rows.push('#' + '.'.repeat(COLS - 2) + '#');
+    else rows.push('W' + '.'.repeat(COLS - 2) + 'W');
   }
-  rows[ROWS - 3] = '#.@' + '.'.repeat(COLS - 4) + '#';
+  rows[ROWS - 3] = 'W.@' + '.'.repeat(COLS - 4) + 'W';
+  rows[ROWS - 2] = 'W' + '.'.repeat(COLS - 4) + 'D.W'; // the exit door, near the right wall
   return rows;
 }
 
@@ -94,6 +105,34 @@ export function applyCaps(data, caps) {
     const right = col < COLS - 1 && i + 1 < data.length && data[i + 1] !== data[i];
     const kind = left && right ? 'LR' : left ? 'L' : right ? 'R' : null;
     if (kind && variants[kind] !== undefined) out[i] = variants[kind];
+  }
+  return out;
+}
+
+/**
+ * Put a dot in every second middle tile of each run of a dotted tile (the 2nd, 4th, ... tile of the run).
+ * `plain` is the map before end caps, `capped` after. A tile only gets a dot when the player can stand on it:
+ * the two cells above must not be solid. Mirrors apply_dots in build_assets.py.
+ */
+export function applyDots(plain, capped, dots, solid) {
+  const out = capped.slice();
+  for (let r = 3; r < ROWS; r++) {
+    let c = 0;
+    while (c < COLS) {
+      const b = plain[r * COLS + c];
+      if (!(b in dots)) {
+        c++;
+        continue;
+      }
+      const start = c;
+      while (c < COLS && plain[r * COLS + c] === b) c++;
+      for (let k = start + 1; k < c; k += 2) {
+        const i = r * COLS + k;
+        if (capped[i] !== b) continue; // an end cap, never a dot
+        if (solid.has(plain[i - COLS]) || solid.has(plain[i - 2 * COLS])) continue;
+        out[i] = dots[b];
+      }
+    }
   }
   return out;
 }
@@ -147,9 +186,21 @@ export function compileLevel(rows, tables) {
   else spawn = starts[0];
   if (starts.length > 1) errors.push({ msg: `more than one '@' start (second at row ${starts[1][1]}, column ${starts[1][0]})`, c: starts[1][0], r: starts[1][1] });
   const itemByte = tables.chars['*'];
-  const items = data.filter((b) => b === itemByte).length;
-  if (items === 0) errors.push({ msg: "no items ('*') to collect" });
-  if (items > 99) errors.push({ msg: 'too many items (the display shows two digits)' });
+  const stars = data.filter((b) => b === itemByte).length;
+  if (stars === 0) errors.push({ msg: "no items ('*') to collect" });
+  const doors = [];
+  if (tables.door) {
+    const [doorBottom, doorTop] = tables.door;
+    for (let i = 0; i < COLS * ROWS; i++) {
+      if (data[i] !== doorBottom) continue;
+      const c = i % COLS;
+      const r = Math.floor(i / COLS);
+      if (r < 2 || data[i - COLS] !== 0) errors.push({ msg: `the door at row ${r}, column ${c} needs an empty cell above it for its top half`, c, r });
+      else doors.push([c, r]);
+    }
+    if (doors.length === 0 && !errors.some((e) => e.msg.startsWith('the door'))) errors.push({ msg: "no exit door ('D')" });
+    for (const [c, r] of doors) data[(r - 1) * COLS + c] = doorTop;
+  }
   const pegs = [];
   for (const [c, r] of pegMarks) {
     const res = pegFor(data, c, r, tables.solid);
@@ -157,7 +208,14 @@ export function compileLevel(rows, tables) {
     else pegs.push(res.peg);
   }
   if (pegMarks.length > MAX_PEGS) errors.push({ msg: `${pegMarks.length} pegs, at most ${MAX_PEGS} per level` });
-  const map = applyCaps(data, tables.caps);
+  let map = applyCaps(data, tables.caps);
+  // no dot where standing to eat it would put the player in spikes
+  const blocking = new Set(tables.solid);
+  if ('^' in tables.chars) blocking.add(tables.chars['^']);
+  map = applyDots(data, map, tables.dots, blocking);
+  const dots = map.filter((b) => tables.dotted.has(b)).length;
+  const items = stars + dots; // everything to collect before the door opens
+  if (items > tables.maxCollect) errors.push({ msg: `${stars} items and ${dots} dots is too much to collect (at most ${tables.maxCollect} in all)` });
   // the game's loader copies whole pages
   while (map.length < 1024) map.push(0);
   // advice, not errors
@@ -169,5 +227,5 @@ export function compileLevel(rows, tables) {
       if (!t || !(t.solid || t.oneway)) warnings.push({ msg: 'the player starts in mid-air (nothing to stand on two tiles below the @)', c: sc, r: sr });
     }
   }
-  return { map, spawn, items, pegs, errors, warnings, pegMarks, starts };
+  return { map, spawn, items, stars, dots, doors, pegs, errors, warnings, pegMarks, starts };
 }

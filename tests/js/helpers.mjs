@@ -9,17 +9,19 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 export const api = JSON.parse(execFileSync('python3', [path.join(ROOT, 'tools/editor_server.py'), '--dump-tiles'], { cwd: ROOT, encoding: 'utf8' }));
 export const tables = makeTables(api);
 
-/** A room: brick walls and floor (the floor is row 23), then `edit` can change rows. Player stands at column 2. */
+/** A room: walls and a floor of wall tiles, so no dots (the floor is row 23), then `edit` can change rows. Player stands at column 2. */
 export function room(edit = {}) {
   const rows = blankRows().map((r) => r.split(''));
   for (let r = 1; r < ROWS - 1; r++) for (let c = 1; c < COLS - 1; c++) rows[r][c] = '.';
+  rows[ROWS - 1] = Array(COLS).fill('W');
   rows[21][2] = '@';
   for (const [key, line] of Object.entries(edit)) {
     const [r, c0] = key.split(',').map(Number);
     [...line].forEach((ch, i) => (rows[r][c0 + i] = ch));
   }
-  // an item far away so that the level is never cleared by accident
+  // an item far away so that the level is never cleared by accident, and an exit door in the corner
   rows[1][38] = '*';
+  rows[22][37] = 'D';
   return rows.map((r) => r.join(''));
 }
 

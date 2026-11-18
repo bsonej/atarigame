@@ -95,3 +95,41 @@ test('the new-level template is a valid level', () => {
   assert.deepEqual(c.errors.map((e) => e.msg), ["no items ('*') to collect"]);
   assert.ok(c.spawn);
 });
+
+
+test('dots go in every second middle tile of a run, never on an end cap, and are counted with the items', () => {
+  const T = tables.T;
+  const c = compileLevel(room({ '10,3': '###########' }), tables); // a run of 11 in columns 3-13
+  assert.deepEqual([4, 5, 6, 7, 8, 9, 10, 11, 12].map((col) => c.map[10 * 40 + col] === T.BRICK_DOT), [true, false, true, false, true, false, true, false, true]);
+  assert.equal(c.map[10 * 40 + 3], tables.caps[T.BRICK].L);
+  assert.equal(c.map[10 * 40 + 13], tables.caps[T.BRICK].R);
+  assert.equal(c.dots, 5);
+  assert.equal(c.items, c.stars + c.dots, 'everything to collect is one number');
+});
+
+test('a platform with only ends has no dot, and a tile without headroom gets none', () => {
+  const T = tables.T;
+  const c = compileLevel(room({ '10,3': '##', '14,3': '#######', '13,6': 'W' }), tables);
+  assert.ok(![3, 4].some((col) => c.map[10 * 40 + col] === T.BRICK_DOT));
+  // the platform in columns 3-9 of row 14 would have dots at 4, 6, 8; the wall tile above column 6 blocks that one
+  assert.deepEqual([4, 6, 8].map((col) => c.map[14 * 40 + col] === T.BRICK_DOT), [true, false, true]);
+});
+
+test('no dot goes where the player would have to stand in spikes to eat it', () => {
+  const T = tables.T;
+  const c = compileLevel(room({ '14,3': '#######', '13,6': '^' }), tables);
+  assert.deepEqual([4, 6, 8].map((col) => c.map[14 * 40 + col] === T.BRICK_DOT), [true, false, true]);
+});
+
+test('every level needs an exit door with room above it', () => {
+  const noDoor = room().map((r) => r.replace('D', '.'));
+  assert.ok(compileLevel(noDoor, tables).errors.some((e) => e.msg.includes('no exit door')));
+  const blocked = room({ '21,37': 'W' });
+  assert.ok(compileLevel(blocked, tables).errors.some((e) => e.msg.includes('needs an empty cell above')));
+  assert.deepEqual(compileLevel(room(), tables).errors, []);
+});
+
+test('the palette from the server drives the row colours (assets/palette.txt)', () => {
+  assert.equal(tables.palette.hues.length, 8);
+  for (const k of ['grey', 'white', 'ice', 'hud', 'background']) assert.equal(typeof tables.palette[k], 'number', k);
+});

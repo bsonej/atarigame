@@ -73,18 +73,71 @@ test('falling too far is fatal, a short drop is not', () => {
   assert.equal(h.py, FLOOR_Y);
 });
 
-test('items score ten points; the last one clears the level with a bonus', () => {
+test('items score ten points', () => {
   const g = play(room({ '22,3': '**' }));
   assert.equal(g.left, 3);
   run(g, 30, JOY.RIGHT);
   assert.equal(g.score, 20);
   assert.equal(g.left, 1);
+});
+
+test('the last thing collected opens the door; walking into the open door clears the level with a bonus', () => {
   const h = play(room({ '22,3': '*' }));
+  const T = tables.T;
+  const doorCells = () => [h.map[22 * 40 + 37], h.map[21 * 40 + 37]];
+  assert.deepEqual(doorCells(), [T.DOOR, T.DOOR_TOP], 'the top half comes from the compiler');
   h.left = 1;
   h.map[1 * 40 + 38] = T.EMPTY;
   run(h, 10, JOY.RIGHT);
+  assert.equal(h.left, 0);
+  assert.equal(h.mode, MODE.PLAY, 'collecting everything does not end the level by itself');
+  assert.equal(h.score, 10);
+  assert.deepEqual(doorCells(), [T.DOOR_OPEN, T.DOOR_OPEN_TOP]);
+  assert.ok(h.events.includes('opened'));
+  run(h, 200, JOY.RIGHT);
   assert.equal(h.mode, MODE.CLEAR);
   assert.equal(h.score, 110);
+});
+
+test('a closed door is walked through harmlessly', () => {
+  const g = play(room());
+  run(g, 200, JOY.RIGHT);
+  assert.equal(g.mode, MODE.PLAY);
+  assert.ok(g.px > 37 * 4 - 4, 'went past the door');
+});
+
+test('walking over a dot eats it: a point, one less to collect, and the plain tile stays', () => {
+  const T = tables.T;
+  const g = play(room({ '23,5': '#######' })); // seven platform tiles: end cap, then dots at columns 6, 8 and 10
+  const dotted = [6, 8, 10];
+  for (const c of dotted) assert.equal(g.map[23 * 40 + c], T.BRICK_DOT, `a dot at column ${c}`);
+  g.px = 6 * 4;
+  g.py = 23 * 8 - 16; // feet on the platform row
+  const left = g.left;
+  run(g, 1);
+  assert.equal(g.state, 0);
+  assert.equal(g.map[23 * 40 + 6], T.BRICK, 'the dot is gone');
+  assert.equal(g.score, 1);
+  assert.equal(g.left, left - 1);
+  run(g, 30, JOY.RIGHT);
+  assert.equal(g.score, 3, 'two more dots on the way along');
+  assert.deepEqual(dotted.map((c) => g.map[23 * 40 + c]), [T.BRICK, T.BRICK, T.BRICK]);
+  assert.ok(g.events.filter((e) => e === 'dot').length === 3);
+});
+
+test('jumping over a dot leaves it: only the feet on the tile eat', () => {
+  const T = tables.T;
+  const g = play(room({ '23,5': '#######' }));
+  g.px = 5 * 4;
+  g.py = 23 * 8 - 16;
+  run(g, 2);
+  g.joy = 0;
+  run(g, 1, JOY.RIGHT | JOY.FIRE); // jump
+  assert.equal(g.state, 1);
+  const score = g.score;
+  run(g, 4, JOY.RIGHT); // still rising over the dot at column 6
+  assert.equal(g.score, score);
+  assert.equal(g.map[23 * 40 + 6], T.BRICK_DOT);
 });
 
 test('spikes kill, and the death animation ends in a new life', () => {

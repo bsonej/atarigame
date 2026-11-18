@@ -77,6 +77,24 @@ function setGridFromRows(rows) {
   return warn;
 }
 
+/** Where this level would sit among the game's levels (natural order of the file names): it sets the row hues. */
+function levelIndex() {
+  const key = (n) => n.split(/(\d+)/).map((x) => (/^\d+$/.test(x) ? Number(x) : x));
+  const cmp = (a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    for (let i = 0; i < Math.min(ka.length, kb.length); i++) {
+      if (ka[i] === kb[i]) continue;
+      return typeof ka[i] === typeof kb[i] ? (ka[i] < kb[i] ? -1 : 1) : typeof ka[i] === 'number' ? -1 : 1;
+    }
+    return ka.length - kb.length;
+  };
+  const names = S.levels.map((l) => l.name).filter((n) => n !== S.name);
+  names.push(S.name);
+  names.sort(cmp);
+  return names.indexOf(S.name);
+}
+
 function loadLevel(name, fileText, { onDisk = true } = {}) {
   const parsed = parseLevelText(fileText);
   const warn = setGridFromRows(parsed.rows);
@@ -510,7 +528,7 @@ function renderIssues() {
   const all = issues();
   const errors = all.filter((i) => i.level === 'error').length;
   const comp = S.compiled;
-  $('summary').textContent = `${comp.items} item${comp.items === 1 ? '' : 's'}, ${comp.pegs.length} peg${comp.pegs.length === 1 ? '' : 's'}`;
+  $('summary').textContent = `${comp.stars} item${comp.stars === 1 ? '' : 's'}, ${comp.dots} dot${comp.dots === 1 ? '' : 's'}, ${comp.pegs.length} peg${comp.pegs.length === 1 ? '' : 's'}`;
   $('verdict').className = errors ? 'bad' : all.length ? 'meh' : 'good';
   $('verdict').textContent = errors ? `${errors} problem${errors === 1 ? '' : 's'} to fix before saving` : all.length ? 'Can be saved; check the notes below' : 'Looks good';
   for (const i of all) {
@@ -529,7 +547,7 @@ function renderIssues() {
   if (!all.length) {
     const li = document.createElement('li');
     li.className = 'ok';
-    li.textContent = 'Every item is reachable (approximately) and the level compiles.';
+    li.textContent = 'Every item, dot and the door look reachable (approximately) and the level compiles.';
     list.append(li);
   }
 }
@@ -550,6 +568,7 @@ function sizeCanvas() {
 function drawEditor() {
   const cell = cellSize(S.zoom);
   const comp = S.compiled;
+  atlas.levelIndex = levelIndex();
   ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
   drawMap(ctx, atlas, comp.map, cell);
@@ -675,7 +694,7 @@ function startPlay(fromHover = false) {
     game.drawn = 16;
   }
   S.mode = 'play';
-  S.play = { game, acc: 0, last: performance.now(), tick: 0, overlay: null, fromHover, start: fromHover && S.hover ? [...S.hover] : null, level: Number((/\d+/.exec(S.name) || [1])[0]) };
+  S.play = { game, levelIndex: levelIndex(), acc: 0, last: performance.now(), tick: 0, overlay: null, fromHover, start: fromHover && S.hover ? [...S.hover] : null, level: Number((/\d+/.exec(S.name) || [1])[0]) };
   held.clear();
   document.body.classList.add('playing');
   $('play').textContent = 'Stop (Esc)';
@@ -719,6 +738,7 @@ function drawPlay() {
   const p = S.play;
   const g = p.game;
   const cell = cellSize(S.zoom);
+  atlas.levelIndex = p.levelIndex;
   ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
   drawMap(ctx, atlas, g.map, cell);

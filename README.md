@@ -7,7 +7,8 @@ A single-screen platformer / puzzle game for the **Atari 8-bit (XL/XE, 64 KB)** 
 ## Game flow
 
 ```
-TITLE --fire--> new game --> come to life --> PLAY --> level clear --> next level (come to life) ...
+TITLE --fire--> new game --> come to life --> PLAY --> eat every dot, take every item, door opens, walk in
+                                                      --> level clear --> next level (come to life) ...
   |                              ^              |
   | idle 10 s                    |              +--> death animation --> come to life (a life fewer)
   v                              |                                    \--> last life: GAME OVER --> TITLE
@@ -18,15 +19,34 @@ ATTRACT: an AI plays for 30 s, then back to TITLE; fire starts a real game
 - **Attract mode**: after 10 s idle on the title an AI plays one level for 30 s (each run uses the next map), with a
   blinking DEMO marker where the lives are. Fire starts a real game. The 30 s are counted in frames and adapt to PAL
   (50 Hz) or NTSC (60 Hz).
-- **Lives** (3), **score** (10 per item, 100 for clearing a level; kept when you die), **hi-score**, and the **level
-  counter** are on the top row: `SCORE 00000 LEVEL 01  LIVES 3  LEFT 08` (LEFT = items still to collect).
+- **The goal**: walk along every platform and eat its **dots** (1 point each), take every **item** (10 points) and,
+  when nothing is left, the **exit door** opens (a cyan flash and a rising tone). Walk into it to clear the level (100
+  points). The door is shut until then, so a level is not won by running to the end.
+- **Lives** (3), **score** (kept when you die), **hi-score**, and the **level counter** are on the top row:
+  `SCORE 00000 LEVEL 01  LIVES 3  LEFT 074` (LEFT = dots and items still to collect, up to 250 a level).
+- **Colour**: every screen row has its own hue (a display-list interrupt rewrites the four colour registers at the
+  start of each row), so a level is banded in the way of the arcade games it imitates. The hues step round eight
+  colours, and move one step per level, so each level looks different. The grey, white, ice blue and the score row's
+  colour are the same on every row. All of it comes from `assets/palette.txt`, which the editor reads too.
 - **Death animation**: red flash, the player hops, tumbles off the bottom of the screen, a falling tone.
 - **Come to life animation**: at every start and respawn the player is drawn line by line from the top, then blinks, in
   cycling colours with a rising tone. You cannot move until it ends.
 - **Game over screen** with the score, the hi-score and NEW HIGH SCORE!; fire (after one second) or 10 s returns to the title.
 - Three levels; after the last one the maps repeat while the level counter keeps counting (to 99).
 
-Dying restores the level (all items back) but keeps your score, as in the arcade games.
+Dying restores the level (all items and dots back, the door shut) but keeps your score, as in the arcade games.
+
+### Level design notes
+
+- **Capsule platforms.** Every platform has a rounded end cap on each free end, so a platform reads as a free-standing
+  object (see "End caps"). Platforms that run into a wall have no cap there. The side walls are the `W` tile: plain
+  solid blocks with no caps and no dots, so a platform can run into them cleanly.
+- **Dots** are not placed by hand. The asset tool puts one in every second middle tile of each run of a brick or thin
+  platform (never on an end cap), but only where the player can stand to eat it: no solid tile in the two cells above and
+  no spikes (a dot under a spike would be a trap). A dot is eaten by walking over it on the ground; jumping over one
+  leaves it.
+- **The door** is the `D` character (bottom half; the top half is added above it and needs an empty cell). Every level
+  needs exactly one. The door is not solid, so you can walk in front of it before it opens.
 
 ## Tools
 
@@ -56,9 +76,10 @@ In the emulator: F5 warm reset, F9 quit.
 | --- | --- |
 | `src/main.s` | The whole game (ca65): modes, physics, text, HUD, the attract AI. Zero-page variables are listed at the top. |
 | `assets/tiles.txt` | 4x8 tiles, four colours, with the character each one has in level maps and what it does (`solid`, `oneway`, `alt`). The header documents the format. |
+| `assets/palette.txt` | The row hues, grey, white, ice blue, score row and background colours as Atari colour bytes. Generates `src/gen/palette.inc`; the editor gets them through `/api/tiles`. |
 | `assets/font.txt` | 3x5 text font (A-Z, 0-9, `- ! ? :`). Ids: digits 16-25, letters 32-57, others from 58. |
 | `assets/sprites.txt` | Player frames (4x16, one colour): stand, walk, climb, and the two death frames. |
-| `assets/levels/*.txt` | 40x24 maps, played in name order. `#` brick, `H` ladder, `*` item, `^` spike, `@` start, `p` peg, plus the factory parts below. Row 0 is the score row. |
+| `assets/levels/*.txt` | 40x24 maps, played in name order. `#` platform, `W` wall, `H` ladder, `*` item, `^` spike, `D` exit door, `@` start, `p` peg, plus the factory parts below. Row 0 is the score row. |
 | `assets/screens/*.txt` | Full-screen text maps (`title`, `gameover`). Letters/digits come from the font; a lowercase letter is the same glyph in the second text colour; `#` `*` `^` are tiles. Comments start with `#!`. |
 | `tools/build_assets.py` | Validates the assets and generates `src/gen/*.inc` (charset with the font merged in, `.charmap` so `.byte "TEXT"` works, the tile flags table, sprites, levels with their pegs and level tables, screens). |
 | `tools/mkxex.py` | Packs the linker output into an Atari `.xex` with a RUNAD. |
@@ -159,14 +180,15 @@ honest, `tests/test_engine.py` plays the same scripted joystick input on the rea
 and compares the player, the screen map and the pegs after every stretch of input: on all five shipped maps from the start,
 from random standing places and from places on the pegs' blocks, and on randomly generated maps that mix every part. If you
 change a rule in `main.s`, change `engine.js` and let that test tell you if they have drifted. The editor compiles levels
-(end caps, pegs, item counts) the same way as `build_assets.py`, which `CompileParity` in the same file checks on every level.
+(end caps, dots, the door, pegs, item counts) the same way as `build_assets.py`, which `CompileParity` in the same file checks on every level.
 
 ## The attract AI
 
 `ai_input` in `src/main.s` produces the same joystick bits a person would. It picks the cheapest item (columns apart
 + 8 per row apart, so items on its own floor come first), walks to it, and when the item is on another floor walks to
 the nearest ladder that leads there, lines up and climbs. It jumps a spike when it sees one 7 pixels ahead and a gap
-when the next step would leave nothing under it.
+when the next step would leave nothing under it. Dots are targets as well (it stands in the cell above the dotted tile),
+and once everything is collected the open door is the target.
 
 ## How the tests work
 
@@ -174,7 +196,7 @@ when the next step would leave nothing under it.
 starts atari800 with its monitor on a pipe and a breakpoint on the `frame_end` label, so each `Game.step()` is exactly
 one frame (and `Game.run(n)` pipelines many). Tests inject joystick state, then read the game's variables and the
 screen and sprite memory. They cover the physics, the title, the spawn/death/clear animations, lives, game over,
-hi-score, the score row, the 30-second attract run, and the AI clearing maps 1-3 without dying. `test_factory.py` builds small arenas
+hi-score, the score row, dots and the door, the 30-second attract run, and the AI clearing maps 1-3 (dots, items, door) without dying. `test_engine.py` also checks that the colour tables the game's display-list interrupt loads are the editor's colours for every level, and that the interrupt fires once per row, every frame. `test_factory.py` builds small arenas
 by poking tiles into screen RAM and checks each part (platform jump-through, stair climb and ceiling, belt speeds and
 direction, acceleration and reset, ice and roller glide, chutes, vanishing and bomb timing and chain reaction, peg
 start/sweep/push/jump-over) and that maps 4 and 5 load. They are skipped if
@@ -187,12 +209,15 @@ The level editor's page was exercised in Cursor's built-in browser (Chromium): l
 select and move, saving, and a test play with key presses. Other browsers, touch screens, and the feel of real-time
 play with a physical keyboard have not been tried, and test play has no sound.
 
-The headless tests check game logic and what is written to screen and player memory. They do **not** check what
-ANTIC/GTIA actually draws: the colours, how the font and animations look, and the vertical offset of the player sprite
+The headless tests check game logic and what is written to screen and player memory, including the per-row colour
+tables and that the display-list interrupt runs 23 times a frame. They do **not** check what ANTIC/GTIA actually draws:
+whether the colour changes land cleanly at the start of each row (the interrupt waits for the end of the line with `WSYNC`
+before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
+`render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
 (`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield) were only reasoned about. The same goes for the
 new tiles: their art, the cyan used for ice (`COLOR3`), the moving-pixel belt animation and the red pegs have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.
-Maps 4 and 5 have not been completed by anything: the AI gets round most of both (it climbs the stairs and ladders,
+Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 30 and 14 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,
 crosses roller, bomb and vanishing blocks) but does not know to jump pegs or ride belts to the end, and nobody has played them. Run `task run` and, if
 the player is a few pixels off from the floor, adjust `PM_YOFF`.
 

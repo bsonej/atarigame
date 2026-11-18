@@ -30,7 +30,7 @@ import build_assets as ba  # noqa: E402
 from editor_server import Project  # noqa: E402
 from test_factory import Arena  # noqa: E402
 from test_game import needs_emulator  # noqa: E402
-from tools.headless import DOWN, FIRE, LEFT, OVER, PLAY, RIGHT, UP, Game  # noqa: E402
+from tools.headless import CLEAR, DOWN, FIRE, LEFT, OVER, PLAY, RIGHT, SPAWN, UP, Game  # noqa: E402
 
 needs_node = unittest.skipUnless(shutil.which("node"), "needs node")
 TRACE = ROOT / "tests" / "js" / "trace.mjs"
@@ -41,6 +41,13 @@ TILES = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
 CHARS = {t["char"]: t["byte"] for t in TILES if t["char"] is not None}
 SOLID = {t["byte"] for t in TILES if t["solid"]}
 CAPS = ba.cap_families(TILES)
+DOTS = ba.dot_families(TILES)
+DOOR = ba.door_bytes(TILES)
+
+
+def compile_level(path: Path, text: str | None = None) -> dict:
+    """What the asset tool makes of a level (caps, dots, the door)."""
+    return ba.parse_level(path, CHARS, SOLID, CAPS, text=text, dots=DOTS, door=DOOR)
 LEVELS = sorted((ROOT / "assets" / "levels").glob("*.txt"), key=ba.natural_key)
 
 BELTS = [n for n in CHAR if n.startswith("CONV_")]
@@ -59,7 +66,7 @@ def random_level(seed: int) -> str:
     rnd = random.Random(seed)
     grid = [["."] * 40 for _ in range(24)]
     for r in range(1, 24):
-        grid[r][0] = grid[r][39] = "#"
+        grid[r][0] = grid[r][39] = "W"
     grid[23] = ["#"] * 40
     rows = [20, 17, 14, 11, 8, 5]
     for r in rows:
@@ -89,6 +96,10 @@ def random_level(seed: int) -> str:
     grid[21][c0] = "@"
     # one guaranteed item, a dozen columns away so the level isn't cleared on the first step
     grid[22][c0 + 12 if c0 + 12 <= 37 else c0 - 12] = "*"
+    # the exit door on the floor, on the other side of the level, with room for its top half
+    door = 3 if c0 > 20 else 36
+    grid[21][door] = "."
+    grid[22][door] = "D"
     return (
         "# Level 99. 40 columns x 24 rows.\n"
         + "\n".join("".join(row) for row in grid)
@@ -111,10 +122,12 @@ def random_segments(seed: int, frames: int = 300) -> list[list[int]]:
 class CompileParity(unittest.TestCase):
     def check(self, text: str) -> None:
         got = node_trace({"text": text, "segments": []})["compiled"]
-        want = ba.parse_level(Path("x.txt"), CHARS, SOLID, CAPS, text=text)
+        want = compile_level(Path("x.txt"), text)
         self.assertEqual(got["map"], want["data"][:960])
         self.assertEqual(got["spawn"], list(want["spawn"]))
         self.assertEqual(got["items"], want["items"])
+        self.assertEqual((got["stars"], got["dots"]), (want["stars"], want["dots"]))
+        self.assertEqual(got["doors"], [list(d) for d in want["doors"]])
         self.assertEqual(got["pegs"], [list(p) for p in want["pegs"]])
 
     def test_every_shipped_level_compiles_the_same_way(self) -> None:
@@ -134,12 +147,13 @@ class CompileParity(unittest.TestCase):
             "no start": [ln.replace("@", ".") for ln in good],
             "no items": [ln.replace("*", ".") for ln in good],
             "two starts": [ln.replace(".", "@", 2) if ln.startswith("....") else ln for ln in good],
+            "no door": [ln.replace("D", ".") for ln in good],
         }
         for what, lines in cases.items():
             with self.subTest(what):
                 text = "\n".join(lines) + "\n"
                 with self.assertRaises(ba.AssetError):
-                    ba.parse_level(Path("x.txt"), CHARS, SOLID, CAPS, text=text)
+                    compile_level(Path("x.txt"), text)
                 self.assertIn("error", node_trace({"text": text, "segments": []}))
 
 
@@ -215,7 +229,7 @@ class EngineMatchesGame(Arena):
     # ---- random levels poked into the running game -------------------------------------------
     def load_random_level(self, text: str) -> None:
         g = self.start()
-        lv = ba.parse_level(Path("x.txt"), CHARS, SOLID, CAPS, text=text)
+        lv = compile_level(Path("x.txt"), text)
         g.poke_bytes(g.screen_addr + 40, lv["data"][40:960])
         for name, value in dict(
             px=lv["spawn"][0] * 4, py=lv["spawn"][1] * 8, state=0, jt=0xFF, fall=0, vx=0, vfrac=0, cfrac=0, fcount=0,
@@ -236,7 +250,7 @@ class EngineMatchesGame(Arena):
 
     # ---- the shipped levels ------------------------------------------------------------------
     def standing_places(self, path: Path) -> list[tuple[int, int]]:
-        data = ba.parse_level(path, CHARS, SOLID, CAPS)["data"]
+        data = compile_level(path)["data"]
         out = []
         for r in range(1, 21):
             for c in range(1, 39):
@@ -278,7 +292,7 @@ class EngineMatchesGame(Arena):
 
     def test_standing_on_the_pegs_block(self) -> None:
         for index, path in enumerate(LEVELS):
-            pegs = ba.parse_level(path, CHARS, SOLID, CAPS)["pegs"]
+            pegs = compile_level(path)["pegs"]
             for n, (x, y, lo, hi, d) in enumerate(pegs):
                 for start_x in (lo, (lo + hi) // 2 & ~3, hi):
                     with self.subTest(level=index + 1, peg=n, x=start_x):
@@ -288,3 +302,54 @@ class EngineMatchesGame(Arena):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@needs_emulator
+@needs_node
+class ColoursMatchTheEditor(unittest.TestCase):
+    """The row colours the game's display-list interrupt uses come from assets/palette.txt, the same as the editor's."""
+
+    def setUp(self) -> None:
+        self.g = Game()
+        self.addCleanup(self.g.close)
+
+    def editor_hues(self, level_index: int) -> list[int]:
+        js = (
+            "import {rowHueByte} from './web/render.js';"
+            f"const p = JSON.parse(process.argv[1]); console.log(JSON.stringify(Array.from({{length: 24}}, (_, r) => rowHueByte(p, {level_index}, r))));"
+        )
+        out = subprocess.run(["node", "--input-type=module", "-e", js, json.dumps(API["palette"])], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_the_tables_the_game_loads_are_the_editors_colours(self) -> None:
+        pal = ba.parse_palette(ROOT / "assets" / "palette.txt")
+        for index in range(len(LEVELS)):
+            with self.subTest(level_index=index):
+                self.g.close()
+                self.g = Game()
+                self.addCleanup(self.g.close)
+                g = self.g
+                g.start_game()
+                if index:  # go on to that level the way the game does after clearing the one before it
+                    g.poke("lvlidx", index - 1)
+                    g.poke("mtimer", 255)
+                    g.poke("mode", CLEAR)
+                    g.run_until(lambda g: g.mode == SPAWN, limit=5, every=1)
+                self.assertEqual(g.lvlidx, index)
+                tables = [list(g.bss(f"pal{k}", 24)) for k in range(4)]
+                self.assertEqual(tables[0][1:], self.editor_hues(index)[1:], "pixel 1: the hue of each row")
+                self.assertEqual((set(tables[1][1:]), set(tables[2][1:]), set(tables[3][1:])), ({pal["grey"]}, {pal["white"]}, {pal["ice"]}))
+                self.assertEqual(list(g._dump(0x0200, 256)[0xC4:0xC8]), [pal["hud"], pal["grey"], pal["white"], pal["ice"]], "the score row uses the shadow registers")
+
+    def test_the_display_list_interrupt_runs_once_per_row_every_frame(self) -> None:
+        g = self.g
+        g.start_game()
+        before = g.bss("dli_n")[0]
+        g.run(25, 0)
+        self.assertEqual((g.bss("dli_n")[0] - before) % 256, (23 * 25) % 256, "23 interrupts a frame: the end of rows 0-22")
+        self.assertEqual(g.bss("dli_row")[0], 1, "and the counter is back at row 1 at the top of every frame")
+
+    def test_the_title_screen_has_one_set_of_colours_in_every_row(self) -> None:
+        for k in range(4):
+            self.assertEqual(len(set(self.g.bss(f"pal{k}", 24))), 1)

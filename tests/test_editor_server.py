@@ -197,6 +197,7 @@ class Checking(ServerCase):
         grid = [["."] * 40] + [["#"] + ["."] * 38 + ["#"] for _ in range(22)] + [["#"] * 40]
         grid[21][2] = "@"
         grid[22][10] = "*"  # on the floor: fine
+        grid[22][36] = "D"  # the exit, on the floor too
         grid[2][30] = "*"  # high in the air with nothing to stand on near it
         text = "\n".join("".join(r) for r in grid) + "\n"
         status, res = self.req("POST", "/api/check", {"text": text})

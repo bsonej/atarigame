@@ -66,13 +66,9 @@ class Project:
     def tiles_api(self) -> dict:
         tiles = self.tiles()
         caps = ba.cap_families(tiles)
-        flags = [0] * 256
-        canon = list(range(256))
-        for t in tiles:
-            flags[t["byte"]] = (1 if t["solid"] else 0) | (2 if t["oneway"] else 0)
-        for fam, variants in caps.items():
-            for byte in variants.values():
-                canon[byte] = fam
+        flags, canon = ba.tile_tables(tiles)
+        door = ba.door_bytes(tiles)
+        pal_path = self.root / "assets" / "palette.txt"
         sprites = [{"name": n, "rows": rows} for n, rows in ba.parse_sprites(self.root / "assets" / "sprites.txt")]
         return {
             "cols": ba.COLS,
@@ -88,11 +84,16 @@ class Project:
                     "alt": t["byte"] != t["id"],
                     "family": t.get("family"),
                     "cap": t.get("cap"),
+                    "dotOf": t.get("dot_of"),
                     "rows": t["rows"],
                 }
                 for t in tiles
             ],
             "caps": {str(k): v for k, v in caps.items()},
+            "dots": {str(k): v for k, v in ba.dot_families(tiles).items()},
+            "door": list(door) if door else None,
+            "palette": ba.parse_palette(pal_path) if pal_path.exists() else None,
+            "maxCollect": ba.MAX_COLLECT,
             "flags": flags,
             "canon": canon,
             "sprites": sprites,
@@ -128,7 +129,8 @@ class Project:
         chars = {t["char"]: t["byte"] for t in tiles if t["char"] is not None}
         solid = {t["byte"] for t in tiles if t["solid"]}
         try:
-            ba.parse_level(Path(f"{name}.txt"), chars, solid, ba.cap_families(tiles), text=text)
+            ba.parse_level(Path(f"{name}.txt"), chars, solid, ba.cap_families(tiles), text=text,
+                           dots=ba.dot_families(tiles), door=ba.door_bytes(tiles))
         except ba.AssetError as e:
             raise ApiError(400, str(e).removeprefix(f"{name}.txt: ")) from None
         rows = [ln for ln in text.splitlines() if ln.strip() and not ba._is_comment(ln)]

@@ -38,7 +38,10 @@ for (const [buttons, frames] of spec.segments) {
 }
 console.log(
   JSON.stringify({
-    compiled: { map: Array.from(compiled.map.slice(0, 960)), spawn: compiled.spawn, items: compiled.items, pegs: compiled.pegs },
+    compiled: {
+      map: Array.from(compiled.map.slice(0, 960)), spawn: compiled.spawn, items: compiled.items, stars: compiled.stars,
+      dots: compiled.dots, doors: compiled.doors, pegs: compiled.pegs,
+    },
     records,
   }),
 );

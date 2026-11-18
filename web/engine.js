@@ -31,6 +31,8 @@ const MAX_FALL = 64;
 const SPR_H = 16;
 export const START_LIVES = 3;
 const ITEM_POINTS = 10;
+const DOT_POINTS = 1;
+const F_DOT = 4;
 const CLEAR_BONUS = 100;
 export const SPAWN_FRAMES = 48;
 export const DIE_FRAMES = 80;
@@ -53,7 +55,8 @@ const u8 = (v) => v & 0xff;
 
 export class Game {
   /**
-   * @param level  {map: 1024 map bytes (end caps included), spawn: [col,row], items, pegs: [[x,y,min,max,dir]...]}
+   * @param level  {map: 1024 map bytes (end caps and dots included), spawn: [col,row], items (things to collect: items +
+   *               dots), pegs: [[x,y,min,max,dir]...]}
    * @param tables {T: name -> tile byte, flags: [256], canon: [256]}
    * @param opts   {lives}
    */
@@ -210,6 +213,7 @@ export class Game {
     this.checkTiles();
     if (this.mode !== MODE.PLAY) return;
     this.armUnder();
+    this.eatDots();
     this.updateTimed();
     this.updatePegs();
     if (this.mode !== MODE.PLAY) return;
@@ -542,6 +546,8 @@ export class Game {
       if (t === this.T.ITEM) {
         this.map[this.ptr] = this.T.EMPTY;
         this.pickup();
+      } else if (t === this.T.DOOR_OPEN || t === this.T.DOOR_OPEN_TOP) {
+        return this.levelClear(); // the door is only open once everything is collected
       }
     }
     const ty = u8(this.py + 15);
@@ -551,14 +557,52 @@ export class Game {
   }
 
   pickup() {
-    this.addScore(ITEM_POINTS);
-    this.left = u8(this.left - 1);
     this.events.push('item');
+    this.collected(ITEM_POINTS);
+  }
+
+  pickupDot() {
+    this.events.push('dot');
+    this.collected(DOT_POINTS);
+  }
+
+  collected(points) {
+    this.addScore(points);
+    this.left = u8(this.left - 1);
     if (this.left !== 0) return;
+    this.openDoors(); // that was the last one: the exit opens
+    this.events.push('opened');
+  }
+
+  /** Swap every closed door on the screen for an open one. */
+  openDoors() {
+    const T = this.T;
+    for (let i = 0; i < this.map.length; i++) {
+      if (this.map[i] === T.DOOR) this.map[i] = T.DOOR_OPEN;
+      else if (this.map[i] === T.DOOR_TOP) this.map[i] = T.DOOR_OPEN_TOP;
+    }
+  }
+
+  /** Walking into the open door finishes the level. */
+  levelClear() {
     this.addScore(CLEAR_BONUS);
     this.mode = MODE.CLEAR;
     this.mtimer = 0;
     this.frame = FRAME.STAND;
+  }
+
+  /** Standing on a platform tile with a dot in it eats the dot (either foot counts). */
+  eatDots() {
+    if (this.state !== STATE.GROUND) return;
+    const ty = u8(this.py + SPR_H);
+    for (const tx of [this.px, u8(this.px + 3)]) {
+      if (ty >= 192 || tx >= 160) continue; // off the screen
+      const i = (ty >> 3) * COLS + (tx >> 2);
+      const raw = this.map[i];
+      if (!(this.flags[raw] & F_DOT)) continue;
+      this.map[i] = this.canon[raw]; // the plain tile stays behind
+      this.pickupDot();
+    }
   }
 
   // ---- bomb blocks and vanishing blocks ------------------------------------------------------

@@ -3,10 +3,15 @@
 #   tile <id> <NAME> <map-char> [solid] [oneway] [alt]
 #   <8 rows of 4 digits>      0 = background, 1 = COLOR0, 2 = COLOR1, 3 = COLOR2 (COLOR3 for an alt tile)
 #
+# What the four colours are is decided per row of the screen (a display-list interrupt changes them
+# every 8 scan lines, see assets/palette.txt): 1 is the hue of that row (it steps round a rainbow
+# from row to row, which is what makes the ladders and the stacked platforms colourful), 2 is a
+# steel grey, 3 is white, and in an alt tile 3 is ice blue instead of white.
+#
 # <NAME> becomes the assembler constant T_<NAME>; <map-char> is what you type in level files
 # (write 'none' for tiles that are only ever made by the game, like the flash frame of a fuse).
 #
-#   solid   blocks movement, bumps heads, and can be stood on (bricks, stairs, belts, ...)
+#   solid   blocks movement, bumps heads, and can be stood on (platforms, stairs, belts, ...)
 #   oneway  can be stood on from above only; you can jump up through it and walk through it
 #   alt     drawn in the second colour (COLOR3) for pixel value 3: the map byte is id + 128, so
 #           T_<NAME> is that byte. Use it for a tile that needs a colour the others do not have.
@@ -17,6 +22,12 @@
 #           screen edge counts as the same), and the game treats them as the plain tile. Give 8 rows of
 #           art, or none and the tool rounds off the plain tile's art itself (rows= limits the rows it
 #           changes, outline= is the colour of the new edge).
+#
+#   dot <id> <FAMILY>
+#           the same tile with a white dot in it (8 rows of art follow). You never put these in a map either:
+#           the asset tool puts a dot in every second middle tile of each run of the tile (so every platform
+#           has some), and the player eats a dot by walking over it, which scores a point and leaves the
+#           plain tile behind. The game treats a dotted tile as the plain tile.
 #
 # Ids must be below 128. Ids 16-25 and 32-61 belong to the text font (assets/font.txt); the conveyor
 # belts must stay at 64-71 (the game animates those glyphs, and the order is fixed: right slow,
@@ -33,32 +44,136 @@ tile 0 EMPTY .
 0000
 0000
 
+# ---- platforms: coloured capsules with a slot that holds the dots --------------------------------
+
 tile 1 BRICK # solid
 1111
-2232
-2232
-3333
-2322
-2322
-3333
-2222
+0000
+0000
+0000
+0000
+0000
+1111
+0000
+
+cap 96 BRICK L
+0111
+1000
+1000
+1000
+1000
+1000
+0111
+0000
+
+cap 97 BRICK R
+1110
+0001
+0001
+0001
+0001
+0001
+1110
+0000
+
+cap 98 BRICK LR
+0110
+1001
+1001
+1001
+1001
+1001
+0110
+0000
+
+dot 115 BRICK
+1111
+0000
+0330
+0330
+0330
+0000
+1111
+0000
+
+# A thin platform: stand on it, jump up through it.
+tile 5 PLATFORM = oneway
+1111
+0000
+1111
+0000
+0000
+0000
+0000
+0000
+
+cap 99 PLATFORM L
+0111
+1000
+0111
+0000
+0000
+0000
+0000
+0000
+
+cap 100 PLATFORM R
+1110
+0001
+1110
+0000
+0000
+0000
+0000
+0000
+
+cap 101 PLATFORM LR
+0110
+1001
+0110
+0000
+0000
+0000
+0000
+0000
+
+dot 116 PLATFORM
+1111
+0330
+1111
+0000
+0000
+0000
+0000
+0000
+
+# A wall: solid, no end caps, no dots.
+tile 114 WALL W solid
+1111
+1221
+1221
+1111
+1111
+2112
+2112
+1111
 
 tile 2 LADDER H
-2002
-2002
-2112
-2002
-2002
-2002
-2112
-2002
+1001
+1001
+1111
+1001
+1001
+1001
+1111
+1001
 
 tile 3 ITEM *
 0000
 0110
-1221
-1221
-1221
+1331
+1331
+1331
 0110
 0000
 0000
@@ -66,58 +181,149 @@ tile 3 ITEM *
 tile 4 SPIKE ^
 0000
 0000
-0110
-0110
-1331
-1331
+0220
+0220
+2332
+2332
 3333
 3333
+
+# ---- the exit door: closed until every dot and item is collected, then open. Write one D (the bottom half)
+# ---- in a map; the asset tool puts the top half above it.
+tile 117 DOOR D
+2112
+2112
+2112
+2132
+2112
+2112
+2112
+2222
+
+tile 118 DOOR_TOP none
+2222
+2112
+2112
+2112
+2112
+2112
+2112
+2112
+
+tile 119 DOOR_OPEN none
+2332
+2332
+2332
+2332
+2332
+2332
+2332
+2222
+
+tile 120 DOOR_OPEN_TOP none
+2222
+2332
+2332
+2332
+2332
+2332
+2332
+2332
 
 # ---- factory components ---------------------------------------------------------------------
-
-# A thin platform: stand on it, jump up through it.
-tile 5 PLATFORM = oneway
-3333
-2222
-0000
-0000
-0000
-0000
-0000
-0000
 
 # One step: walk into it to climb it, walk off it to step down.
 tile 6 STAIR S solid
 3333
-2222
-2222
 1111
+1111
+2222
 3333
-2222
-2222
 1111
+1111
+2222
 
 # Ice: you speed up slowly and glide a long way.
 tile 7 ICE ~ solid alt
 3333
-3303
-3033
-3330
-3303
-3033
-3330
+3233
+3323
+3233
+3323
+3233
 3333
+0000
+
+cap 102 ICE L
+0333
+3233
+3323
+3233
+3323
+3233
+0333
+0000
+
+cap 103 ICE R
+3330
+3233
+3323
+3233
+3323
+3233
+3330
+0000
+
+cap 104 ICE LR
+0330
+3233
+3323
+3233
+3323
+3233
+0330
+0000
 
 # A roller: slippery, but you stop sooner than on ice.
 tile 8 ROLLER o solid
-3333
-2332
+2222
 3223
 3223
 3223
 3223
-2332
-1111
+3223
+2222
+0000
+
+cap 105 ROLLER L
+0222
+2223
+2223
+2223
+2223
+2223
+0222
+0000
+
+cap 106 ROLLER R
+2220
+3222
+3222
+3222
+3222
+3222
+2220
+0000
+
+cap 107 ROLLER LR
+0220
+2222
+2222
+2222
+2222
+2222
+0220
+0000
 
 # A bomb block: stand on it and it flashes, then blows up, and sets off bomb blocks next to it.
 tile 9 EXPLOSIVE X solid
@@ -274,126 +480,6 @@ tile 71 CONV_L_ACC [ solid
 3131
 
 # ---- platform end caps ----------------------------------------------------------------------
-
-cap 96 BRICK L
-0111
-1232
-1232
-3333
-1322
-1322
-3333
-0222
-
-cap 97 BRICK R
-1110
-2231
-2231
-3333
-2321
-2321
-3333
-2220
-
-cap 98 BRICK LR
-0110
-1231
-1231
-3333
-1321
-1321
-3333
-0220
-
-cap 99 PLATFORM L
-0333
-2222
-2000
-0000
-0000
-0000
-0000
-0000
-
-cap 100 PLATFORM R
-3330
-2222
-0002
-0000
-0000
-0000
-0000
-0000
-
-cap 101 PLATFORM LR
-0330
-2222
-2002
-0000
-0000
-0000
-0000
-0000
-
-cap 102 ICE L
-0333
-3303
-3033
-3330
-3303
-3033
-3330
-0333
-
-cap 103 ICE R
-3330
-3303
-3033
-3333
-3303
-3033
-3333
-3330
-
-cap 104 ICE LR
-0330
-3303
-3033
-3333
-3303
-3033
-3333
-0330
-
-cap 105 ROLLER L
-0333
-0332
-3223
-3223
-3223
-3223
-0332
-0111
-
-cap 106 ROLLER R
-3330
-2330
-3223
-3223
-3223
-3223
-2330
-1110
-
-cap 107 ROLLER LR
-0330
-0330
-3223
-3223
-3223
-3223
-0330
-0110
 
 cap 108 EXPLOSIVE L
 0111

@@ -658,8 +658,9 @@ class Pegs(Arena):
 @needs_emulator
 class FactoryLevels(Arena):
     def count_items(self, n: int) -> int:
-        text = (ROOT / "assets" / "levels" / f"level{n}.txt").read_text()
-        return sum(line.count("*") for line in text.splitlines() if not line.startswith("# "))
+        """Everything to collect in map n: its dots and its items, as the asset tool counted them."""
+        text = (ROOT / "src" / "gen" / "levels.inc").read_text()
+        return int(re.search(rf"LEVEL{n}_ITEMS = (\d+)", text).group(1))
 
     def test_map_4_loads(self) -> None:
         self.goto(3)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that every item in a level can be reached (an approximation, not a playtest).
+"""Check that every item, every dot and the exit door in a level can be reached (an approximation, not a playtest).
 
     python3 tools/levelcheck.py [level files...]     (default: assets/levels/*.txt)
 
@@ -9,7 +9,7 @@ and jump (up 2 tiles, over gaps up to 5 tiles wide). Bomb blocks and vanishing b
 solid, belts and ice do not change where you can go, and pegs and spikes are ignored (the player is
 expected to jump them, so spikes are only checked for headroom; and a chute can be reached by a jump from below
 like any other solid tile). So "reachable" here means "reachable by a competent player"; it cannot tell
-you the level is fun or fair. Exit status is 1 if any item (or the start) is unreachable.
+you the level is fun or fair. Exit status is 1 if any item, dot or the door (or the start) is unreachable.
 """
 
 from __future__ import annotations
@@ -17,9 +17,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import build_assets as ba  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 ROWS, COLS = 24, 40
-SOLID = set("#S~oXv\\/>)]<([{}")
+SOLID = set("#W S~oXv\\/>)]<([{}".replace(" ", ""))
 ONEWAY = set("=")
 MAX_FALL_TILES = 8  # 64 pixels
 # widest jump by number of tiles risen: up 0 / 1 / 2 tiles
@@ -43,7 +46,7 @@ class Level:
             for c, ch in enumerate(line):
                 if ch == "@":
                     self.start = (c, r + 2)  # standing cell: the tile under the 2-tall player
-                elif ch == "*":
+                elif ch in "*D":  # items, and the door (its bottom half is where the player stands to enter)
                     self.items.append((c, r))
 
     def t(self, c: int, r: int) -> str:
@@ -177,8 +180,26 @@ def check_rows(rows: list[str]) -> list[str]:
                 problems.append(f"the spike at column {col}, row {r} has too little headroom to jump over")
     cells = lv.reachable()
     for ic, ir in sorted(set(lv.items) - lv.collectable(cells)):
-        problems.append(f"item at column {ic}, row {ir} looks unreachable")
+        what = "door" if lv.t(ic, ir) == "D" else "item"
+        problems.append(f"{what} at column {ic}, row {ir} looks unreachable")
+    for c, r in dotted_cells(lv.rows):
+        if not any((c + d, r) in cells for d in (-1, 0, 1)):
+            problems.append(f"the dot on the platform at column {c}, row {r} looks unreachable")
     return problems
+
+
+def dotted_cells(rows: list[str]) -> list[tuple[int, int]]:
+    """(column, row) of every platform tile the asset tool puts a dot in (none if the level does not compile)."""
+    tiles = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
+    chars = {t["char"]: t["byte"] for t in tiles if t["char"] is not None}
+    solid = {t["byte"] for t in tiles if t["solid"]}
+    try:
+        lv = ba.parse_level(Path("level"), chars, solid, ba.cap_families(tiles), text="\n".join(rows) + "\n",
+                            dots=ba.dot_families(tiles))  # (no door: a level without one is reported elsewhere)
+    except ba.AssetError:
+        return []
+    dotted = set(ba.dot_families(tiles).values())
+    return [(i % ba.COLS, i // ba.COLS) for i, b in enumerate(lv["data"][: ba.COLS * ba.ROWS]) if b in dotted]
 
 
 def main(argv: list[str]) -> int:

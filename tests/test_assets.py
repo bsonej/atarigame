@@ -176,15 +176,14 @@ class LevelTables(unittest.TestCase):
         self.assertIn("level_sx:    .byte 8,8,8", text)  # spawn column 2 -> pixel 8
         self.assertIn("level_sy:    .byte 176,176,176", text)  # row 22 -> line 176
 
-    def test_levels_may_have_at_most_99_items(self) -> None:
+    def test_levels_may_have_at_most_250_things_to_collect(self) -> None:
         rows = good_rows()
-        rows[3] = "*" * 40
-        rows[4] = "*" * 40
-        rows[5] = "*" * 40
+        for r in range(3, 10):
+            rows[r] = "*" * 40
         self.p.write("assets/levels/level1.txt", level(rows))
         with self.assertRaises(ba.AssetError) as cm:
             self.p.build()
-        self.assertIn("too many items", str(cm.exception))
+        self.assertIn("too much to collect", str(cm.exception))
 
 
 def flagged(id: int, name: str, ch: str, flags: str = "") -> str:
@@ -415,12 +414,164 @@ class EndCaps(unittest.TestCase):
         self.assertIn("level1_pegs:\n        .byte 1,40,144,40,68,1", self.p.build().joinpath("levels.inc").read_text())
 
 
+class DotsAndDoors(unittest.TestCase):
+    """The dots in the platforms, the exit door, the palette file."""
+
+    def setUp(self) -> None:
+        self.p = Project()
+        self.addCleanup(self.p.cleanup)
+
+    def tiles(self, *extra: str) -> None:
+        self.p.write("assets/tiles.txt", "\n".join([EMPTY_TILE, SOLID_BRICK, ITEM_TILE, *extra]) + "\n")
+
+    DOT = "dot 30 BRICK\n" + "\n".join(["0330"] * 8)
+    CAPS = ["cap 20 BRICK L", "cap 21 BRICK R", "cap 22 BRICK LR"]
+
+    def plain_row(self, text: str) -> list[int]:
+        return [{".": 0, "#": 1}[c] for c in text.ljust(ba.COLS, ".")]
+
+    def put(self, plain: list[int], rows: dict[int, str]) -> tuple[list[int], list[int]]:
+        grid = [0] * (ba.COLS * ba.ROWS)
+        for r, text in rows.items():
+            grid[r * ba.COLS : (r + 1) * ba.COLS] = self.plain_row(text)
+        caps = ba.apply_caps(grid, {1: {"L": 20, "R": 21, "LR": 22}})
+        return grid, caps
+
+    def test_a_dot_goes_in_every_second_middle_tile_of_a_run(self) -> None:
+        grid, capped = self.put([], {10: ".###########"})  # 11 tiles in columns 1-11: L, nine middles, R
+        out = ba.apply_dots(grid, capped, {1: 30}, {1})
+        row = out[10 * ba.COLS : 11 * ba.COLS]
+        # the 2nd, 4th, 6th... tile of the run (offsets 1, 3, 5, ... from its first tile), never an end cap
+        self.assertEqual([i for i, b in enumerate(row) if b == 30], [2, 4, 6, 8, 10])
+        self.assertEqual((row[1], row[11]), (20, 21), "the end caps stay caps")
+        self.assertEqual([row[3], row[5], row[7], row[9]], [1, 1, 1, 1], "the tiles between are plain")
+
+    def test_a_short_platform_has_a_dot_if_it_has_a_middle(self) -> None:
+        grid, capped = self.put([], {10: "..###", 12: "..##", 14: "..#"})
+        out = ba.apply_dots(grid, capped, {1: 30}, {1})
+        self.assertEqual(out[10 * ba.COLS + 3], 30, "three tiles: end, middle, end")
+        self.assertNotIn(30, out[12 * ba.COLS : 13 * ba.COLS], "two tiles are all ends")
+        self.assertNotIn(30, out[14 * ba.COLS : 15 * ba.COLS], "one tile is all end")
+
+    def test_a_floor_that_runs_off_the_screen_has_dots_all_along(self) -> None:
+        grid, capped = self.put([], {23: "#" * 40})
+        out = ba.apply_dots(grid, capped, {1: 30}, {1})
+        row = out[23 * ba.COLS : 24 * ba.COLS]
+        self.assertEqual([i for i, b in enumerate(row) if b == 30], list(range(1, 40, 2)))
+
+    def test_no_dot_where_the_player_could_not_stand(self) -> None:
+        # a platform in columns 3-9 would have dots in columns 4, 6 and 8
+        grid, capped = self.put([], {10: "..." + "#" * 7})
+        out = ba.apply_dots(grid, capped, {1: 30}, {1})
+        self.assertEqual([c for c in range(40) if out[10 * ba.COLS + c] == 30], [4, 6, 8])
+        grid, capped = self.put([], {10: "..." + "#" * 7, 9: "......#"})  # solid right above column 6
+        out = ba.apply_dots(grid, capped, {1: 30}, {1})
+        self.assertEqual([c for c in range(40) if out[10 * ba.COLS + c] == 30], [4, 8], "nothing to stand on at 6")
+        grid, capped = self.put([], {10: "..." + "#" * 7, 8: "........#"})  # solid two above column 8
+        out = ba.apply_dots(grid, capped, {1: 30}, {1})
+        self.assertEqual([c for c in range(40) if out[10 * ba.COLS + c] == 30], [4, 6], "the player is two tiles tall")
+
+    def test_no_dot_under_spikes(self) -> None:
+        self.tiles(*self.CAPS, self.DOT, "tile 5 SPIKE ^\n" + "\n".join(["1111"] * 8))
+        rows = good_rows()
+        rows[10] = "." * 3 + "#" * 7 + "." * 30  # dots would be at columns 4, 6 and 8
+        rows[9] = "." * 6 + "^" + "." * 33
+        self.p.write("assets/levels/level1.txt", level(rows))
+        text = (self.p.build() / "levels.inc").read_text()
+        floor_dots = len(range(1, 40, 2))
+        self.assertEqual(int(re.search(r"LEVEL1_ITEMS = (\d+)", text).group(1)), 1 + 2 + floor_dots)  # 1 item, 2 dots, the floor
+
+    def test_dots_are_counted_with_the_items(self) -> None:
+        self.tiles(*self.CAPS, self.DOT)
+        rows = good_rows()
+        rows[10] = "." * 3 + "#" * 9 + "." * 28
+        self.p.write("assets/levels/level1.txt", level(rows))
+        out = self.p.build()
+        text = (out / "levels.inc").read_text()
+        self.assertIn("LEVEL1_ITEMS = ", text)
+        floor_dots = len(range(1, 40, 2))
+        self.assertEqual(int(re.search(r"LEVEL1_ITEMS = (\d+)", text).group(1)), 1 + 4 + floor_dots)  # 1 item + 4 dots + the floor
+
+    def test_the_dotted_tile_is_the_plain_tile_to_the_game(self) -> None:
+        self.tiles(*self.CAPS, self.DOT)
+        text = self.p.build().joinpath("tileflags.inc").read_text()
+        canon = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text.split("tile_canon:")[1])]
+        flags = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text.split("tile_canon:")[0])]
+        self.assertEqual(canon[30], 1)
+        self.assertEqual(flags[30], ba.F_SOLID | ba.F_DOT)
+        self.assertEqual(flags[1], ba.F_SOLID, "only the dotted twin carries the dot flag")
+
+    def test_a_dotted_twin_of_an_alt_tile_is_alt(self) -> None:
+        self.tiles(flagged(7, "ICE", "~", "solid alt"), "dot 30 ICE\n" + "\n".join(["0000"] * 8))
+        tiles = {t["name"]: t for t in ba.parse_tiles(self.p.dir / "assets" / "tiles.txt")}
+        self.assertEqual((tiles["ICE_DOT"]["byte"], tiles["ICE_DOT"]["solid"]), (30 | 0x80, True))
+        self.assertEqual(ba.dot_families(list(tiles.values())), {7 | 0x80: 30 | 0x80})
+
+    def test_bad_dot_lines_are_rejected(self) -> None:
+        for line, message in (
+            ("dot 30 NOPE", "unknown tile"),
+            ("dot 1 BRICK", "duplicate tile id"),
+            ("dot 200 BRICK", "must be 0-127"),
+            ("dot 30", "expected"),
+        ):
+            with self.subTest(line):
+                self.tiles(line + "\n" + "\n".join(["0000"] * 8))
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.p.build()
+                self.assertIn(message, str(cm.exception))
+
+    DOOR = (
+        "tile 40 DOOR D\n" + "\n".join(["1111"] * 8) + "\ntile 41 DOOR_TOP none\n" + "\n".join(["1111"] * 8)
+    )
+
+    def test_a_door_gets_its_top_half_above_it(self) -> None:
+        self.tiles(self.DOOR)
+        rows = good_rows()
+        rows[22] = "..@" + "." * 34 + "D*."
+        self.p.write("assets/levels/level1.txt", level(rows))
+        text = self.p.build().joinpath("levels.inc").read_text()
+        data = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text.split("level1_spawn:")[0])]
+        self.assertEqual((data[22 * 40 + 37], data[21 * 40 + 37]), (40, 41))
+
+    def test_a_level_needs_a_door_and_room_above_it(self) -> None:
+        self.tiles(self.DOOR)
+        with self.assertRaises(ba.AssetError) as cm:
+            self.p.build()
+        self.assertIn("no exit door", str(cm.exception))
+        rows = good_rows()
+        rows[22] = "..@" + "." * 34 + "D*."
+        rows[21] = "." * 37 + "#" + ".." 
+        self.p.write("assets/levels/level1.txt", level(rows))
+        with self.assertRaises(ba.AssetError) as cm:
+            self.p.build()
+        self.assertIn("empty cell above", str(cm.exception))
+
+    def test_the_palette_file_is_checked_and_turned_into_an_include(self) -> None:
+        good = "hues 1E 2C 4C 5C 7C 9C AC CC\ngrey 0A\nwhite 0E\nice AC\nhud 2A\nbackground 00\n"
+        self.p.write("assets/palette.txt", good)
+        text = self.p.build().joinpath("palette.inc").read_text()
+        self.assertIn("PAL_GREY  = $0A", text)
+        self.assertIn(".byte $1E,$2C,$4C,$5C,$7C,$9C,$AC,$CC", text)
+        for bad, message in (
+            (good.replace("hues 1E 2C 4C 5C 7C 9C AC CC", "hues 1E 2C"), "needs 8 colours"),
+            (good.replace("grey 0A", "grey ZZ"), "hex bytes"),
+            (good.replace("grey 0A", "gray 0A"), "unknown palette entry"),
+            (good.replace("ice AC\n", ""), "missing palette entries"),
+            (good.replace("hud 2A", "hud 1FF"), "00-FF"),
+        ):
+            with self.subTest(message):
+                self.p.write("assets/palette.txt", bad)
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.p.build()
+                self.assertIn(message, str(cm.exception))
+
+
 class RealAssets(unittest.TestCase):
     def test_project_assets_convert(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ba.build(ROOT, Path(tmp))
             names = {p.name for p in Path(tmp).iterdir()}
-            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "charset.inc", "font.inc", "sprites.inc", "levels.inc", "screens.inc"})
+            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "charset.inc", "font.inc", "palette.inc", "sprites.inc", "levels.inc", "screens.inc"})
             self.assertIn("T_BRICK", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("T_DIGIT0       = 16", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("level1_spawn", (Path(tmp) / "levels.inc").read_text())

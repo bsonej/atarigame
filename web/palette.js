@@ -8,8 +8,9 @@ export const GROUPS = [
   {
     title: 'Platforms',
     items: [
-      { kind: 'tile', name: 'BRICK', tip: 'Brick: solid wall or floor' },
-      { kind: 'tile', name: 'PLATFORM', tip: 'Platform: one-way. Jump up through it, land on top' },
+      { kind: 'tile', name: 'BRICK', tip: 'Platform: solid. A dot is put in every second middle tile for the player to eat' },
+      { kind: 'tile', name: 'WALL', tip: 'Wall: solid, no end caps, no dots' },
+      { kind: 'tile', name: 'PLATFORM', tip: 'Thin platform: one-way. Jump up through it, land on top. Has dots too' },
       { kind: 'tile', name: 'ICE', tip: 'Ice: slow to start, slow to stop, slides far' },
       { kind: 'tile', name: 'ROLLER', tip: 'Roller: like ice, but grips sooner' },
     ],
@@ -53,7 +54,8 @@ export const GROUPS = [
   {
     title: 'Level',
     items: [
-      { kind: 'tile', name: 'ITEM', tip: 'Item: collect them all to clear the level' },
+      { kind: 'tile', name: 'ITEM', tip: 'Item: collect these and all the dots to open the door' },
+      { kind: 'tile', name: 'DOOR', tip: 'Exit door (one per level, stand it on a platform): opens when everything is collected' },
       { kind: 'start', tip: 'Player start (one per level)' },
       { kind: 'erase', tip: 'Eraser (also: right mouse button)' },
     ],
@@ -64,8 +66,9 @@ const row = (name, n) => Array.from({ length: n }, (_, i) => [i, 0, name]);
 const diag = (name, n, rising) => Array.from({ length: n }, (_, i) => [i, rising ? n - 1 - i : i, name]);
 
 export const STAMPS = [
-  { label: 'Brick floor', cells: row('BRICK', 8), tip: '8 bricks in a row' },
-  { label: 'Platform', cells: row('PLATFORM', 8), tip: '8 one-way platforms' },
+  { label: 'Platform', cells: row('BRICK', 8), tip: '8 platform tiles in a row (end caps and dots come by themselves)' },
+  { label: 'Thin platform', cells: row('PLATFORM', 8), tip: '8 one-way platform tiles' },
+  { label: 'Wall', cells: Array.from({ length: 6 }, (_, i) => [0, i, 'WALL']), tip: 'A wall 6 tiles tall' },
   { label: 'Belt right', cells: row('CONV_R', 8), tip: '8 belt tiles moving right' },
   { label: 'Belt left', cells: row('CONV_L', 8), tip: '8 belt tiles moving left' },
   { label: 'Ice', cells: row('ICE', 8), tip: '8 ice tiles' },

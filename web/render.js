@@ -7,14 +7,30 @@ import { COLS, ROWS } from './model.js';
 
 export const COLORS = {
   bg: '#000000',
-  c0: '#f0a030', // COLOR0 (pixel value 1): bright orange
-  c1: '#a05a20', // COLOR1 (2): brown
-  c2: '#f4f4f4', // COLOR2 (3): white
-  c3: '#34c8f0', // COLOR3 (3 in an "alt" tile): cyan
   player: '#ffe040',
   peg: '#ff5a4a',
   hud: '#f4f4f4',
 };
+
+// Atari colour bytes (hue in the high nibble, luminance in the low one) as CSS colours. An approximation: a
+// real TV or emulator differs a little. tools/render_level.py uses the same table, so the PNGs match.
+const HUE_DEG = [0, 45, 28, 12, 350, 325, 295, 265, 235, 215, 192, 170, 135, 95, 70, 45];
+export function atariColour(byte) {
+  const hue = byte >> 4;
+  const light = 0.04 + (0.88 * (byte & 15)) / 15;
+  return hue === 0 ? `hsl(0 0% ${(light * 100).toFixed(1)}%)` : `hsl(${HUE_DEG[hue]} 70% ${(light * 100).toFixed(1)}%)`;
+}
+
+/** Which of the 9 colour sets a screen row uses: the score row (0) has its own, the rest step round the 8 hues. */
+export const rowVariant = (levelIndex, row) => (row <= 0 ? 8 : (row + levelIndex) % 8);
+
+/** The Atari colour byte of pixel value 1 in screen row `row` of level number `levelIndex` (0-based). */
+export const rowHueByte = (palette, levelIndex, row) => {
+  const v = rowVariant(levelIndex, row);
+  return v === 8 ? palette.hud : palette.hues[v];
+};
+
+const DEFAULT_PALETTE = { hues: [0x1e, 0x2c, 0x4c, 0x5c, 0x7c, 0x9c, 0xac, 0xcc], grey: 0x0a, white: 0x0e, ice: 0xac, hud: 0x2a, background: 0 };
 
 // The belts' animation (animate_belts in main.s): one bright pixel marches along rows 0-1 of the glyph.
 const BELT_PAT = [0xea, 0xba, 0xae, 0xab];
@@ -23,13 +39,25 @@ const CONV_DIR = [0, 0, 0, 0, 1, 1, 1, 1];
 const CONV_FIRST = 64;
 
 export class Atlas {
-  /** @param api the /api/tiles reply */
+  /**
+   * Tiles are stored as pixel values 0-3 and coloured per row of the screen, as the game does with its
+   * display-list interrupt (assets/palette.txt): pixel 1 takes the hue of the row, 2 is grey, 3 is white (ice
+   * blue in an alt tile). There is one canvas per hue step, plus one for the score row; `levelIndex` shifts
+   * which hue a row gets, as the level number does in the game.
+   * @param api the /api/tiles reply
+   */
   constructor(api) {
     this.api = api;
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = 256 * 4;
-    this.canvas.height = 8;
-    this.ctx = this.canvas.getContext('2d');
+    this.pal = api.palette || DEFAULT_PALETTE;
+    this.levelIndex = 0;
+    this.variants = [];
+    for (let i = 0; i < 9; i++) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256 * 4;
+      canvas.height = 8;
+      this.variants.push({ canvas, ctx: canvas.getContext('2d') });
+    }
+    this.canvas = this.variants[8].canvas; // the score row's colours (handy for a quick look)
     this.cph = new Array(8).fill(0);
     this.alt = new Set(api.tiles.filter((t) => t.alt).map((t) => t.byte));
     this.rows = {};
@@ -38,21 +66,32 @@ export class Atlas {
     this.beltPhase = -1;
   }
 
-  colour(v, alt) {
-    return v === 0 ? COLORS.bg : v === 1 ? COLORS.c0 : v === 2 ? COLORS.c1 : alt ? COLORS.c3 : COLORS.c2;
+  /** The canvas holding the tiles as they look in screen row `row`. */
+  canvasFor(row) {
+    return this.variants[rowVariant(this.levelIndex, row)].canvas;
+  }
+
+  colour(v, alt, variant) {
+    const p = this.pal;
+    if (v === 0) return atariColour(p.background);
+    if (v === 1) return atariColour(variant === 8 ? p.hud : p.hues[variant]);
+    if (v === 2) return atariColour(p.grey);
+    return atariColour(alt ? p.ice : p.white);
   }
 
   paint(byte, onlyRows = null) {
     const rows = this.rows[byte];
     if (!rows) return;
     const alt = this.alt.has(byte);
-    for (let y = 0; y < 8; y++) {
-      if (onlyRows && !onlyRows.includes(y)) continue;
-      for (let x = 0; x < 4; x++) {
-        this.ctx.fillStyle = this.colour(Number(rows[y][x]), alt);
-        this.ctx.fillRect(byte * 4 + x, y, 1, 1);
+    this.variants.forEach(({ ctx }, variant) => {
+      for (let y = 0; y < 8; y++) {
+        if (onlyRows && !onlyRows.includes(y)) continue;
+        for (let x = 0; x < 4; x++) {
+          ctx.fillStyle = this.colour(Number(rows[y][x]), alt, variant);
+          ctx.fillRect(byte * 4 + x, y, 1, 1);
+        }
       }
-    }
+    });
   }
 
   /** March the belts. `tick` counts 50 Hz frames. */
@@ -82,9 +121,10 @@ export class Atlas {
 /** The size of one cell for a zoom level. */
 export const cellSize = (zoom) => 8 * zoom;
 
-export function drawTile(ctx, atlas, byte, x, y, cell, alpha = 1) {
+/** Draw a tile at (x, y); `row` (default: the screen row that y falls in) picks its colours. */
+export function drawTile(ctx, atlas, byte, x, y, cell, alpha = 1, row = Math.round(y / cell)) {
   if (alpha !== 1) ctx.globalAlpha = alpha;
-  ctx.drawImage(atlas.canvas, byte * 4, 0, 4, 8, x, y, cell, cell);
+  ctx.drawImage(atlas.canvasFor(row), byte * 4, 0, 4, 8, x, y, cell, cell);
   if (alpha !== 1) ctx.globalAlpha = 1;
 }
 
@@ -96,7 +136,7 @@ export function drawMap(ctx, atlas, map, cell, fromRow = 1) {
   for (let r = fromRow; r < ROWS; r++)
     for (let c = 0; c < COLS; c++) {
       const b = map[r * COLS + c];
-      if (b) drawTile(ctx, atlas, b, c * cell, r * cell, cell);
+      if (b) drawTile(ctx, atlas, b, c * cell, r * cell, cell, 1, r);
     }
 }
 
@@ -119,5 +159,5 @@ export function drawHud(ctx, cell, { score, level, lives, left }) {
   ctx.font = `bold ${Math.round(cell * 0.62)}px ui-monospace, Menlo, monospace`;
   ctx.textBaseline = 'middle';
   const pad = (n, w) => String(n).padStart(w, '0');
-  ctx.fillText(`SCORE ${pad(score, 5)}  LEVEL ${pad(level, 2)}  LIVES ${lives}  LEFT ${pad(left, 2)}`, cell * 0.5, cell * 0.5);
+  ctx.fillText(`SCORE ${pad(score, 5)}  LEVEL ${pad(level, 2)}  LIVES ${lives}  LEFT ${pad(left, 3)}`, cell * 0.5, cell * 0.5);
 }

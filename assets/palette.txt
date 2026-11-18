@@ -1,0 +1,18 @@
+# Colours (Atari colour bytes: hue * 16 + luminance, in hex). Used by the game (via tools/build_assets.py) and by
+# the level editor, so what you see in the editor is what the game shows.
+#
+# The playfield has four colours. Every row of tiles gets its own set, switched by a display-list interrupt:
+#
+#   pixel 1  the hue of the row: hues[(row + level index) mod 8], so the colour steps along the list from one
+#            row to the next (a ladder shades from orange to magenta) and every level starts somewhere else
+#   pixel 2  steel grey
+#   pixel 3  white (ice blue in an alt tile)
+#
+# Row 0 (the score row), the title screen and the game over screen are not banded: they use "hud" for pixel 1.
+
+hues       1E 2C 4C 5C 7C 9C AC CC
+grey       0A
+white      0E
+ice        AC
+hud        2A
+background 00

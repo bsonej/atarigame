@@ -8,6 +8,7 @@ items at (14,22) (26,22) (12,17) (30,17) (10,12) (28,12) (12,7) (24,7); spikes a
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 import unittest
@@ -47,19 +48,24 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import build_assets as _ba  # noqa: E402
 
+_TILES = _ba.parse_tiles(ROOT / "assets" / "tiles.txt")
+TILE = {t["name"]: t["byte"] for t in _TILES}
+CHAR_BYTE = {t["char"]: t["byte"] for t in _TILES if t["char"] is not None}
+_DOTTED = {dotted: plain for plain, dotted in _ba.dot_families(_TILES).items()}  # a dotted twin -> its plain tile
+LEVEL_ITEMS = [int(x) for x in re.findall(r"LEVEL\d+_ITEMS = (\d+)", (ROOT / "src" / "gen" / "levels.inc").read_text())]
 _CANON = {b: fam for fam, caps in _ba.cap_families(_ba.parse_tiles(ROOT / "assets" / "tiles.txt")).items() for b in caps.values()}
 
 
 def canon(b: int) -> int:
     """The plain tile a map byte stands for (a platform end cap stands for its tile)."""
-    return _CANON.get(b, b)
+    return _CANON.get(_DOTTED.get(b, b), _DOTTED.get(b, b))
 
 
 needs_emulator = unittest.skipUnless(shutil.which("atari800") and XEX.exists() and LABELS.exists(), "needs atari800 and `task build-test`")
 
 
 def hud(score: int = 0, level: int = 1, lives: int = 3, left: int = 8) -> str:
-    return f"SCORE {score:05d} LEVEL {level:02d}  LIVES {lives}  LEFT {left:02d}"
+    return f"SCORE {score:05d} LEVEL {level:02d}  LIVES {lives}  LEFT {left:03d}"
 
 
 def decode(raw: bytes) -> str:
@@ -96,6 +102,21 @@ class Base(unittest.TestCase):
     def start(self) -> Game:
         self.g.start_game()
         return self.g
+
+    def strip_dots(self) -> int:
+        """Take every dot off the screen (and out of the count), so a test about items or the door sees only those.
+        Returns how many there were."""
+        g = self.g
+        raw = bytearray(g.mem(g.screen_addr, 1024))
+        n = 0
+        for i in range(COLS, COLS * 24):
+            if raw[i] in _DOTTED:
+                raw[i] = _DOTTED[raw[i]]
+                n += 1
+        g.poke_bytes(g.screen_addr, raw[: COLS * 24])
+        g.poke("left", g.left - n)
+        g.idle()
+        return n
 
     def walk_to(self, px: int) -> None:
         g = self.g
@@ -212,10 +233,13 @@ class Spawn(Base):
 class Hud(Base):
     def test_score_row_shows_score_level_lives_and_items_left(self) -> None:
         self.start()
+        self.assertEqual(self.row(0).rstrip(), hud(left=LEVEL_ITEMS[0]), "everything to collect: dots and items")
+        self.strip_dots()
         self.assertEqual(self.row(0).rstrip(), hud())
 
     def test_score_row_updates(self) -> None:
         g = self.start()
+        self.strip_dots()
         self.walk_to(14 * 4 - 2)
         g.idle()
         self.assertEqual(self.row(0).rstrip(), hud(10, left=7))
@@ -239,6 +263,7 @@ class GameLogic(Base):
     def setUp(self) -> None:
         super().setUp()
         self.start()
+        self.strip_dots()  # (the dots have their own tests below)
 
     # ---- start ----
     def test_starts_on_the_floor_with_a_full_level(self) -> None:
@@ -248,7 +273,8 @@ class GameLogic(Base):
         self.assertEqual(g.tile(8, 20), T_LADDER)
         self.assertEqual(g.tile(14, 22), T_ITEM)
         self.assertEqual(g.tile(20, 22), T_SPIKE)
-        self.assertEqual(canon(g.tile(0, 10)), T_BRICK)  # a wall's edge may be an end cap
+        self.assertEqual(g.tile(0, 10), TILE["WALL"])
+        self.assertEqual(canon(g.tile(10, 23)), T_BRICK)  # the floor, perhaps with a dot or an end cap
 
     def test_idle_player_does_not_move(self) -> None:
         self.g.idle(30)
@@ -420,9 +446,13 @@ class GameLogic(Base):
             l for l in (ROOT / "assets" / "levels" / "level1.txt").read_text().splitlines()
             if l and not l.startswith("# ")
         ]
-        tiles = {".": 0, "#": 1, "H": 2, "*": 3, "^": 4, "@": 0}
-        expected = bytes(tiles[c] for row in lines for c in row)
+        tiles = {**CHAR_BYTE, "@": 0}
+        expected = bytearray(tiles[c] for row in lines for c in row)
         self.assertEqual(len(expected), COLS * 24)
+        for i, ch in enumerate("".join(lines)):
+            if ch == "D":  # the compiler adds the top half of the door above its bottom half
+                expected[i - COLS] = TILE["DOOR_TOP"]
+        expected = bytes(expected)
         got = bytes(canon(b) for b in g.mem(g.screen_addr, 1024)[COLS : COLS * 24])  # ignoring the score row
         self.assertEqual(got, expected[COLS:])
         # ...and the build really did put end caps on the floor where it meets something else
@@ -449,6 +479,7 @@ class DeathAndLives(Base):
     def setUp(self) -> None:
         super().setUp()
         self.start()
+        self.strip_dots()
 
     def die_on_spikes(self) -> None:
         g = self.g
@@ -496,9 +527,10 @@ class DeathAndLives(Base):
         self.die_on_spikes()
         g.run(DIE_FRAMES)
         self.assertEqual((g.mode, g.lives), (SPAWN, 2))
-        self.assertEqual((g.px, g.py, g.state, g.left, g.score16), (SPAWN_X, SPAWN_Y, GROUND, 8, 10), "the score is kept")
+        self.assertEqual((g.px, g.py, g.state, g.left, g.score16), (SPAWN_X, SPAWN_Y, GROUND, LEVEL_ITEMS[0], 10), "the score is kept")
         self.assertEqual(g.tile(14, 22), T_ITEM, "the level is restored")
-        self.assertEqual(self.row(0).rstrip(), hud(10, lives=2))
+        self.assertIn(TILE["BRICK_DOT"], g.mem(g.screen_addr + 23 * COLS, 256)[:COLS], "...dots and all")
+        self.assertEqual(self.row(0).rstrip(), hud(10, lives=2, left=LEVEL_ITEMS[0]))
         g.run(SPAWN_FRAMES)
         self.assertEqual(g.mode, PLAY)
 
@@ -608,18 +640,55 @@ class LevelClear(Base):
     def setUp(self) -> None:
         super().setUp()
         self.start()
+        self.strip_dots()
 
-    def finish_level(self) -> None:
+    DOOR = (36, 7)  # level 1's exit: bottom half here, top half in the row above, on the top floor
+
+    def take_the_last_item(self) -> None:
+        """Pick up one item with only that one left, which opens the door."""
         g = self.g
         g.step(RIGHT, 20)
         g.poke("left", 1)
         for _ in range(40):
             g.step(RIGHT)
+            if g.left == 0:
+                break
+        self.assertEqual(g.left, 0)
+
+    def walk_into_the_door(self) -> None:
+        g = self.g
+        g.poke("px", self.DOOR[0] * 4 - 12)
+        g.poke("py", FLOOR_Y[8])
+        g.poke("state", GROUND)
+        g.idle(2)
+        for _ in range(40):
+            g.step(RIGHT)
             if g.mode == CLEAR:
                 break
-        self.assertEqual(g.mode, CLEAR)
 
-    def test_clearing_the_last_item_gives_a_bonus_and_celebrates(self) -> None:
+    def finish_level(self) -> None:
+        self.take_the_last_item()
+        self.walk_into_the_door()
+        self.assertEqual(self.g.mode, CLEAR)
+
+    def test_the_door_is_shut_until_everything_is_collected(self) -> None:
+        g = self.g
+        col, row = self.DOOR
+        self.assertEqual((g.tile(col, row), g.tile(col, row - 1)), (TILE["DOOR"], TILE["DOOR_TOP"]))
+        self.walk_into_the_door()
+        self.assertEqual(g.mode, PLAY, "a shut door lets you walk in front of it")
+        self.assertEqual(g.score16, 0)
+
+    def test_taking_the_last_thing_opens_the_door(self) -> None:
+        g = self.g
+        self.take_the_last_item()
+        col, row = self.DOOR
+        self.assertEqual((g.tile(col, row), g.tile(col, row - 1)), (TILE["DOOR_OPEN"], TILE["DOOR_OPEN_TOP"]))
+        self.assertEqual(g.mode, PLAY, "the level is not over until you walk through")
+        self.assertGreater(g.flash, 0)
+        self.assertEqual(g.score16, 10, "no bonus yet")
+
+    def test_clearing_the_level_gives_a_bonus_and_celebrates(self) -> None:
         g = self.g
         self.finish_level()
         self.assertEqual(g.score16, 10 + 100)
@@ -634,8 +703,8 @@ class LevelClear(Base):
         self.finish_level()
         g.run(CLEAR_FRAMES + 1)
         self.assertEqual(g.mode, SPAWN)
-        self.assertEqual((g.level, g.lvlidx, g.left, g.lives, g.score16), (2, 1, 11, 3, 110))
-        self.assertEqual(self.row(0).rstrip(), hud(110, level=2, left=11))
+        self.assertEqual((g.level, g.lvlidx, g.left, g.lives, g.score16), (2, 1, LEVEL_ITEMS[1], 3, 110))
+        self.assertEqual(self.row(0).rstrip(), hud(110, level=2, left=LEVEL_ITEMS[1]))
         self.assertEqual(g.tile(4, 7), T_ITEM, "level 2's map")
         g.run(SPAWN_FRAMES)
         self.assertEqual(g.mode, PLAY)
@@ -644,22 +713,82 @@ class LevelClear(Base):
         g = self.g
         self.finish_level()
         g.run(CLEAR_FRAMES + 1 + SPAWN_FRAMES)
+        self.strip_dots()
+        base = g.score16  # (he may have eaten the dot he spawned on before it was stripped)
         g.step(RIGHT, 30)  # picks up level 2's first item, at column 8
-        self.assertEqual(g.score16, 120)
+        self.assertEqual(g.score16, base + 10)
         self.kill()
         g.run(DIE_FRAMES)
-        self.assertEqual((g.mode, g.level, g.lives, g.score16, g.left), (SPAWN, 2, 2, 120, 11))
+        self.assertEqual((g.mode, g.level, g.lives, g.score16, g.left), (SPAWN, 2, 2, base + 10, LEVEL_ITEMS[1]))
 
     def test_levels_wrap_around_but_the_counter_keeps_counting(self) -> None:
         g = self.g
         g.poke("level", 5)
         g.poke("lvlidx", 4)  # the last map (there are five)
-        g.step(RIGHT, 20)
-        g.poke("left", 1)
-        g.run(40, RIGHT)
+        g.poke("mtimer", 0)
+        g.poke("mode", CLEAR)
         g.run(CLEAR_FRAMES + 2)
         self.assertEqual((g.mode, g.level, g.lvlidx), (SPAWN, 6, 0))
         self.assertEqual(self.row(0)[18:20], "06")
+
+
+# ---------------------------------------------------------------------------
+@needs_emulator
+class Dots(Base):
+    def cells(self, *tiles: int) -> list[tuple[int, int]]:
+        raw = self.g.mem(self.g.screen_addr, 1024)
+        return [(i % COLS, i // COLS) for i in range(COLS, COLS * 24) if raw[i] in tiles]
+
+    def test_the_level_starts_with_the_count_of_its_dots_and_items(self) -> None:
+        g = self.start()
+        dotted = self.cells(*_DOTTED)
+        self.assertGreater(len(dotted), 20)
+        self.assertEqual(g.left, len(dotted) + len(self.cells(T_ITEM)))
+        self.assertEqual(g.left, LEVEL_ITEMS[0])
+
+    def test_walking_over_dots_eats_them_one_point_each(self) -> None:
+        g = self.start()
+        before = set(self.cells(*_DOTTED))
+        left = g.left
+        g.step(RIGHT, 30)
+        g.idle()
+        eaten = before - set(self.cells(*_DOTTED))
+        self.assertGreaterEqual(len(eaten), 3)
+        self.assertTrue(all(row == 23 for _, row in eaten), "the ones on the floor he walked along")
+        self.assertEqual(g.score16, len(eaten))
+        self.assertEqual(g.left, left - len(eaten))
+        for col, row in eaten:
+            self.assertEqual(g.tile(col, row), TILE["BRICK"], "the tile is a plain tile again, and still solid")
+        self.assertEqual(g.state, GROUND)
+
+    def test_a_dot_is_eaten_only_once(self) -> None:
+        g = self.start()
+        g.step(RIGHT, 30)
+        g.idle()
+        score = g.score16
+        g.step(LEFT, 12)
+        g.step(RIGHT, 12)
+        self.assertEqual(g.score16, score)
+
+    def test_a_dotted_tile_is_solid_and_walkable_like_a_plain_one(self) -> None:
+        g = self.start()
+        g.step(RIGHT, 40)  # (the spikes are at column 20)
+        self.assertEqual((g.state, g.py, g.mode), (GROUND, FLOOR_Y[23], PLAY))
+
+    def test_a_dot_is_not_eaten_by_jumping_over_it(self) -> None:
+        g = self.start()
+        g.poke("px", 30 * 4)  # a clear stretch of the floor (the spikes are at column 20)
+        g.poke("py", FLOOR_Y[23])
+        g.idle(2)
+        g.step(FIRE | RIGHT)  # take-off (it may eat the one it stood on)
+        dots = set(self.cells(*_DOTTED))
+        flying = 0
+        while g.state == AIR and flying < 40:
+            g.step(RIGHT)
+            flying += 1
+            if g.state == AIR:
+                self.assertEqual(set(self.cells(*_DOTTED)), dots, "nothing is eaten in the air")
+        self.assertGreater(flying, 5, "it jumped")
 
 
 # ---------------------------------------------------------------------------
@@ -698,7 +827,7 @@ class AttractMode(Base):
         self.begin_demo()
         g.run(300)
         self.assertEqual(g.deaths, 0)
-        self.assertLess(g.left, 8, "it collected items")
+        self.assertLess(g.left, LEVEL_ITEMS[0] - 20, "it ate dots and collected items")
         self.assertGreater(g.score16, 0)
         self.assertEqual(g.lives, 3, "a demo does not use up lives")
 

@@ -40,8 +40,10 @@ class LevelCheck(unittest.TestCase):
 
     def test_an_item_on_a_ledge_out_of_reach_is_reported(self) -> None:
         problems = lc.check(make({(20, 12): "*", **{(c, 13): "#" for c in range(18, 23)}}))
-        self.assertEqual(len(problems), 1)
-        self.assertIn("column 20, row 12", problems[0])
+        items = [p for p in problems if p.startswith("item")]
+        self.assertEqual(len(items), 1)
+        self.assertIn("column 20, row 12", items[0])
+        self.assertTrue(all("dot" in p for p in problems if p not in items), "the ledge's dots can't be reached either")
 
     def test_a_ladder_makes_the_ledge_reachable(self) -> None:
         edits = {(20, 12): "*", **{(c, 13): "#" for c in range(18, 23)}}
@@ -70,6 +72,19 @@ class LevelCheck(unittest.TestCase):
         self.assertTrue(any("headroom" in p for p in problems), problems)
         edits = {(20, 22): "^", **{(c, 18): "#" for c in range(15, 26)}}
         self.assertEqual(lc.check(make(edits)), [])
+
+    def test_the_dots_on_a_ledge_out_of_reach_are_reported(self) -> None:
+        problems = lc.check(make({(30, 22): "*", **{(c, 13): "#" for c in range(18, 23)}}))  # five tiles: end, 3 middles, end -> dots at 19 and 21
+        self.assertEqual(sorted(problems), ["the dot on the platform at column 19, row 13 looks unreachable",
+                                            "the dot on the platform at column 21, row 13 looks unreachable"])
+
+    def test_the_floor_dots_are_reachable(self) -> None:
+        self.assertEqual(lc.check(make({(30, 22): "*"})), [])
+
+    def test_the_door_must_be_reachable_too(self) -> None:
+        self.assertEqual(lc.check(make({(30, 22): "D"})), [])
+        problems = lc.check(make({(20, 12): "D", **{(c, 13): "#" for c in range(18, 23)}}))
+        self.assertTrue(any(p.startswith("door at column 20, row 12") for p in problems), problems)
 
     def test_a_missing_start_is_reported(self) -> None:
         path = make({(2, 21): "."})

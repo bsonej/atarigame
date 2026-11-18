@@ -21,9 +21,11 @@
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
         .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir
         .export tt_col, tt_row, tt_t, tt_ph, tt_kind, tt_orig, pg_x, pg_y, pg_min, pg_max, pg_dir, pg_wait, cph
+        .export pal0, pal1, pal2, pal3, dli_row, dli_n, ai_kind
 
         .include "gen/tiles.inc"
         .include "gen/font.inc"                 ; .charmap: .byte "TEXT" gives glyph ids
+        .include "gen/palette.inc"              ; PAL_* colours and pal_hues
 
 ; ---- OS and hardware registers --------------------------------------------
 RTCLOK  = $12           ; frame counter, low byte at RTCLOK+2
@@ -48,6 +50,13 @@ COLOR2  = $02C6         ; ... value 3
 COLOR3  = $02C7         ; ... value 3 in a glyph with bit 7 set (lowercase text)
 COLOR4  = $02C8         ; background
 CHBAS   = $02F4
+VDSLST  = $0200         ; display-list interrupt vector
+COLPF0  = $D016         ; hardware colour registers (the DLI changes these per row)
+COLPF1  = $D017
+COLPF2  = $D018
+COLPF3  = $D019
+WSYNC   = $D40A
+NMIEN   = $D40E
 HPOSP0  = $D000
 HPOSP1  = $D001         ; HPOSP2 follows: pegs are Player 1 and 2
 SIZEP0  = $D008
@@ -90,6 +99,8 @@ JOY_LEFT  = $04
 JOY_RIGHT = $08
 JOY_FIRE  = $10
 
+F_DOT     = 4           ; tile_flags bit: a platform tile with a dot in it (assets/tiles.txt)
+
 T_CONV_FIRST = T_CONV_R_SLOW    ; the eight belt tiles are consecutive, see assets/tiles.txt
 CONV_GLYPHS  = CHARSET_ADDR + T_CONV_FIRST * 8
 
@@ -111,6 +122,7 @@ MAX_FALL   = 64         ; falling further than this (pixels) kills
 SPR_H      = 16
 START_LIVES = 3
 ITEM_POINTS = 10
+DOT_POINTS  = 1
 CLEAR_BONUS = 100
 SPAWN_FRAMES = 48       ; length of the "come to life" animation
 DIE_FRAMES   = 80       ; length of the death animation
@@ -215,6 +227,16 @@ pg_max:   .res 2
 pg_dir:   .res 2        ;       1 = right, $FF = left
 pg_wait:  .res 2
 cph:      .res 8        ; animation phase of each belt tile
+pal0:     .res 24       ; colour of pixel value 1, 2, 3, alt 3 for each row of the screen; the display-list
+pal1:     .res 24       ; interrupt copies row n+1's colours into the hardware at the end of row n
+pal2:     .res 24
+pal3:     .res 24
+dli_row:  .res 1        ; the row the next interrupt sets up (1..23)
+dli_n:    .res 1        ; interrupts so far (test build only)
+ai_kind:  .res 1        ; the AI's target: 0 = item or door, 1 = a dot
+a_row:    .res 1
+a_k:      .res 1
+a_tr:     .res 1
 
 ; ---------------------------------------------------------------------------
         .macro SETDST addr
@@ -291,6 +313,12 @@ start:
         sta SDLSTL
         lda #>dlist
         sta SDLSTL+1
+        lda #<dli
+        sta VDSLST
+        lda #>dli
+        sta VDSLST+1
+        lda #1
+        sta dli_row
         lda #>CHARSET_ADDR
         sta CHBAS
         lda #1
@@ -304,6 +332,8 @@ start:
         jsr enter_title
         lda #$3A                ; DL DMA + single-line PM + players + normal width
         sta SDMCTL
+        lda #$C0                ; vertical blank + display-list interrupts
+        sta NMIEN
 
 mainloop:
         jsr vwait
@@ -1183,8 +1213,13 @@ check_tiles:
         stx tmp2
         jsr get_tile
         cmp #T_ITEM
+        beq @item
+        cmp #T_DOOR_OPEN        ; the door is only open once everything is collected
+        beq @door
+        cmp #T_DOOR_OPEN_TOP
         bne @skip
-        lda #T_EMPTY
+@door:  jmp level_clear
+@item:  lda #T_EMPTY
         ldy #0
         sta (ptr),y             ; remove it from the screen
         jsr pickup
@@ -1216,17 +1251,40 @@ check_tiles:
         jmp die
 @safe:  rts
 
+; An item is picked up (it is already off the screen).
 pickup:
-        lda #ITEM_POINTS
-        jsr add_score
-        dec left
         lda #8
         sta snd
         lda #$28
         sta sndf
-        lda left
+        lda #ITEM_POINTS
+        jmp collected
+
+; A dot is eaten.
+pickup_dot:
+        lda #2
+        sta snd
+        lda #$40
+        sta sndf
+        lda #DOT_POINTS
+collected:
+        jsr add_score
+        dec left
         bne @rts
-        lda #CLEAR_BONUS        ; level cleared
+        jsr open_doors          ; that was the last one: the exit opens
+        lda #14
+        sta snd
+        lda #$20
+        sta sndf
+        lda #$A8                ; cyan flash
+        sta flashc
+        lda #12
+        sta flash
+@rts:   rts
+
+; Walking into the open door finishes the level.
+level_clear:
+        lda #CLEAR_BONUS
         jsr add_score
         lda #M_CLEAR
         sta mode
@@ -1238,7 +1296,64 @@ pickup:
         sta flashc
         lda #25
         sta flash
-@rts:   rts
+        rts
+
+; Swap every closed door on the screen for an open one.
+open_doors:
+        lda #<SCREEN
+        sta ptr
+        lda #>SCREEN
+        sta ptr+1
+        ldx #4
+@page:  ldy #0
+@b:     lda (ptr),y
+        cmp #T_DOOR
+        bne @top
+        lda #T_DOOR_OPEN
+        sta (ptr),y
+        bne @n                  ; (always: the new tile is not 0)
+@top:   cmp #T_DOOR_TOP
+        bne @n
+        lda #T_DOOR_OPEN_TOP
+        sta (ptr),y
+@n:     iny
+        bne @b
+        inc ptr+1
+        dex
+        bne @page
+        rts
+
+; Standing on a platform tile with a dot in it eats the dot (either foot counts).
+eat_dots:
+        lda state
+        bne eat_end             ; only when standing
+        lda px
+        sta tx
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+        jsr eat_at
+        lda px
+        clc
+        adc #3
+        sta tx
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+eat_at: lda ty
+        cmp #192
+        bcs eat_end             ; off the bottom of the screen
+        jsr get_tile            ; X = the byte on the screen, ptr -> its cell
+        lda tile_flags,x
+        and #F_DOT
+        beq eat_end
+        lda tile_canon,x        ; the plain tile stays behind
+        ldy #0
+        sta (ptr),y
+        jmp pickup_dot
+eat_end: rts
 
 ; A points onto the 16-bit score (stops at 65535).
 add_score:
@@ -1287,6 +1402,7 @@ mode_play:
         cmp #M_PLAY
         bne @draw
         jsr arm_under           ; bomb blocks and vanishing blocks under the feet
+        jsr eat_dots
         jsr update_timed
         jsr update_pegs
         lda mode
@@ -1584,6 +1700,7 @@ enter_gameover:
         jsr title_colors
         lda #$44
         sta COLOR3              ; red "game over"
+        jsr pal_uniform
         lda score
         sta dn
         lda score+1
@@ -1674,17 +1791,36 @@ copy_map:
         bne @page
         rts
 
+; The play screen's colours: the score row has its own, every other row gets a hue from pal_hues (stepping
+; along the list from row to row, offset by the level) plus grey, white and ice blue.
 game_colors:
-        lda #$2A
-        sta COLOR0              ; bright orange
-        lda #$24
-        sta COLOR1              ; brown
-        lda #$0E
-        sta COLOR2              ; white
-        lda #$AA
-        sta COLOR3              ; cyan: ice
-        lda #$00
-        sta COLOR4              ; black
+        lda #PAL_HUD
+        sta COLOR0              ; the score row
+        lda #PAL_GREY
+        sta COLOR1
+        lda #PAL_WHITE
+        sta COLOR2
+        lda #PAL_ICE
+        sta COLOR3
+        lda #PAL_BG
+        sta COLOR4
+        ldx #1
+@row:   txa
+        clc
+        adc lvlidx
+        and #7
+        tay
+        lda pal_hues,y
+        sta pal0,x
+        lda #PAL_GREY
+        sta pal1,x
+        lda #PAL_WHITE
+        sta pal2,x
+        lda #PAL_ICE
+        sta pal3,x
+        inx
+        cpx #24
+        bne @row
         lda #$1E
         sta PCOLR0              ; yellow player
         lda #$46
@@ -1703,7 +1839,54 @@ title_colors:
         sta COLOR3              ; yellow title text
         lda #$00
         sta COLOR4
+        ; fall through: every row gets the colours just set
+
+; Every row of the screen uses COLOR0-3 (the title and game over screens are not banded).
+pal_uniform:
+        ldx #23
+@l:     lda COLOR0
+        sta pal0,x
+        lda COLOR1
+        sta pal1,x
+        lda COLOR2
+        sta pal2,x
+        lda COLOR3
+        sta pal3,x
+        dex
+        bpl @l
         rts
+
+; Display-list interrupt: runs at the last line of a row; sets the colours of the next one.
+dli:
+        pha
+        txa
+        pha
+        tya
+        pha
+.ifdef TEST
+        inc dli_n
+.endif
+        ldx dli_row
+        lda pal0,x
+        ldy pal1,x
+        sta WSYNC
+        sta COLPF0
+        sty COLPF1
+        lda pal2,x
+        sta COLPF2
+        lda pal3,x
+        sta COLPF3
+        inx
+        cpx #24
+        bcc @keep
+        ldx #1                  ; the row after the last: the next frame starts again at row 1
+@keep:  stx dli_row
+        pla
+        tay
+        pla
+        tax
+        pla
+        rti
 
 ; Zero the player/missile RAM.
 clear_pm:
@@ -1900,7 +2083,7 @@ draw_hud:
         lda #0
         sta dn+1
         SETDST SCREEN + 36
-        ldx #2
+        ldx #3
         jmp put_dec
 
 ; Background flash and sound effects.
@@ -2439,18 +2622,8 @@ ai_input:
         sta joy
         lda ai_have
         beq @pick
-        ldx ai_ir               ; is the target still there?
-        lda row_lo,x
-        clc
-        adc ai_ic
-        sta ptr
-        lda row_hi,x
-        adc #0
-        sta ptr+1
-        ldy #0
-        lda (ptr),y
-        cmp #T_ITEM
-        beq @go
+        jsr ai_valid            ; is the target still there?
+        bcs @go
 @pick:  jsr ai_pick
         lda ai_have
         beq @rts
@@ -2465,7 +2638,39 @@ ai_input:
         jmp ai_ground
 @rts:   rts
 
-; Choose the cheapest item on the screen.
+; C set if the AI's target is still there. A target is an item or the open door (kind 0: the cell itself) or a
+; platform tile with a dot in it (kind 1: the tile under the cell the AI stands in to eat it).
+ai_valid:
+        ldx ai_ir
+        lda ai_kind
+        beq @row
+        inx
+@row:   lda row_lo,x
+        clc
+        adc ai_ic
+        sta ptr
+        lda row_hi,x
+        adc #0
+        sta ptr+1
+        ldy #0
+        lda (ptr),y
+        ldx ai_kind
+        bne @dot
+        cmp #T_ITEM
+        beq @yes
+        cmp #T_DOOR_OPEN
+        beq @yes
+@no:    clc
+        rts
+@dot:   tax
+        lda tile_flags,x
+        and #F_DOT
+        beq @no
+@yes:   sec
+        rts
+
+; Choose the cheapest target on the screen: an item, a dot, or (once everything is collected) the open door.
+; Cost = columns apart + 8 per row apart.
 ai_pick:
         lda #0
         sta ai_have
@@ -2484,15 +2689,32 @@ ai_pick:
         lsr a
         lsr a
         sta a_fp                ; player body row
-        ldx #1
-@row:   lda row_lo,x
+        lda #1
+        sta a_row
+@row:   ldx a_row
+        lda row_lo,x
         sta ptr
         lda row_hi,x
         sta ptr+1
         ldy #0
 @col:   lda (ptr),y
+        beq @next               ; empty (most cells)
+        ldx #0                  ; kind 0: the cell is the target
+        stx a_k
         cmp #T_ITEM
-        bne @next
+        beq @cand
+        cmp #T_DOOR_OPEN
+        beq @cand
+        tax
+        lda tile_flags,x
+        and #F_DOT
+        beq @next
+        lda #1                  ; kind 1: stand in the cell above the dotted tile
+        sta a_k
+@cand:  lda a_row               ; the row the player stands in to get it
+        sec
+        sbc a_k
+        sta a_tr
         tya                     ; |column - player column|
         sec
         sbc a_pc
@@ -2500,7 +2722,7 @@ ai_pick:
         eor #$FF
         adc #1
 @p:     sta a_cost
-        txa                     ; 8 * |row - player row|
+        lda a_tr                ; 8 * |row - player row|
         sec
         sbc a_fp
         bcs @q
@@ -2517,14 +2739,18 @@ ai_pick:
         bcs @next
         sta a_best
         sty ai_ic
-        stx ai_ir
+        lda a_tr
+        sta ai_ir
+        lda a_k
+        sta ai_kind
         lda #1
         sta ai_have
 @next:  iny
         cpy #40
         bne @col
-        inx
-        cpx #24
+        inc a_row
+        lda a_row
+        cmp #24
         bne @row
         rts
 
@@ -2655,9 +2881,11 @@ ai_ground:
 @goleft:
         lda #JOY_LEFT           ; ---- walking left
         sta joy
-        lda px                  ; spike 8 pixels ahead on the way to the goal?
+        lda #8                  ; spike 8 pixels ahead on the way to the goal (and again 4 ahead, in case a
+        sta a_k                 ; new target came up while it was passing)?
+@lspk:  lda px
         sec
-        sbc #8
+        sbc a_k
         sta tx
         lda py
         clc
@@ -2665,11 +2893,18 @@ ai_ground:
         sta ty
         jsr get_tile
         cmp #T_SPIKE
-        bne @lhole
+        bne @lnxt
         lda tx
         and #$FC
         cmp ai_goal
-        bcs @jump               ; the spike lies between us and the goal
+        bcc @lnxt
+        jmp @jump               ; the spike lies between us and the goal
+@lnxt:  lda a_k
+        cmp #4
+        beq @lhole
+        lda #4
+        sta a_k
+        bne @lspk               ; (always)
 @lhole: lda px                  ; nothing to stand on after the next step?
         sec
         sbc #1
@@ -2696,9 +2931,11 @@ ai_ground:
 @goright:
         lda #JOY_RIGHT          ; ---- walking right
         sta joy
-        lda px
+        lda #10                 ; spike 10 pixels ahead (and 6, as on the left)?
+        sta a_k
+@rspk:  lda px
         clc
-        adc #10
+        adc a_k
         sta tx
         lda py
         clc
@@ -2706,11 +2943,18 @@ ai_ground:
         sta ty
         jsr get_tile
         cmp #T_SPIKE
-        bne @rhole
+        bne @rnxt
         lda tx
         and #$FC
         cmp ai_goal
-        bcc @jump
+        bcs @rnxt
+        jmp @jump
+@rnxt:  lda a_k
+        cmp #6
+        beq @rhole
+        lda #6
+        sta a_k
+        bne @rspk               ; (always)
 @rhole: lda px
         clc
         adc #1
@@ -2815,11 +3059,12 @@ str_blank19: BLANK 19
         .segment "DLIST"
 dlist:
         .byte $70,$70,$70               ; 24 blank scan lines
-        .byte $44                       ; mode 4 + load memory scan
+        .byte $C4                       ; mode 4 + load memory scan + interrupt
         .word SCREEN
-        .repeat 23
-        .byte $04
+        .repeat 22
+        .byte $84                       ; mode 4 + interrupt: sets up the next row's colours
         .endrepeat
+        .byte $04
         .byte $41                       ; jump and wait for vertical blank
         .word dlist
 
