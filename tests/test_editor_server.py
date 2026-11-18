@@ -75,7 +75,7 @@ class Reading(ServerCase):
         for plain, twin in (("SLIDE_R", "SLIDE_R_B"), ("SLIDE_L", "SLIDE_L_B")):  # the chutes' twins, for odd rows
             self.assertEqual(api["twins"][str(by_name[plain]["byte"])], by_name[twin]["byte"])
             self.assertEqual(api["canon"][by_name[twin]["byte"]], by_name[plain]["byte"])
-            self.assertEqual((by_name[twin]["twinOf"], by_name[twin]["oneway"], by_name[twin]["char"]), (plain, True, None))
+            self.assertEqual((by_name[twin]["twinOf"], by_name[twin]["oneway"], by_name[twin]["char"]), (plain, False, None))
         self.assertEqual(len(api["sprites"]), 13)
         self.assertEqual(len(api["sprites"][0]["rows"]), 16)
         for t in api["tiles"]:

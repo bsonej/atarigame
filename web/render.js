@@ -44,11 +44,12 @@ const CONV_FIRST = 64;
 
 /**
  * The chutes' screw thread (animate_chutes in main.s). `helix` is the 16 rows of a chute's thread (its tile's 8 rows,
- * then its twin's 8). Every second frame the thread moves one row down the stack: the plain tile (even screen rows)
- * shows 8 rows from the phase on, its twin (odd rows) the next 8. Returns [rows of the plain tile, rows of the twin].
+ * then its twin's 8). Every second frame the thread moves one row along the stack - down for a down chute, up for an
+ * up chute (`up`): the plain tile (even screen rows) shows 8 rows from the phase on, its twin (odd rows) the next 8.
+ * Returns [rows of the plain tile, rows of the twin].
  */
-export function chuteFrame(helix, tick) {
-  const ph = ((tick >> 1) & 15) ^ 15;
+export function chuteFrame(helix, tick, up = false) {
+  const ph = up ? (tick >> 1) & 15 : ((tick >> 1) & 15) ^ 15;
   const at = (y) => helix[(y + ph) & 15];
   return [[0, 1, 2, 3, 4, 5, 6, 7].map(at), [8, 9, 10, 11, 12, 13, 14, 15].map(at)];
 }
@@ -85,7 +86,7 @@ export class Atlas {
     for (const t of api.tiles) byName[t.name] = t;
     this.chutes = ['SLIDE_R', 'SLIDE_L']
       .filter((n) => byName[n] && byName[`${n}_B`])
-      .map((n) => ({ a: byName[n].byte, b: byName[`${n}_B`].byte, helix: [...byName[n].rows, ...byName[`${n}_B`].rows] }));
+      .map((n) => ({ a: byName[n].byte, b: byName[`${n}_B`].byte, helix: [...byName[n].rows, ...byName[`${n}_B`].rows], up: n === 'SLIDE_L' }));
   }
 
   /** The canvas holding the tiles as they look in screen row `row`. */
@@ -122,7 +123,7 @@ export class Atlas {
     if (ph === this.chuteTick) return;
     this.chuteTick = ph;
     for (const c of this.chutes) {
-      const [a, b] = chuteFrame(c.helix, tick);
+      const [a, b] = chuteFrame(c.helix, tick, c.up);
       this.rows[c.a] = a;
       this.rows[c.b] = b;
       this.paint(c.a);

@@ -11,10 +11,12 @@ export const ROWS = 24;
 
 export const JOY = { UP: 1, DOWN: 2, LEFT: 4, RIGHT: 8, FIRE: 16 };
 export const MODE = { TITLE: 0, PLAY: 1, DYING: 2, SPAWN: 3, CLEAR: 4, OVER: 5 };
-export const STATE = { GROUND: 0, AIR: 1, CLIMB: 2 };
+export const STATE = { GROUND: 0, AIR: 1, CLIMB: 2, RIDE: 3 }; // RIDE: carried along a chute, joystick ignored
 // Sprite frames (assets/sprites.txt): families to which `face` (0 at you, 1 right, 2 left) is added.
 export const FRAME = { STAND: 0, LEAN: 3, SQUASH: 5, STRETCH: 8, DIE_A: 11, DIE_B: 12 };
 const LAND_FRAMES = 4; // how long he stays squashed after landing
+const HOP_JT = 8; // the hop out of the top of an up chute starts this far into the jump table (5 pixels up) ...
+const HOP_FRAMES = 4; // ... and drifts sideways this many pixels (enough to leave the chute's column)
 
 const KIND_EXPL = 0;
 const KIND_VANISH = 1;
@@ -41,7 +43,7 @@ export const SPAWN_FRAMES = 48;
 export const DIE_FRAMES = 80;
 export const CLEAR_FRAMES = 60;
 
-const JUMP_DY = [3, 3, 3, 2, 2, 2, 1, 1, 1, 0];
+const JUMP_DY = [3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 0];
 const DIE_DY = [0xfc, 0xfc, 0xfd, 0xfd, 0xfe, 0xfe, 0xff, 0xff, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
 const CONV_DIR = [0, 0, 0, 0, 1, 1, 1, 1];
 const CONV_SPD = [8, 16, 32, 0, 8, 16, 32, 0];
@@ -103,6 +105,9 @@ export class Game {
     this.left = lv.items;
     this.state = STATE.GROUND;
     this.jt = 0xff;
+    this.hop = 0; // frames of forced sideways drift left (the hop out of an up chute)
+    this.hdir = 0; // which way that drift goes (the way he faced when the ride ended): 2 = left, else right
+    this.rkind = 0; // which chute he rides: 0 down, 1 up
     this.fall = 0;
     this.anim = 0;
     this.moved = 0;
@@ -125,7 +130,7 @@ export class Game {
     return {
       mode: this.mode, px: this.px, py: this.py, state: this.state, left: this.left, lives: this.lives,
       score: this.score, jt: this.jt, fall: this.fall, vx: this.vx, vfrac: this.vfrac, under: this.under,
-      cacc: this.cacc, mtimer: this.mtimer, frame: this.frame, face: this.face,
+      cacc: this.cacc, mtimer: this.mtimer, frame: this.frame, face: this.face, hop: this.hop,
       doorOpen: this.doorOpen, doorDir: u8(this.doorDir), doorPhase: this.doorPhase,
     };
   }
@@ -173,23 +178,73 @@ export class Game {
     return this.getTile(u8(this.px + 2), u8(this.py + SPR_H)) === this.T.LADDER;
   }
 
-  isStep(t) {
+  isChute(t) {
     return t === this.T.SLIDE_R || t === this.T.SLIDE_L;
   }
 
-  /** A chute exactly one tile below the feet: slide down onto it. */
-  stepDown() {
-    const ty = u8(this.py + 24);
-    if (this.isStep(this.getTile(this.px, ty)) || this.isStep(this.getTile(u8(this.px + 3), ty))) {
-      this.py = u8(this.py + 8);
-      return true;
+  /**
+   * Chutes are vertical, one tile wide, neither solid nor a surface: he passes straight through them in the air. Only
+   * WALKING into one catches him: a chute at the middle of his body column (px+2) at his body rows (py+8, py+15), or
+   * directly under his feet (py+16: a chute that fills a gap in the floor). He is then locked in (STATE.RIDE).
+   * A DOWN chute only catches him from under his feet: at the body rows alone (it stands on the floor he walks on) it
+   * has nowhere to take him, and would only snap him back every frame (see chute_catch in main.s).
+   */
+  chuteCatch() {
+    const tx = u8(this.px + 2);
+    let t = this.getTile(tx, u8(this.py + 8));
+    if (t !== this.T.SLIDE_L) {
+      t = this.getTile(tx, u8(this.py + 15));
+      if (t !== this.T.SLIDE_L) {
+        t = this.getTile(tx, u8(this.py + SPR_H));
+        if (!this.isChute(t)) return false;
+      }
     }
-    return false;
+    this.rkind = t === this.T.SLIDE_R ? 0 : 1;
+    this.px = u8(this.px + 2) & 0xfc; // snap to the tile column
+    this.py &= 0xfe; // (even, so 2 pixel steps meet a tile edge exactly)
+    this.state = STATE.RIDE;
+    this.jt = 0xff;
+    this.fall = 0;
+    this.vx = 0;
+    this.vfrac = 0;
+    this.hop = 0;
+    return true;
+  }
+
+  /** One frame of the ride: down while a chute is under the feet, up while one is at the feet row; then released. */
+  upRide() {
+    this.px = u8(this.px + 2) & 0xfc;
+    const tx = this.px;
+    let hop = false;
+    if (this.rkind === 0) {
+      if (this.getTile(tx, u8(this.py + SPR_H)) === this.T.SLIDE_R) {
+        this.py = u8(this.py + 2);
+        return;
+      }
+    } else {
+      if (this.py >= 10 && this.getTile(tx, u8(this.py + 15)) === this.T.SLIDE_L) {
+        this.py = u8(this.py - 2);
+        return;
+      }
+      hop = true; // his feet are above the top tile: hop out the way he faces
+    }
+    if (hop) {
+      this.hdir = this.face; // (he does not turn while riding: the joystick is ignored)
+      this.jt = HOP_JT;
+      this.hop = HOP_FRAMES;
+    } else {
+      this.jt = 0xff;
+      this.hop = 0;
+    }
+    this.state = STATE.AIR;
+    this.fall = 0;
+    this.vx = 0;
+    this.vfrac = 0;
   }
 
   isSurface(t) {
     const T = this.T;
-    return t === T.SLIDE_R || t === T.SLIDE_L || t === T.ICE || t === T.ROLLER || u8(t - this.convFirst) < 8;
+    return t === T.ICE || t === T.ROLLER || u8(t - this.convFirst) < 8;
   }
 
   // ---- one frame -----------------------------------------------------------------------------
@@ -286,13 +341,18 @@ export class Game {
   }
 
   chooseFrame() {
-    if (this.joy & JOY.RIGHT) this.face = 1;
+    if (this.state === STATE.RIDE) {
+      // locked in a chute he does not turn, whatever the joystick says
+    } else if (this.joy & JOY.RIGHT) this.face = 1;
     else if (this.joy & JOY.LEFT) this.face = 2;
     if (this.lastSt === STATE.AIR && this.state === STATE.GROUND) this.landT = LAND_FRAMES; // landing: squash
     this.lastSt = this.state;
     if (this.state === STATE.CLIMB) {
       this.landT = 0;
       this.frame = this.moved ? FRAME.LEAN + ((this.anim >> 2) & 1) : FRAME.STAND; // wobbling up the ladder
+    } else if (this.state === STATE.RIDE) {
+      this.landT = 0;
+      this.frame = FRAME.STAND + this.face; // riding a chute: standing, looking the way he last went
     } else if (this.state === STATE.AIR) {
       this.landT = 0;
       this.frame = (this.jt < 3 ? FRAME.SQUASH : FRAME.STRETCH) + this.face; // squashed at take-off, then stretched
@@ -309,11 +369,14 @@ export class Game {
     this.moved = 0;
     if (this.state === STATE.CLIMB) return this.upClimb();
     if (this.state === STATE.AIR) return this.upAir();
-    if (!this.groundBelow() && !this.stepDown()) {
+    if (this.state === STATE.RIDE) return this.upRide();
+    if (this.chuteCatch()) return; // walked into a chute: it carries him
+    if (!this.groundBelow()) {
       this.state = STATE.AIR; // walked off an edge
       this.fall = 0;
       this.vx = 0;
       this.vfrac = 0;
+      this.hop = 0;
       this.jt = 0xff;
       return;
     }
@@ -324,6 +387,7 @@ export class Game {
       this.fall = 0;
       this.vx = 0;
       this.vfrac = 0;
+      this.hop = 0;
       this.state = STATE.AIR;
       return this.doHoriz();
     }
@@ -340,21 +404,26 @@ export class Game {
     this.state = STATE.CLIMB;
     this.jt = 0xff;
     this.fall = 0;
+    this.hop = 0;
   }
 
   upAir() {
     if (this.joy & JOY.UP && this.ladderOverlap()) return this.startClimb();
-    this.doHoriz();
+    if (this.hop) {
+      this.hop--; // the hop out of an up chute: drift the way he faces, joystick ignored
+      if (this.hdir === 2) this.moveLeft();
+      else this.moveRight();
+    } else this.doHoriz();
     if (this.jt === 0xff) return this.airFall();
+    // Rising: nothing above him matters (no head bumps: he overlays blocks, bombs, platforms, chutes); only the score row is a ceiling.
     let n = JUMP_DY[this.jt];
     if (n === 0) {
       this.jt = 0xff;
       return;
     }
     while (n > 0) {
-      const ty = u8(this.py - 1);
-      if (this.getSolid(this.px, ty)[0] || this.getSolid(u8(this.px + 3), ty)[0]) {
-        this.jt = 0xff; // bumped our head
+      if (this.py < 9) {
+        this.jt = 0xff;
         return;
       }
       this.py = u8(this.py - 1);
@@ -363,9 +432,17 @@ export class Game {
     this.jt++;
   }
 
+  /** No solid in either foot column at the lowest row of the body (py+15); at the bottom of the screen the floor is the edge. */
+  feetClear() {
+    if (this.py >= 176) return true;
+    const ty = u8(this.py + 15);
+    return !this.getSolid(this.px, ty)[0] && !this.getSolid(u8(this.px + 3), ty)[0];
+  }
+
+  /** Falling: lands on the first surface under the feet, but never inside a solid (he keeps falling until clear). */
   airFall() {
     for (let i = 0; i < 2; i++) {
-      if (this.groundBelow()) {
+      if (this.groundBelow() && this.feetClear()) {
         if (this.fall > MAX_FALL) return this.die();
         this.state = STATE.GROUND;
         this.fall = 0;
@@ -410,11 +487,15 @@ export class Game {
   }
 
   /** The shared body of move_right / move_left: `tx` is the pixel column being stepped into. Stairs and chutes are not
-   *  solid: you walk through them (and jump up onto them). */
+   *  solid: you walk through them. */
   moveInto(tx, dir) {
-    if (this.getSolid(tx, this.py)[0]) return;
-    if (this.getSolid(tx, u8(this.py + 8))[0]) return;
-    if (this.getSolid(tx, u8(this.py + 15))[0]) return;
+    // a solid at the head, middle or feet row of that column blocks him, unless he is already inside a solid at that
+    // row on the edge he is on now (he rose into a block: he slides about in it and out of it, rather than being stuck)
+    const cx = u8(tx - dir);
+    for (const dy of [0, 8, 15]) {
+      const y = u8(this.py + dy);
+      if (this.getSolid(tx, y)[0] && !this.getSolid(cx, y)[0]) return;
+    }
     this.px = u8(this.px + dir);
     this.anim = u8(this.anim + 1);
     this.moved = u8(this.moved + 1);
@@ -444,7 +525,7 @@ export class Game {
     this.anim = a;
   }
 
-  /** Belts and chutes carry the player. Sets `under`. */
+  /** Belts carry the player. Sets `under`. */
   surfaceDrift() {
     let mid = 0;
     let found = false;
@@ -460,37 +541,26 @@ export class Game {
     if (!found) this.under = mid;
     const u = this.under;
     let speed;
-    let k0 = false; // true for a belt (not a chute)
-    if (u === this.T.SLIDE_R || u === this.T.SLIDE_L) {
-      this.cdir = u === this.T.SLIDE_R ? 0 : 1;
+    const k = u8(u - this.convFirst);
+    if (k >= 8) {
       this.cacc = 4;
       this.cacc_t = 0;
-      speed = 32;
+      this.cfrac = 0;
+      return;
+    }
+    this.cdir = CONV_DIR[k];
+    if (CONV_SPD[k]) {
+      this.cacc = 4;
+      this.cacc_t = 0;
+      speed = CONV_SPD[k];
     } else {
-      const k = u8(u - this.convFirst);
-      if (k >= 8) {
-        this.cacc = 4;
-        this.cacc_t = 0;
-        this.cfrac = 0;
-        return;
-      }
-      this.cdir = CONV_DIR[k];
-      k0 = true;
-      if (CONV_SPD[k]) {
-        this.cacc = 4;
-        this.cacc_t = 0;
-        speed = CONV_SPD[k];
-      } else {
-        this.cacc_t = u8(this.cacc_t + 1);
-        if ((this.cacc_t & 3) === 0 && this.cacc < 32) this.cacc++;
-        speed = this.cacc;
-      }
+      this.cacc_t = u8(this.cacc_t + 1);
+      if ((this.cacc_t & 3) === 0 && this.cacc < 32) this.cacc++;
+      speed = this.cacc;
     }
-    if (k0) {
-      // a belt turning against the way he is walking pulls at him only 3/8 as hard (he can always walk onto it)
-      const against = this.cdir ? this.joy & JOY.RIGHT : this.joy & JOY.LEFT;
-      if (against) speed = (speed >> 2) + (speed >> 3);
-    }
+    // a belt turning against the way he is walking pulls at him only 3/8 as hard (he can always walk onto it)
+    const against = this.cdir ? this.joy & JOY.RIGHT : this.joy & JOY.LEFT;
+    if (against) speed = (speed >> 2) + (speed >> 3);
     this.cfrac = u8(this.cfrac + speed);
     while (this.cfrac >= 16) {
       this.cfrac -= 16;

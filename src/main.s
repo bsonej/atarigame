@@ -16,7 +16,7 @@
         .setcpu "6502"
         .export start
         .export frame_end                       ; breakpoint target for tools/headless.py
-        .exportzp px, py, state, jt, fall, score, hiscore, left, lives, level, lvlidx
+        .exportzp px, py, state, jt, hop, hdir, rkind, fall, score, hiscore, left, lives, level, lvlidx
         .exportzp mode, demo, demo_n, timer, mtimer, frame, drawn, deaths, joy, anim, moved, flash
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
         .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir
@@ -84,6 +84,7 @@ BUBBLE    = $4E             ; his colour (pink); his eyes are white
 S_GROUND = 0
 S_AIR    = 1
 S_CLIMB  = 2
+S_RIDE   = 3            ; carried up or down a chute (joystick ignored until its end)
 
 M_TITLE  = 0
 M_PLAY   = 1
@@ -98,6 +99,8 @@ FR_SQUASH  = 5          ; squash (3), stretch (3) and the two pop frames
 FR_STRETCH = 8
 FR_DIE_A   = 11
 FR_DIE_B   = 12
+HOP_JT      = 8         ; the hop out of the top of an up chute starts this far into the jump table (5 pixels up) ...
+HOP_FRAMES  = 4         ; ... and drifts sideways this many pixels (enough to leave the chute's column)
 LAND_FRAMES = 4         ; how long he stays squashed after landing
 
 JOY_UP    = $01
@@ -157,6 +160,10 @@ py:       .res 1
 oldpy:    .res 1
 state:    .res 1
 jt:       .res 1        ; index into jump_dy, $FF = not rising
+cx:       .res 1        ; the pixel column of the edge he is on while stepping (see step_to)
+hop:      .res 1        ; frames of forced sideways drift left (the hop out of the top of an up chute)
+hdir:     .res 1        ; which way that drift goes (the way he faced when the ride ended): 2 = left, else right
+rkind:    .res 1        ; which chute he rides: 0 = down (T_SLIDE_R), 1 = up (T_SLIDE_L)
 fall:     .res 1        ; pixels fallen since the top of the arc
 anim:     .res 1
 moved:    .res 1
@@ -638,13 +645,19 @@ update_player:
         jmp up_climb
 @notclimb:
         cmp #S_AIR
-        bne @ground
+        bne @notair
         jmp up_air
+@notair:
+        cmp #S_RIDE
+        bne @ground
+        jmp up_ride
 
 @ground:
+        jsr chute_catch         ; walked into a chute: it carries him
+        bcc @nochute
+        rts
+@nochute:
         jsr ground_below
-        bcs @standing
-        jsr step_down           ; a stair or chute one tile lower: walk down it
         bcs @standing
         lda #S_AIR              ; walked off an edge
         sta state
@@ -652,6 +665,7 @@ update_player:
         sta fall
         sta vx
         sta vfrac
+        sta hop
         lda #$FF
         sta jt
         rts
@@ -680,11 +694,12 @@ update_player:
         sta fall
         sta vx
         sta vfrac
+        sta hop
         lda #S_AIR
         sta state
         jmp do_horiz
 @surface:
-        jsr surface_drift       ; belts and chutes carry you; sets `under`
+        jsr surface_drift       ; belts carry you; sets `under`
         lda under
         ldx #0
         cmp #T_ICE
@@ -698,39 +713,70 @@ update_player:
         jmp do_horiz
 @slick: jmp slick_move
 
-; C set (and py += 8) if a chute lies exactly one tile below the feet: slide down onto it.
-step_down:
-        lda py
-        clc
-        adc #24
-        sta ty
-        lda px
-        sta tx
-        jsr get_tile
-        jsr is_step
-        bcs @yes
-        lda py
-        clc
-        adc #24
-        sta ty
+; ---- chutes ------------------------------------------------------------------------------
+; Chutes are vertical, one tile wide, and neither solid nor a surface: nothing stands on them and in the air he passes
+; straight through. Only WALKING (the ground state) into one catches him: a chute tile at the middle of his body column
+; (px+2) at his body rows (py+8, py+15), or directly under his feet (py+16: a chute that fills a gap in the floor).
+; He is then locked in (S_RIDE, joystick ignored) and carried to the end of the column, 2 pixels a frame.
+; One exception: a DOWN chute only catches him from under his feet. At the body rows alone (the chute stands on the
+; floor he walks on) it has nowhere to take him, and catching him would only snap him back every frame (he could never
+; walk through it, and would be caught again where a ride ends on a floor); the ride down always starts in the floor.
+; C set (and the ride begun) if he walked into one.
+chute_catch:
         lda px
         clc
-        adc #3
+        adc #2
         sta tx
-        jsr get_tile
-        jsr is_step
-        bcc @no
-@yes:   lda py
+        lda py
         clc
         adc #8
+        sta ty
+        jsr get_tile
+        cmp #T_SLIDE_L
+        beq @got
+        lda py
+        clc
+        adc #15
+        sta ty
+        jsr get_tile
+        cmp #T_SLIDE_L
+        beq @got
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+        jsr get_tile
+        jsr is_chute
+        bcs @got
+        clc
+        rts
+@got:   ldx #0                  ; A = the tile: down (T_SLIDE_R) or up
+        cmp #T_SLIDE_R
+        beq @kind
+        inx
+@kind:  stx rkind
+        lda px
+        clc
+        adc #2
+        and #$FC                ; snap to the tile column
+        sta px
+        lda py
+        and #$FE                ; (even, so 2 pixel steps meet a tile edge exactly)
         sta py
+        lda #S_RIDE
+        sta state
+        lda #$FF
+        sta jt
+        lda #0
+        sta fall
+        sta vx
+        sta vfrac
+        sta hop
         sec
         rts
-@no:    clc
-        rts
 
-; C set if tile A is a chute.
-is_step:
+; C set if tile A is a chute (A is kept).
+is_chute:
         cmp #T_SLIDE_R
         beq @y
         cmp #T_SLIDE_L
@@ -740,12 +786,66 @@ is_step:
 @y:     sec
         rts
 
+; One frame of the ride. Down: while a chute is directly under the feet, py += 2; when there is none (he is below
+; the last tile, standing on whatever is next, or falling past it) he is released into normal physics. Up: while a
+; chute is at the feet row, py -= 2; when his feet are above the top tile he hops out in the direction he faces
+; (a short jump with a few pixels of forced drift) to land on the platform beside the top.
+up_ride:
+        lda px
+        clc
+        adc #2
+        and #$FC
+        sta px                  ; (a peg might have nudged him)
+        sta tx
+        lda rkind
+        bne @up
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+        jsr get_tile
+        cmp #T_SLIDE_R
+        bne @free
+        inc py
+        inc py
+        rts
+@up:    lda py
+        cmp #10
+        bcc @hop                ; (do not go up into the score row)
+        clc
+        adc #15
+        sta ty
+        jsr get_tile
+        cmp #T_SLIDE_L
+        bne @hop
+        dec py
+        dec py
+        rts
+@hop:   lda face                ; (he does not turn while riding: the joystick is ignored)
+        sta hdir
+        lda #HOP_JT
+        sta jt
+        lda #HOP_FRAMES
+        sta hop
+        bne @air                ; (always)
+@free:  lda #$FF
+        sta jt
+        lda #0
+        sta hop
+@air:   lda #S_AIR
+        sta state
+        lda #0
+        sta fall
+        sta vx
+        sta vfrac
+        rts
+
 ; ---- what the surface under the feet does ---------------------------------------------------
-; Belts and chutes drift the player (in 1/16 pixel per frame: slow 8, normal 16, fast 32; an
+; Belts drift the player (in 1/16 pixel per frame: slow 8, normal 16, fast 32; an
 ; accelerating belt starts at 4 and gains 1 every 4 frames up to 32). Sets `under`.
 surface_drift:
-        ldx #0                  ; probe under the middle of the feet, then under each foot: a
-@probe: stx tt_j                ; diagonal chute is under one foot before it is under the middle
+        ldx #0                  ; probe under the middle of the feet, then under each foot: a belt
+@probe: stx tt_j                ; may be under only one of them
         lda px
         clc
         adc probe_dx,x
@@ -768,10 +868,6 @@ surface_drift:
         lda tt_k
         sta under
 @found: lda under
-        cmp #T_SLIDE_R
-        beq @sr
-        cmp #T_SLIDE_L
-        beq @sl
         sec
         sbc #T_CONV_FIRST
         cmp #8
@@ -818,17 +914,6 @@ surface_drift:
         jmp @drift
 @full:  lda tmp
         jmp @drift
-@sr:    lda #0
-        sta cdir
-        beq @slide
-@sl:    lda #1
-        sta cdir
-@slide: lda #4
-        sta cacc
-        lda #0
-        sta cacc_t
-        lda #32
-        jmp @drift
 @none:  lda #4
         sta cacc
         lda #0
@@ -852,12 +937,8 @@ surface_drift:
         jmp @loop
 @done:  rts
 
-; C set if tile A does something to a player standing on it: a belt, chute, ice or roller.
+; C set if tile A does something to a player standing on it: a belt, ice or roller.
 is_surface:
-        cmp #T_SLIDE_R
-        beq @y
-        cmp #T_SLIDE_L
-        beq @y
         cmp #T_ICE
         beq @y
         cmp #T_ROLLER
@@ -994,16 +1075,19 @@ slick_move:
 ; How many roller tiles are in this run under the feet (1..ROLLER_LONG): the longer the roller, the faster it
 ; picks the player up (acceleration = its length in 1/16 pixel per frame per frame).
 roller_len:
-        ldx #0
-@base:  lda px                  ; the roller tile under the feet (middle, then each foot), as a pixel column
+        lda #0
+        sta tt_i                ; (get_tile clobbers X, so the probe index lives here)
+@base:  ldx tt_i                ; the roller tile under the feet (middle, then each foot), as a pixel column
+        lda px
         clc
         adc probe_dx,x
         and #$FC
         sta tt_c
         jsr @probe
         beq @found
-        inx
-        cpx #3
+        inc tt_i
+        lda tt_i
+        cmp #3
         bcc @base
 @found: lda #1
         sta tt_k
@@ -1056,6 +1140,7 @@ start_climb:
         sta jt
         lda #0
         sta fall
+        sta hop
         rts
 
 ; ---- airborne ---------------------------------------------------------------
@@ -1067,29 +1152,28 @@ up_air:
         bcc @noladder
         jmp start_climb         ; grab a ladder mid-air
 @noladder:
-        jsr do_horiz
-        lda jt
+        lda hop
+        beq @free
+        dec hop                 ; the hop out of an up chute: drift the way he faces, joystick ignored
+        lda hdir
+        cmp #2
+        bne @hr
+        jsr move_left
+        jmp @drift
+@hr:    jsr move_right
+        jmp @drift
+@free:  jsr do_horiz
+@drift: lda jt
         cmp #$FF
         beq air_fall
 
-        tax                     ; rising: jump_dy[jt] pixels this frame
-        lda jump_dy,x
-        beq @apex
+        tax                     ; rising: jump_dy[jt] pixels this frame. Nothing above him matters while he rises:
+        lda jump_dy,x           ; no head bumps, he just overlays blocks, bombs, platforms and chutes (only the
+        beq @apex               ; score row is a ceiling)
         sta tmp2
-@rise:  lda px
-        sta tx
-        lda py
-        sec
-        sbc #1
-        sta ty
-        jsr get_solid
-        bcs @apex               ; bumped our head
-        lda px
-        clc
-        adc #3
-        sta tx
-        jsr get_solid
-        bcs @apex
+@rise:  lda py
+        cmp #9
+        bcc @apex
         dec py
         dec tmp2
         bne @rise
@@ -1099,12 +1183,17 @@ up_air:
         sta jt
         rts
 
+; Falling: 2 pixels a frame, one at a time. He lands on the first surface under his feet, but never inside a solid:
+; if a solid is at the row just above the feet (he rose into a block and is coming back down through it) he keeps
+; falling until he is clear.
 air_fall:
-        lda #2                  ; fall 2 pixels per frame, one at a time
+        lda #2
         sta tmp2
 @step:  jsr ground_below
+        bcc @fall
+        jsr feet_clear
         bcs @land
-        inc py
+@fall:  inc py
         inc fall
         dec tmp2
         bne @step
@@ -1117,6 +1206,30 @@ air_fall:
         sta state
         lda #0
         sta fall
+        rts
+
+; C set if neither foot column has a solid tile at the lowest row of the body (py+15). (At the bottom of the screen
+; the floor is the edge itself.)
+feet_clear:
+        lda py
+        cmp #176
+        bcs @clear
+        clc
+        adc #15
+        sta ty
+        lda px
+        sta tx
+        jsr get_solid
+        bcs @no
+        lda px
+        clc
+        adc #3
+        sta tx
+        jsr get_solid
+        bcs @no
+@clear: sec
+        rts
+@no:    clc
         rts
 
 ; ---- climbing ---------------------------------------------------------------
@@ -1218,23 +1331,29 @@ move_left:
         jmp step_to
 @blk:   rts
 
-; Walk into pixel column tx (px moves by one: the caller has put the new edge in tx) unless blocked.
+; Walk into pixel column tx (px moves by one: the caller has put the new edge in tx) unless blocked: a solid tile
+; at the head, middle or feet row of that column blocks him, unless he is already inside a solid at that row on
+; the edge he is on now (he rose into a block: he slides about in it and out of it, rather than being stuck).
 step_to:
+        lda tx
+        cmp px
+        bcc @lft
+        sbc #1                  ; (carry set) moving right: the edge he is on is one pixel behind the new one
+        bcs @cx
+@lft:   adc #1                  ; moving left: one pixel on
+@cx:    sta cx
         lda py
-        sta ty
-        jsr get_solid
+        jsr step_row
         bcs @blk
         lda py
         clc
         adc #8
-        sta ty
-        jsr get_solid
+        jsr step_row
         bcs @blk
         lda py
         clc
         adc #15
-        sta ty
-        jsr get_solid
+        jsr step_row
         bcs @blk
         lda tx                  ; moving right: the new edge is past px; left: it is before it
         cmp px
@@ -1245,6 +1364,26 @@ step_to:
 @moved: inc anim
         inc moved
 @blk:   rts
+
+; C set if stepping into column tx is blocked at pixel row A: a solid there, unless he is inside a solid already
+; at that row on the edge he is on (cx). tx is kept.
+step_row:
+        sta ty
+        jsr get_solid
+        bcc @free
+        lda tx
+        pha
+        lda cx
+        sta tx
+        jsr get_solid
+        pla
+        sta tx
+        bcc @blocked
+@free:  clc
+        rts
+@blocked:
+        sec
+        rts
 
 ; ---------------------------------------------------------------------------
 ; Pick up items and check for spikes.
@@ -1861,6 +2000,9 @@ begin_level:
         sta jt
         lda #0
         sta fall
+        sta hop
+        sta hdir
+        sta rkind
         sta anim
         sta moved
         sta mtimer
@@ -2031,6 +2173,9 @@ hide_player:
 ; ---------------------------------------------------------------------------
 ; Which sprite frame matches what the player is doing.
 choose_frame:
+        lda state               ; (locked in a chute he does not turn, whatever the joystick says)
+        cmp #S_RIDE
+        beq @face
         lda joy                 ; he looks the way he last tried to go
         and #JOY_RIGHT
         beq @nr
@@ -2055,6 +2200,8 @@ choose_frame:
         beq @climb
         cmp #S_AIR
         beq @air
+        cmp #S_RIDE
+        beq @ride
         lda land_t              ; on the ground
         beq @walk
         dec land_t
@@ -2087,6 +2234,10 @@ choose_frame:
 @stretch:
         lda #FR_STRETCH
         bne @fam
+@ride:  lda #0                  ; riding a chute: standing, looking the way he last went
+        sta land_t
+        lda #FR_STAND
+        jmp @fam
 @climb: lda #0
         sta land_t
         lda moved               ; wobbling up the ladder
@@ -2787,29 +2938,36 @@ animate_belts:
 ; ---------------------------------------------------------------------------
 ; Chutes: a screw thread that turns. The thread is 16 rows tall (assets/tiles.txt: a chute tile and its twin, which
 ; the level puts on every second screen row, so a stack of chutes is one unbroken thread). Every second frame the
-; 16 rows (helix_r / helix_l, each twice over) are written into the glyphs one row further down: the plain tile
-; gets the 8 rows from the phase on, its twin the next 8. A right chute's "/" thread and a left chute's "\" thread
-; both travel down the stack, which makes the two turn opposite ways.
+; 16 rows (helix_r / helix_l, each twice over) are written into the glyphs one row further along: the plain tile
+; gets the 8 rows from the phase on, its twin the next 8. The down chute's (T_SLIDE_R) phase counts down, so its thread
+; travels down the stack; the up chute's (T_SLIDE_L) counts up, so its thread travels up.
 animate_chutes:
         lda RTCLOK+2
         lsr a
         bcs @done               ; odd frame: nothing to do
-        eor #15                 ; the phase counts down, so the thread moves down
         and #15
-        tax
+        sta tmp                 ; the up chute's phase
+        eor #15
+        tax                     ; the down chute's
         ldy #0
-@row:   lda helix_r,x
+@rowr:  lda helix_r,x
         sta CHUTE_R_A,y
         lda helix_r+8,x
         sta CHUTE_R_B,y
-        lda helix_l,x
+        inx
+        iny
+        cpy #8
+        bne @rowr
+        ldx tmp
+        ldy #0
+@rowl:  lda helix_l,x
         sta CHUTE_L_A,y
         lda helix_l+8,x
         sta CHUTE_L_B,y
         inx
         iny
         cpy #8
-        bne @row
+        bne @rowl
 @done:  rts
 
 ; ---------------------------------------------------------------------------
@@ -3229,7 +3387,7 @@ pow_lo: .byte <10000, <1000, <100, <10, <1
 pow_hi: .byte >10000, >1000, >100, >10, >1
 
 ; Pixels the player rises on each frame of a jump (0 ends the rise).
-jump_dy: .byte 3,3,3,2,2,2,1,1,1,0
+jump_dy: .byte 3,3,3,3,3,2,2,2,2,1,1,1,0
 
 ; The death hop: signed pixels per frame, then a steady fall.
 die_dy:  .byte $FC,$FC,$FD,$FD,$FE,$FE,$FF,$FF,0,1,1,2,2,3,3,4,4,5,5

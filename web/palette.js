@@ -38,8 +38,8 @@ export const GROUPS = [
     items: [
       { kind: 'tile', name: 'LADDER', tip: 'Ladder: climb with up and down' },
       { kind: 'tile', name: 'STAIR', tip: 'Step: a thin ledge to jump up onto (you can walk straight past it and jump up through it)' },
-      { kind: 'tile', name: 'SLIDE_R', tip: 'Chute: a turning screw that carries you right (and down a diagonal run of them); stacked chutes join into one thread. You can walk past it and jump up through it' },
-      { kind: 'tile', name: 'SLIDE_L', tip: 'Chute: a screw turning the other way, carries you left' },
+      { kind: 'tile', name: 'SLIDE_R', tip: 'Chute down: a vertical screw. Walk into it (from a floor it replaces, at the top) and it carries you down to its end, joystick ignored. Not solid and nothing stands on it: in the air you pass straight through. Stack it into a single-wide column; no diagonals, nothing beside it' },
+      { kind: 'tile', name: 'SLIDE_L', tip: 'Chute up: a vertical screw whose thread climbs. Walk into it and it carries you up to its top, where you hop out the way you were facing onto the platform beside it (put one level with the top). Single-wide column, no diagonals' },
     ],
   },
   {
@@ -82,8 +82,8 @@ export const STAMPS = [
   { label: 'Ladder', cells: Array.from({ length: 5 }, (_, i) => [0, i, 'LADDER']), tip: 'A ladder 5 tiles tall' },
   { label: 'Stairs up right', cells: diag('STAIR', 4, true), tip: 'Steps rising to the right: jump up each one' },
   { label: 'Stairs up left', cells: diag('STAIR', 4, false), tip: 'Steps rising to the left' },
-  { label: 'Chute right', cells: diag('SLIDE_R', 4, false), tip: 'A chute sloping down to the right' },
-  { label: 'Chute left', cells: diag('SLIDE_L', 4, true), tip: 'A chute sloping down to the left' },
+  { label: 'Chute down', cells: Array.from({ length: 3 }, (_, i) => [0, i, 'SLIDE_R']), tip: 'A down chute 3 tiles tall (a single-wide column: put it through a gap in the floor, with room to land below)' },
+  { label: 'Chute up', cells: Array.from({ length: 3 }, (_, i) => [0, i, 'SLIDE_L']), tip: 'An up chute 3 tiles tall: its top should be level with the platform you hop out onto' },
   { label: 'Peg block', cells: [...row('BRICK', 8).map(([c, , n]) => [c, 1, n]), [1, 0, 'PEG']], tip: 'A block with a peg on it that patrols to the far end' },
   { label: 'Items', cells: Array.from({ length: 5 }, (_, i) => [i * 2, 0, 'ITEM']), tip: '5 items, a tile apart' },
 ];
@@ -109,8 +109,8 @@ export function sceneFor(item) {
     case 'WALL': return [[1, 0, name], [1, 1, name], [1, 2, name]];
     case 'LADDER': return [[1, 0, name], [1, 1, name], [1, 2, name]];
     case 'STAIR': return [[0, 2, name], [1, 1, name], [2, 0, name]];
-    case 'SLIDE_R': return [[0, 0, name], [1, 1, name], [2, 2, name]];
-    case 'SLIDE_L': return [[2, 0, name], [1, 1, name], [0, 2, name]];
+    case 'SLIDE_R':
+    case 'SLIDE_L': return [[1, 0, name], [1, 1, name], [1, 2, name]];
     case 'SPIKE': return [...floor(2), [1, 1, name], [2, 1, name]];
     case 'ITEM': return [...floor(2), [1, 1, name]];
     case 'DOOR_BL': return DOOR_CELLS.map(([dc, dr], k) => [1 + dc, 2 - dr, DOOR_NAMES[k]]);

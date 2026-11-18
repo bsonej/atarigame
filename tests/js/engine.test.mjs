@@ -34,7 +34,7 @@ test('walls stop you', () => {
   assert.equal(g.px, 12 * 4 - 4);
 });
 
-test('a jump rises 18 pixels and lands again', () => {
+test('a jump rises 26 pixels and lands again', () => {
   const g = play(room());
   g.step(JOY.FIRE);
   let top = g.py;
@@ -42,7 +42,7 @@ test('a jump rises 18 pixels and lands again', () => {
     g.step(0);
     top = Math.min(top, g.py);
   }
-  assert.equal(FLOOR_Y - top, 18);
+  assert.equal(FLOOR_Y - top, 26);
   assert.deepEqual([g.py, g.state], [FLOOR_Y, STATE.GROUND]);
 });
 
@@ -124,8 +124,8 @@ test('the door fades in evenly: every step shows twelve more of its 192 pixels',
   for (let step = 0; step <= 16; step++) assert.equal(f.filter((t) => t < step).length, 12 * step, `step ${step}`);
 });
 
-test('you walk straight past steps and chutes, and can jump up onto a step', () => {
-  for (const ch of ['S', '\\', '/']) {
+test('you walk straight past steps and a down chute that stands on the floor, and can jump up onto a step', () => {
+  for (const ch of ['S', '\\']) {
     const g = play(room({ '22,10': ch }));
     run(g, 60, JOY.RIGHT);
     assert.ok(g.px > 10 * 4 + 6, `walked past ${ch}`);
@@ -227,14 +227,87 @@ test('you can walk onto a fast belt that is turning against you, in both directi
   assert.ok(left.px > 20 * 4 + 2, `got to ${left.px}, past the belt's right end`);
 });
 
-test('a chute is not a belt: it carries you at full speed whatever you do', () => {
-  const g = play(room({ '22,10': '\\\\\\\\' }));
-  g.px = 11 * 4;
-  g.py = 22 * 8 - 16;
+test('walking into a down chute that fills a gap in the floor: locked in, carried down, released below it', () => {
+  const g = play(room({ '12,5': '#####', ...vertical(12, 16, 10, '\\') }));
+  g.px = 6 * 4;
+  g.py = 12 * 8 - 16; // on the platform at row 12, which ends at the chute
   run(g, 2);
-  const x0 = g.px;
-  run(g, 10, JOY.LEFT);
-  assert.ok(g.px >= x0, 'walking against it does not get you anywhere');
+  assert.equal(g.state, STATE.GROUND);
+  let rode = 0;
+  for (let i = 0; i < 60 && g.state !== STATE.AIR; i++) {
+    g.step(JOY.RIGHT);
+    if (g.state === STATE.RIDE) {
+      rode++;
+      assert.equal(g.px, 10 * 4, 'snapped to the chute column and stays there');
+    }
+  }
+  assert.ok(rode >= 10, `rode ${rode} frames`);
+  for (let i = 0; i < 40 && g.state === STATE.RIDE; i++) g.step(JOY.LEFT); // joystick ignored while riding
+  run(g, 60);
+  assert.deepEqual([g.px, g.py, g.state], [10 * 4, FLOOR_Y, STATE.GROUND], 'fell out of the bottom of the chute onto the floor');
+});
+
+test('an up chute carries you to its top and you hop out onto the platform beside it', () => {
+  const g = play(room({ '18,11': '#######', ...vertical(18, 22, 10, '/') }));
+  g.px = 6 * 4;
+  g.py = FLOOR_Y;
+  run(g, 2);
+  let rode = 0;
+  let top = 999;
+  for (let i = 0; i < 200 && !(rode && g.state === STATE.GROUND); i++) {
+    g.step(g.state === STATE.RIDE ? JOY.LEFT : rode ? 0 : JOY.RIGHT); // walk in; the joystick is ignored while riding: pulling left does not turn him round
+    if (g.state === STATE.RIDE) {
+      rode++;
+      top = Math.min(top, g.py);
+      assert.equal(g.px, 10 * 4);
+    }
+  }
+  assert.ok(rode >= 20, `rode ${rode} frames`);
+  assert.equal(top, 18 * 8 - 16, 'rode up until his feet were level with the top tile');
+  assert.equal(g.py, 18 * 8 - 16);
+  assert.ok(g.px > 11 * 4 - 2, `hopped out to the right: ${g.px}`);
+  assert.equal(g.state, STATE.GROUND);
+});
+
+test('chutes do not carry you sideways, and in the air you pass straight through them', () => {
+  const g = play(room({ ...vertical(18, 22, 10, '/'), ...vertical(18, 22, 20, '\\') }));
+  g.px = 32;
+  g.py = FLOOR_Y;
+  run(g, 1);
+  g.step(JOY.RIGHT | JOY.FIRE); // jump from just before the up chute and fly through it
+  for (let i = 0; i < 18; i++) {
+    g.step(JOY.RIGHT);
+    assert.notEqual(g.state, STATE.RIDE, 'not caught in the air');
+  }
+  assert.ok(g.px > 40, 'went through the up chute column');
+  const h = play(room({ ...vertical(21, 22, 20, '\\') })); // a down chute standing on the floor: walk through, no sideways push
+  h.px = 60;
+  h.py = FLOOR_Y;
+  run(h, 40, JOY.RIGHT);
+  assert.equal(h.px, 100);
+  run(h, 40);
+  assert.equal(h.px, 100, 'nothing carried him');
+  assert.equal(h.py, FLOOR_Y);
+});
+
+test('rising in a jump ignores everything above: he overlays a block and lands on top of it, or falls back out of a thick one', () => {
+  const g = play(room({ '20,1': '#####' })); // a ledge just over his head: the top is at y 160
+  g.step(JOY.FIRE);
+  run(g, 60);
+  assert.deepEqual([g.py, g.state], [20 * 8 - 16, STATE.GROUND], 'went up through it and landed on top');
+  const h = play(room({ '19,1': '#####', '20,1': '#####' })); // two thick: the apex is inside it
+  h.step(JOY.FIRE);
+  run(h, 80);
+  assert.deepEqual([h.py, h.state], [FLOOR_Y, STATE.GROUND], 'fell back out of the bottom, not stuck in it');
+  const w = play(room({ '19,1': '########', '20,1': '########' })); // under a low ceiling he keeps moving sideways inside it
+  w.step(JOY.FIRE | JOY.RIGHT);
+  const x0 = w.px;
+  run(w, 14, JOY.RIGHT);
+  assert.equal(w.px, x0 + 14, 'not stuck in the block');
+  const o = play(room({ '16,1': '=====' })); // a thin platform
+  o.step(JOY.FIRE);
+  run(o, 80);
+  assert.deepEqual([o.py, o.state], [FLOOR_Y, STATE.GROUND]);
 });
 
 test('a roller grips harder the longer it is', () => {

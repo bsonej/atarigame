@@ -27,7 +27,7 @@ LABELS = ROOT / "build" / "test" / "atarigame.lbl"
 # Joystick bits (set = pressed)
 UP, DOWN, LEFT, RIGHT, FIRE = 0x01, 0x02, 0x04, 0x08, 0x10
 
-GROUND, AIR, CLIMB = 0, 1, 2
+GROUND, AIR, CLIMB, RIDE = 0, 1, 2, 3
 TITLE, PLAY, DYING, SPAWN, CLEAR, OVER = range(6)  # the game's modes
 COLS, ROWS = 40, 24
 PM_YOFF = 32

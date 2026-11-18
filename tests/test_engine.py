@@ -80,12 +80,17 @@ def random_level(seed: int) -> str:
         c, r0 = rnd.randint(2, 37), rnd.choice(rows) - rnd.randint(2, 4)
         for r in range(max(1, r0), min(23, r0 + rnd.randint(3, 7))):
             grid[r][c] = CHAR["LADDER"]
-    for _ in range(rnd.randint(2, 4)):  # stairs and chutes
-        name = rnd.choice(["STAIR", "STAIR", "SLIDE_R", "SLIDE_L"])
+    for _ in range(rnd.randint(1, 2)):  # stairs
         c, r, d = rnd.randint(3, 34), rnd.choice(rows), rnd.choice([-1, 1])
         for i in range(rnd.randint(2, 4)):
             if 1 <= r - i < 23 and 1 <= c + d * i < 39:
-                grid[r - i][c + d * i] = CHAR[name]
+                grid[r - i][c + d * i] = CHAR["STAIR"]
+    for _ in range(rnd.randint(2, 4)):  # chutes: vertical runs, down or up, some through a platform
+        name = rnd.choice(["SLIDE_R", "SLIDE_L"])
+        c, r = rnd.randint(2, 37), rnd.choice(rows) + rnd.randint(-1, 1)
+        for i in range(rnd.randint(1, 5)):
+            if 1 <= r + i < 23:
+                grid[r + i][c] = CHAR[name]
     for _ in range(rnd.randint(6, 12)):  # items and spikes just above something
         c = rnd.randint(1, 38)
         r = rnd.randint(2, 22)
@@ -146,16 +151,17 @@ class CompileParity(unittest.TestCase):
         script = (
             "import { chuteFrame } from './web/render.js';"
             "const h = JSON.parse(process.argv[1]);"
-            "console.log(JSON.stringify([...Array(70).keys()].map((t) => chuteFrame(h, t))));"
+            "const up = process.argv[2] === 'up';"
+            "console.log(JSON.stringify([...Array(70).keys()].map((t) => chuteFrame(h, t, up))));"
         )
         for name in ("SLIDE_R", "SLIDE_L"):
             helix = ba.helix_rows(TILES, name)
             rows = [f"{(b >> 6) & 3}{(b >> 4) & 3}{(b >> 2) & 3}{b & 3}" for b in helix]
-            out = subprocess.run(["node", "--input-type=module", "-e", script, json.dumps(rows)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+            out = subprocess.run(["node", "--input-type=module", "-e", script, json.dumps(rows), "up" if name == "SLIDE_L" else "down"], cwd=ROOT, capture_output=True, text=True, timeout=60)
             self.assertEqual(out.returncode, 0, out.stderr)
             for t, frame in enumerate(json.loads(out.stdout)):
                 with self.subTest(chute=name, tick=t):
-                    self.assertEqual(frame, [list(r) for r in ba.chute_frame(rows, t)])
+                    self.assertEqual(frame, [list(r) for r in ba.chute_frame(rows, t, up=name == "SLIDE_L")])
 
     def test_the_editor_rejects_what_the_asset_tool_rejects(self) -> None:
         good = LEVELS[0].read_text().splitlines()
@@ -174,7 +180,7 @@ class CompileParity(unittest.TestCase):
                 self.assertIn("error", node_trace({"text": text, "segments": []}))
 
 
-FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "fall", "vx", "vfrac", "frame"]
+FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "fall", "vx", "vfrac", "frame", "hop"]
 DOOR_FIELDS = {"doorOpen": "door_open", "doorDir": "door_dir", "doorPhase": "door_phase", "face": "face"}  # engine name -> game variable
 
 
@@ -252,7 +258,7 @@ class EngineMatchesGame(Arena):
         lv = compile_level(Path("x.txt"), text)
         g.poke_bytes(g.screen_addr + 40, lv["data"][40:960])
         for name, value in dict(
-            px=lv["spawn"][0] * 4, py=lv["spawn"][1] * 8, state=0, jt=0xFF, fall=0, vx=0, vfrac=0, cfrac=0, fcount=0,
+            px=lv["spawn"][0] * 4, py=lv["spawn"][1] * 8, state=0, jt=0xFF, hop=0, fall=0, vx=0, vfrac=0, cfrac=0, fcount=0,
             gtick=0, cacc_t=0, cacc=4, anim=0, moved=0, joy=0, joyprev=0, left=lv["items"], lives=1, pg_n=0,
         ).items():
             g.poke(name, value)

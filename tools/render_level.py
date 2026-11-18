@@ -76,7 +76,7 @@ def render(level: Path, out: Path, scale: int = 6, root: Path = ROOT, level_inde
         twin = next((t for t in tiles if t["name"] == f"{name}_B"), None)
         plain = next((t for t in tiles if t["name"] == name), None)
         if twin and plain:
-            by_byte[plain["byte"]]["rows"], by_byte[twin["byte"]]["rows"] = ba.chute_frame(plain["rows"] + twin["rows"], tick)
+            by_byte[plain["byte"]]["rows"], by_byte[twin["byte"]]["rows"] = ba.chute_frame(plain["rows"] + twin["rows"], tick, up=name == "SLIDE_L")
     w, h = ba.COLS * ba.TILE_W, ba.ROWS * ba.TILE_H
     pix = [[(0, 0, 0)] * w for _ in range(h)]
     for i, b in enumerate(lv["data"][: ba.COLS * ba.ROWS]):

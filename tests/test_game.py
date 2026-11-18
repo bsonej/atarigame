@@ -368,7 +368,7 @@ class GameLogic(Base):
         self.assertEqual(g.state, GROUND)
 
     # ---- jumping ----
-    def test_jump_rises_18_pixels_and_lands(self) -> None:
+    def test_jump_rises_26_pixels_and_lands(self) -> None:
         g = self.g
         g.poke("px", 80)  # top floor, open air above
         g.poke("py", FLOOR_Y[8])
@@ -383,11 +383,11 @@ class GameLogic(Base):
             if g.state == GROUND:
                 break
         apex = ys.index(min(ys))
-        self.assertEqual(min(ys), FLOOR_Y[8] - 18)
+        self.assertEqual(min(ys), FLOOR_Y[8] - 26)
         self.assertEqual((g.py, g.state), (FLOOR_Y[8], GROUND))
         self.assertEqual(ys[apex:], sorted(ys[apex:]), "no bouncing after the apex")
 
-    def test_jump_is_limited_by_the_ceiling_on_lower_floors(self) -> None:
+    def test_a_jump_goes_up_through_the_floor_overhead_on_lower_floors(self) -> None:
         g = self.g
         g.step(FIRE)
         ys = []
@@ -396,7 +396,7 @@ class GameLogic(Base):
             ys.append(g.py)
             if g.state == GROUND:
                 break
-        self.assertEqual(min(ys), 152)  # row 18's bricks end at line 151
+        self.assertEqual(min(ys), SPAWN_Y - 26)  # nothing above him stops the rise (row 18's bricks are just overlaid)
         self.assertEqual((g.py, g.state), (SPAWN_Y, GROUND))
 
     def test_holding_fire_does_not_bunny_hop(self) -> None:
@@ -406,19 +406,22 @@ class GameLogic(Base):
 
     def test_can_steer_in_the_air(self) -> None:
         g = self.g
+        g.poke("px", 80)  # the top floor, open air above (under the floors below a jump now goes up through them,
+        g.poke("py", FLOOR_Y[8])  # and sideways moves are blocked while his body is inside a brick)
+        g.idle(2)
         g.step(FIRE | RIGHT)
         g.step(RIGHT, 10)
-        self.assertGreater(g.px, SPAWN_X + 8)
+        self.assertGreater(g.px, 80 + 8)
         g.idle(30)
-        self.assertEqual((g.py, g.state), (SPAWN_Y, GROUND))
+        self.assertEqual(g.state, GROUND)
 
-    def test_head_bump_under_a_floor(self) -> None:
+    def test_no_head_bump_under_a_floor(self) -> None:
         g = self.g
         self.walk_to(40)  # open floor under row 18 (the ladder at column 8 is behind us)
         g.step(FIRE)
         top = min([g.py] + [(g.step(0) or g.py) for _ in range(30)])
-        self.assertGreaterEqual(top, 152)
-        self.assertEqual(g.state, GROUND)
+        self.assertEqual(top, FLOOR_Y[23] - 26)
+        self.assertEqual((g.state, g.py), (GROUND, FLOOR_Y[23]), "fell back down through the floor above")
 
     # ---- ladders ----
     def climb_ladder_8(self):

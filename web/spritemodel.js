@@ -321,7 +321,7 @@ export class SpriteDoc {
 // A timeline is a list of ticks, one per video frame, {name, lift}: the frame to show and how many pixels he is above
 // the ground. The walk and the jump follow choose_frame in src/main.s and engine.js (updatePlayer).
 
-const JUMP_DY = [3, 3, 3, 2, 2, 2, 1, 1, 1, 0]; // rise per frame, the same as the game's jump table
+const JUMP_DY = [3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 0]; // rise per frame, the same as the game's jump table
 
 const rep = (name, n, lift = 0) => Array.from({ length: n }, () => ({ name, lift }));
 

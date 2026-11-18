@@ -407,17 +407,20 @@ tile 13 VANISH_B none solid
 0000
 2222
 
-# Chutes: they carry you along and down the diagonal chain of tiles. Like the steps you can walk past them
-# and jump up through them; you stand on the top edge of the tile.
+# Chutes: vertical lifts, one tile wide. SLIDE_R (`\`) is the DOWN chute, SLIDE_L (`/`) the UP chute. They are not
+# solid and not a surface: nothing stands on them, and in the air (jumping, falling) you pass straight through. Only
+# walking into one (a chute at the middle of the body, or under the feet; a down chute only from under the feet, it
+# starts in the floor) catches you: you are then carried along the column, joystick ignored, to its end (see S_RIDE in
+# main.s). Down: you fall with it and are released below its last tile. Up: you rise with it and hop out beside its top. Chutes must be isolated vertical runs of one kind
+# (no chute in the columns either side: tools/levelcheck.py rejects diagonal layouts).
 #
 # The art is a screw thread: one diagonal stroke two pixels wide, stepping 4 rows for every pixel across, so that
 # one turn of the thread is 16 rows - two tiles. A chute tile is therefore one of a pair: the plain tile (the
 # first 8 rows of the thread) and its twin (the next 8). The asset tool and the editor put the twin on every
-# odd screen row (see "twin" below), so a stack of chutes, and every diagonal run of them, is one unbroken
-# thread with no seam. The game scrolls the 16 rows down the stack (animate_chutes in main.s, which reads
-# the art of these four tiles as the thread to turn), so the thread appears to turn: the surface of a right chute
-# moves right (a "/" thread travelling down), a left chute is the mirror image and turns the other way.
-tile 14 SLIDE_R \ oneway
+# odd screen row (see "twin" below), so a stack of chutes is one unbroken thread with no seam. The game scrolls
+# the 16 rows along the stack (animate_chutes in main.s, which reads the art of these four tiles as the thread to
+# turn): the down chute's thread travels down the stack, the up chute's travels up.
+tile 14 SLIDE_R \
 3110
 2110
 2200
@@ -437,7 +440,7 @@ twin 123 SLIDE_R
 0220
 0220
 
-tile 15 SLIDE_L / oneway
+tile 15 SLIDE_L /
 0113
 0112
 0022

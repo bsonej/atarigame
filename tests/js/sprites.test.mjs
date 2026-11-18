@@ -232,7 +232,7 @@ test('the preview cycles only use frames the file has, and the jump comes back t
     }
   }
   const jump = ANIMATIONS.find((a) => a.id === 'jump');
-  assert.equal(maxLift(jump), 18, 'the jump table rises 3+3+3+2+2+2+1+1+1 pixels');
+  assert.equal(maxLift(jump), 26, 'the jump table rises 3*5+2*4+1*3 pixels');
   assert.equal(jump.ticks[0].name, 'squash');
   assert.equal(jump.ticks[3].name, 'stretch');
   assert.equal(jump.ticks.at(-1).lift, 0);

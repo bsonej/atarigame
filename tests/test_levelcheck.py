@@ -57,7 +57,7 @@ class LevelCheck(unittest.TestCase):
         edits.update({(8, 22): "S", (9, 21): "S", (10, 20): "S", (11, 19): "S", (12, 18): "S"})
         edits[(20, 17)] = "*"
         self.assertEqual(lc.check(make(edits)), [])
-        del edits[(8, 22)], edits[(9, 21)]
+        del edits[(8, 22)], edits[(9, 21)], edits[(10, 20)]
         self.assertTrue(lc.check(make(edits)), "with its bottom steps missing the stairs start too high to jump onto")
 
     def test_a_pit_too_deep_to_fall_into_is_not_a_route(self) -> None:
@@ -85,6 +85,32 @@ class LevelCheck(unittest.TestCase):
         self.assertEqual(lc.check(make({(30, 22): "D"})), [])
         problems = lc.check(make({(20, 12): "D", **{(c, 13): "#" for c in range(18, 23)}}))
         self.assertTrue(any(p.startswith("door at column 20, row 12") for p in problems), problems)
+
+    def test_a_jump_reaches_three_tiles_up_and_no_further(self) -> None:
+        self.assertEqual(lc.check(make({(20, 19): "*", **{(c, 20): "#" for c in range(19, 24)}})), [])  # a ledge 3 up
+        self.assertTrue(lc.check(make({(20, 18): "*", **{(c, 19): "#" for c in range(19, 24)}})), "4 tiles up is too high")
+
+    def test_an_up_chute_makes_a_high_ledge_reachable(self) -> None:
+        ledge = {(20, 12): "*", **{(c, 13): "#" for c in range(16, 23)}}
+        self.assertTrue(lc.check(make(ledge)))
+        up = {**ledge, **{(15, r): "/" for r in range(13, 23)}}
+        self.assertEqual(lc.check(make(up)), [])
+        down = {**ledge, **{(15, r): "\\" for r in range(13, 23)}}
+        self.assertTrue(lc.check(make(down)), "a down chute does not take him up")
+
+    def test_diagonal_and_side_by_side_chutes_are_rejected(self) -> None:
+        diag = lc.check(make({(10 + i, 15 + i): "\\" for i in range(4)}))
+        self.assertEqual(len([p for p in diag if "chute" in p]), 4, diag)
+        side = lc.check(make({(10, 20): "/", (11, 20): "/"}))
+        self.assertEqual(len([p for p in side if "chute" in p]), 2, side)
+        step = lc.check(make({(10, 20): "/", (11, 21): "\\"}))
+        self.assertEqual(len([p for p in step if "chute" in p]), 2, step)
+        mixed = lc.check(make({(10, 20): "/", (10, 21): "\\"}))
+        self.assertEqual(len([p for p in mixed if "other kind" in p]), 2, mixed)
+
+    def test_single_wide_vertical_runs_are_fine(self) -> None:
+        edits = {**{(10, r): "\\" for r in range(15, 20)}, **{(14, r): "/" for r in range(15, 20)}}
+        self.assertEqual([p for p in lc.check(make(edits)) if "chute" in p], [])
 
     def test_a_missing_start_is_reported(self) -> None:
         path = make({(2, 21): "."})

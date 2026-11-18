@@ -697,7 +697,7 @@ class ChuteThread(unittest.TestCase):
     def test_the_chutes_have_twins_that_are_chutes(self) -> None:
         for name in ("SLIDE_R", "SLIDE_L"):
             plain, twin = self.tiles[name], self.tiles[f"{name}_B"]
-            self.assertEqual((twin["twin_of"], twin["oneway"], twin["solid"], twin["char"]), (name, True, False, None))
+            self.assertEqual((twin["twin_of"], twin["oneway"], twin["solid"], twin["char"]), (name, False, False, None))  # not solid, not a one-way surface
             self.assertEqual(ba.twin_families(list(self.tiles.values()))[plain["byte"]], twin["byte"])
 
     def test_the_thread_is_one_diagonal_that_lines_up_from_tile_to_tile(self) -> None:
@@ -750,7 +750,7 @@ class ChuteThread(unittest.TestCase):
     def test_a_stack_is_one_unbroken_thread_at_every_moment(self) -> None:
         for name, h in (("SLIDE_R", self.right), ("SLIDE_L", self.left)):
             for t in range(0, 32, 2):
-                a, b = ba.chute_frame(h, t)
+                a, b = ba.chute_frame(h, t, name == "SLIDE_L")
                 tile = [[(r >> (6 - 2 * x)) & 3 for x in range(4)] for r in a + b]
                 for y in range(16):
                     for x in range(3):
@@ -759,20 +759,15 @@ class ChuteThread(unittest.TestCase):
                         else:
                             self.assertEqual(tile[(y + 4) % 16][x + 1], tile[y][x])
 
-    def test_left_and_right_chutes_turn_opposite_ways(self) -> None:
-        # the right thread "/" and the left thread "\\" both travel down the stack. Eight frames later the thread has
-        # moved four rows down, which is one pixel across on the surface: to the right for the right chute, to the
-        # left for the left one.
-        def pixels(h, t):
-            a, b = ba.chute_frame(h, t)
-            return [[(r >> (6 - 2 * x)) & 3 for x in range(4)] for r in a + b]
-
-        for h, step in ((self.right, +1), (self.left, -1)):
-            before, after = pixels(h, 0), pixels(h, 8)
-            for y in range(16):
-                for x in range(4):
-                    if 0 <= x + step < 4:
-                        self.assertEqual(after[y][x + step], before[y][x], f"step {step}, row {y}, column {x}")
+    def test_the_up_chute_thread_travels_up_the_stack(self) -> None:
+        h = self.left
+        for t in range(0, 64, 2):
+            a, b = ba.chute_frame(h, t, up=True)
+            self.assertEqual(a + b, [h[(y + ((t >> 1) & 15)) % 16] for y in range(16)])
+            na, nb = ba.chute_frame(h, t + 2, up=True)
+            self.assertEqual((na + nb)[:-1], (a + b)[1:], "everything moves up by one row")
+            self.assertEqual(ba.chute_frame(h, t + 32, up=True), (a, b))
+            self.assertEqual(ba.chute_frame(h, t + 1, up=True), (a, b), "odd frames change nothing")
 
 
 class RealAssets(unittest.TestCase):

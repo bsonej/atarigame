@@ -104,15 +104,16 @@ In the emulator: F5 warm reset, F9 quit.
 
 ## Factory parts
 
-All of these are ordinary tiles in the map; put the character in a level and it works. Solid means you cannot walk or
-jump through it and can stand on it.
+All of these are ordinary tiles in the map; put the character in a level and it works. Solid means you cannot walk
+through it and can stand on it (a jump still rises through it: see "Jumping").
 
 | Char | Part | What it does |
 | --- | --- | --- |
 | `#` | brick | solid |
 | `=` | platform | one-way: jump up through it, land on top, walk through it at body height |
 | `S` | stair | a thin ledge (the top 3 pixel rows of the tile). Not solid: walk past it, or jump up through it and land on top; a flight of them is climbed by jumping |
-| `\` `/` | chute | a ledge like stairs that also carries you right (`\`) or left (`/`) at 2 pixels a frame. Drawn as a turning screw thread (see "Chutes"). Not solid; a diagonal row of them takes you down a slope (the walk-down step works on chutes), but you jump to go up one |
+| `\` | chute down | a vertical lift: walk into it (it replaces a gap in the floor) and it carries you down to the end of its column, joystick ignored. Not solid, nothing stands on it, you pass through it in the air (see "Chutes") |
+| `/` | chute up | the same, upwards: it carries you to its top and you hop out onto the platform beside it. Its screw thread turns upwards |
 | `{` `<` `(` | belt, left | slow (half a pixel a frame), normal (1), fast (2). Drifts you whether or not you walk. Walking with it adds its speed to yours; walking against it, it pulls at you only 3/8 as hard, so you can always walk onto it and along it, slowly (a normal belt costs you 3/8 of a pixel a frame, a fast one 3/4) |
 | `}` `>` `)` | belt, right | the same, to the right |
 | `[` `]` | accelerating belt, left / right | starts slow, gains speed every few frames up to fast, resets when you step off |
@@ -135,21 +136,49 @@ they were built with, so the gap's edges look unchanged until it returns.
 
 ### Chutes
 
+Chutes are vertical lifts, one tile wide, in two kinds: `\` is the **down chute** (`SLIDE_R`, "Chute down" in the editor) and
+`/` is the **up chute** (`SLIDE_L`, "Chute up"). They are not solid, not one-way and not a surface: nothing stands on them,
+and in the air (a jump, a fall) you pass straight through them. They only catch you when you are *walking* (the ground
+state) into one: a chute tile at the middle of your body column (`px+2`) at your body rows (`py+8` or `py+15`), or directly
+under your feet (`py+16`, a chute that fills a gap in the floor). Once caught you are locked in (`S_RIDE`, joystick
+ignored, he stands facing the way he last went and does not turn) and snapped to the tile column (`(px+2) & $FC`), and
+carried 2 pixels a frame to the end of the column:
+
+- **Down**: `py += 2` while a chute is under your feet. Below the last tile you are released into normal physics (`S_AIR`,
+  `fall` = 0) and land on whatever is there, or keep falling. The ride starts in the floor (a platform whose gap the chute
+  fills, with room to land below the last tile): a down chute caught from its body rows alone (it stands on the floor you
+  walk on) has nowhere to take you, so it is simply walked through rather than snapping you back every frame.
+- **Up**: `py -= 2` while a chute is at your feet row. When your feet are level with the top of the top tile you hop out
+  in the direction you faced (a short jump from the jump table, `HOP_JT`, with 4 pixels of forced sideways drift,
+  `HOP_FRAMES`) and land on the platform beside the top, so put a platform level with the top tile.
+
+Chutes must be isolated, single-wide vertical runs of one kind: `task check-levels` (and the editor's check list) rejects
+a chute with another chute in the neighbouring columns at the rows above, level with and below it (diagonals and
+side-by-side layouts), and an up chute stacked on a down chute.
+
 A chute is drawn as a screw thread: a diagonal stroke two pixels wide that crosses the tile and carries on in the tile
-below, so a stack of chutes, and a diagonal run of them, is one unbroken thread with no seams. One turn of the thread is
+below, so a stack of chutes is one unbroken thread with no seams. One turn of the thread is
 16 rows, two tiles, so each chute is a pair in `assets/tiles.txt`: the plain tile (`SLIDE_R` id 14, `SLIDE_L` id 15) and
 its `twin` (`SLIDE_R_B` id 123, `SLIDE_L_B` id 124), which holds the next 8 rows. You write one character in a map; the asset
-tool (and the editor) puts the twin on every odd screen row, so tiles alternate plain, twin, plain, twin down a stack or
-along a diagonal run. Like caps and dots, a twin is the plain tile to the game (`tile_canon`), so carrying, walking
-through, jumping up through, the AI and `levelcheck` are unchanged.
+tool (and the editor) puts the twin on every odd screen row, so tiles alternate plain, twin, plain, twin down a stack. Like
+caps and dots, a twin is the plain tile to the game (`tile_canon`).
 
 To make it turn, the game rewrites the four glyphs every second frame (`animate_chutes` in `src/main.s`, reusing the
-belts' trick of changing the character set): the 16 rows move one row further down the stack each time and come round
-every 32 frames, with no state in RAM (the phase is read from the frame counter). The right chute's `/` thread and the
-left chute's mirror-image `\` thread both travel down the stack, so the right one's surface moves right and the left one's
-left: they turn opposite ways. `build_assets.py` writes the thread to `src/gen/helix.inc` (from the art of the four tiles, so
-changing the art in `tiles.txt` is all it takes); `web/render.js` (`chuteFrame`), `tools/render_level.py --tick N` and
-`build_assets.chute_frame` do the same sum, and the tests check they agree.
+belts' trick of changing the character set): the 16 rows move one row further along the stack each time and come round
+every 32 frames, with no state in RAM (the phase is read from the frame counter). The down chute's thread travels down the
+stack, the up chute's travels up. `build_assets.py` writes the thread to `src/gen/helix.inc` (from the art of the four tiles, so
+changing the art in `tiles.txt` is all it takes); `web/render.js` (`chuteFrame(helix, tick, up)`), `tools/render_level.py --tick N` and
+`build_assets.chute_frame(helix, tick, up)` do the same sum, and the tests check they agree.
+
+### Jumping
+
+A jump rises 26 pixels (`jump_dy` in `src/main.s`, `JUMP_DY` in `web/engine.js` and `web/spritemodel.js`; three tiles up
+reach, `JUMP_REACH` in `tools/levelcheck.py`). While rising nothing above him matters: no head bump on bricks, walls, bombs,
+one-way platforms or chutes, he simply overlays them (only the score row is a ceiling). Sideways collisions stay as they were (a brick
+beside him blocks him), with one exception so he is never stuck: at a body row where he is already inside a solid on the
+edge he is on, he can slide on (he rose into a block and slides about in it and out of it). Falling, he lands on the first solid or one-way surface under his feet
+as before, but never inside a solid: if a solid tile is at the lowest row of his body (`py+15`) he keeps falling until he is clear,
+so a block he rose into lets him fall out of its bottom (or land on its top if his feet got above it).
 
 Notes for map builders:
 
@@ -166,8 +195,8 @@ Notes for map builders:
   set, so its map byte is its id plus 128) and give it behaviour in `main.s` if it needs any; flags alone make it solid
   or one-way.
 
-`tools/levelcheck.py` models a competent player (walk, stairs, ladders, jumps up to two tiles and across five, drops up
-to eight tiles) and reports items it cannot reach. It is an approximation: it ignores pegs, treats bomb and vanishing
+`tools/levelcheck.py` models a competent player (walk, stairs, ladders, chutes, jumps up to three tiles and across six or seven, drops up
+to eight tiles) and reports items it cannot reach and chutes that are not single-wide vertical runs. It is an approximation: it ignores pegs, treats bomb and vanishing
 blocks as solid, and cannot tell you a map is fair.
 
 Adding a level: drop `assets/levels/levelN.txt` next to the others; it is picked up automatically. A level must have
@@ -254,8 +283,8 @@ starts atari800 with its monitor on a pipe and a breakpoint on the `frame_end` l
 one frame (and `Game.run(n)` pipelines many). Tests inject joystick state, then read the game's variables and the
 screen and sprite memory. They cover the physics, the title, the spawn/death/clear animations, lives, game over,
 hi-score, the score row, dots and the door, the 30-second attract run, and the AI clearing maps 1-3 (dots, items, door) without dying. `test_engine.py` also checks that the colour tables the game's display-list interrupt loads are the editor's colours for every level, and that the interrupt fires once per row, every frame. `test_factory.py` builds small arenas
-by poking tiles into screen RAM and checks each part (platform jump-through, stairs and chutes as ledges you walk past and jump onto, belt speeds and
-direction, acceleration and reset, ice and roller glide, chutes (including runs laid out with their twin tiles, and that the thread in the character set turns one row at a time), vanishing and bomb timing and chain reaction, peg
+by poking tiles into screen RAM and checks each part (platform jump-through, stairs as ledges you walk past and jump onto, chutes that carry you down and up (and are walked and jumped through otherwise), jumps that rise through blocks, belt speeds and
+direction, acceleration and reset, ice and roller glide, the thread of the chutes in the character set turning one row at a time, down for one chute and up for the other, vanishing and bomb timing and chain reaction, peg
 start/sweep/push/jump-over) and that maps 4 and 5 load. They are skipped if
 atari800 or the test build is missing. `test_engine.py` (see "Level editor") replays scripted input on both the game and the
 editor's JavaScript engine; `task test-js` runs just the node tests, which need no emulator.
@@ -275,7 +304,7 @@ whether the colour changes land cleanly at the start of each row (the interrupt 
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
 `render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
 (`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield, and the 2 line float above the surface) were only reasoned about. The same goes for the
-new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the chutes' turning thread (the art, its speed and how it reads on a real display, and the two directions), the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) have never been
+new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the chutes' turning thread and the ride (the art, its speed and how it reads on a real display, the two directions, and how the ride and the hop out of an up chute feel), the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.
 Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 32 and 16 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,
 crosses roller, bomb and vanishing blocks) but does not know to jump pegs or ride belts to the end, and nobody has played them. Run `task run` and, if

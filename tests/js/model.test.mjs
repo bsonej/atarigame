@@ -157,7 +157,7 @@ test('a chute and its twin: the twin goes on odd rows only and the game sees a p
   assert.equal(data[5 * COLS + 7], T.SLIDE_R, 'the input is left alone');
 });
 
-test('a level compiles with the twins in: stacks and diagonal runs alternate', () => {
+test('a level compiles with the twins in: stacks alternate', () => {
   const rows = room({ '10,10': '\\', '11,11': '\\', '12,12': '\\', '13,13': '\\', '14,25': '/', '15,25': '/', '16,25': '/' });
   const c = compileLevel(rows, tables);
   const at = (r, col) => c.map[r * COLS + col];
@@ -177,13 +177,15 @@ test('the thread of each chute lines up from tile to tile, and the left one is t
   }
 });
 
-test('chuteFrame: the thread moves a row down every second frame and comes round in 32 frames', () => {
+test('chuteFrame: the down thread moves a row down every second frame and comes round in 32 frames; the up one goes up', () => {
   const h = thread('SLIDE_R');
   for (let t = 0; t < 64; t += 2) {
     const now = asRows(chuteFrame(h, t));
     assert.deepEqual(asRows(chuteFrame(h, t + 1)), now, 'odd frames change nothing');
     assert.deepEqual(asRows(chuteFrame(h, t + 2)).slice(1), now.slice(0, -1), 'everything moves down by one row');
     assert.deepEqual(asRows(chuteFrame(h, t + 32)), now);
+    assert.deepEqual(asRows(chuteFrame(h, t + 2, true)).slice(0, -1), asRows(chuteFrame(h, t, true)).slice(1), 'the up chute: everything moves up by one row');
+    assert.deepEqual(asRows(chuteFrame(h, t + 32, true)), asRows(chuteFrame(h, t, true)));
   }
 });
 
@@ -196,7 +198,7 @@ test('the editor draws the thread the way the game does (same rows at the same f
     for (const tick of [0, 1, 2, 7, 30, 31, 46, 63, 64]) {
       atlas.animateBelts(tick);
       for (const name of ['SLIDE_R', 'SLIDE_L']) {
-        const want = chuteFrame(thread(name), tick);
+        const want = chuteFrame(thread(name), tick, name === 'SLIDE_L');
         assert.deepEqual(atlas.rows[T[name]], want[0], `${name} at ${tick}`);
         assert.deepEqual(atlas.rows[T[`${name}_B`]], want[1], `${name}_B at ${tick}`);
       }
@@ -211,5 +213,5 @@ test('the palette offers the chutes and the ready-made runs, and not the twins',
   const offered = offeredTiles();
   assert.ok(offered.has('SLIDE_R') && offered.has('SLIDE_L'));
   assert.ok(!offered.has('SLIDE_R_B') && !offered.has('SLIDE_L_B'));
-  for (const label of ['Chute right', 'Chute left']) assert.ok(STAMPS.some((s) => s.label === label), label);
+  for (const label of ['Chute down', 'Chute up']) assert.ok(STAMPS.some((s) => s.label === label), label);
 });
