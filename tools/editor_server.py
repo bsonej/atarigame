@@ -69,7 +69,10 @@ class Project:
         flags, canon = ba.tile_tables(tiles)
         door = ba.door_bytes(tiles)
         pal_path = self.root / "assets" / "palette.txt"
-        sprites = [{"name": n, "rows": rows} for n, rows in ba.parse_sprites(self.root / "assets" / "sprites.txt")]
+        sprites = [
+            {"name": n, "rows": rows, "eyes": eyes}
+            for n, rows, eyes in ba.parse_sprite_frames(self.root / "assets" / "sprites.txt")
+        ]
         return {
             "cols": ba.COLS,
             "rows": ba.ROWS,

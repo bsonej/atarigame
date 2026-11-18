@@ -7,7 +7,8 @@ import { COLS, ROWS } from './model.js';
 
 export const COLORS = {
   bg: '#000000',
-  player: '#ffe040',
+  player: 'hsl(350 70% 86.1%)', // Atari $4E: the pink worm
+  eye: '#ffffff',
   peg: '#ff5a4a',
   hud: '#f4f4f4',
 };
@@ -166,6 +167,12 @@ export function drawSprite(ctx, rows, px, py, cell, colour, lines = 16, bit = 4)
   ctx.fillStyle = colour;
   for (let y = 0; y < Math.min(lines, rows.length); y++)
     for (let x = 0; x < bit; x++) if (rows[y] & (0x80 >> x)) ctx.fillRect((px + x) * w, (py + y) * h, w, h);
+}
+
+/** The worm: its eyes (hardware Player 3, which sits behind the body) and then the pink body (Player 0). */
+export function drawWorm(ctx, frame, px, py, cell, colour = COLORS.player, lines = 16, eyeColour = COLORS.eye) {
+  drawSprite(ctx, frame.eyes, px, py, cell, eyeColour, lines);
+  drawSprite(ctx, frame.rows, px, py, cell, colour, lines);
 }
 
 export const PEG_SHAPE = [0x60, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0x90];

@@ -198,9 +198,29 @@ class Belts(Arena):
         self.assertEqual(self.on_belt("CONV_L", 100), -20)
         self.assertEqual(self.on_belt("CONV_L_FAST", 100), -40)
 
-    def test_walking_against_a_belt_goes_nowhere_and_walking_with_it_doubles_your_speed(self) -> None:
-        self.assertLessEqual(abs(self.on_belt("CONV_R", 60, buttons=LEFT)), 2)
+    def test_walking_with_a_belt_adds_its_speed_to_yours(self) -> None:
         self.assertEqual(self.on_belt("CONV_R", 60, buttons=RIGHT), 40)
+        self.assertEqual(self.on_belt("CONV_L", 100, buttons=LEFT), -40)
+
+    def test_walking_against_a_belt_is_slowed_by_it_not_stopped(self) -> None:
+        # a pixel a frame, less 3/8 of the belt's speed: 20 frames of a normal belt cost 7 or 8 pixels
+        self.assertIn(self.on_belt("CONV_R", 100, buttons=LEFT), (-12, -13))
+        self.assertIn(self.on_belt("CONV_L", 60, buttons=RIGHT), (12, 13))
+        fast = self.on_belt("CONV_R_FAST", 100, buttons=LEFT)  # 3/8 of two pixels a frame: a quarter of a pixel net
+        self.assertIn(fast, (-5, -6, -4))
+
+    def test_you_can_walk_onto_and_across_a_fast_belt_turning_against_you(self) -> None:
+        g = self.g
+        self.arena()
+        self.floor(20, 29, "CONV_R_FAST")
+        self.stand(130)
+        g.run(260, LEFT)
+        self.assertLess(g.px, 20 * 4 - 2, "right across it, off its far end")
+        self.arena()
+        self.floor(20, 29, "CONV_L_FAST")
+        self.stand(40)
+        g.run(260, RIGHT)
+        self.assertGreater(g.px, 30 * 4 + 2)
 
     def test_an_accelerating_belt_gets_faster(self) -> None:
         self.arena()
@@ -278,6 +298,15 @@ class Slick(Arena):
 
     def test_ordinary_floor_stops_you_at_once(self) -> None:
         self.assertEqual(self.glide("BRICK"), 0)
+
+    def test_a_roller_picks_you_up_faster_the_longer_it_is(self) -> None:
+        g = self.g
+        for n in (1, 2, 4, 8, 12):
+            self.arena()
+            g.put_tiles(10, 23, [T["ROLLER"]] * n)
+            self.stand(40)
+            g.step(RIGHT)
+            self.assertEqual(g.vx, min(n, 8), f"a roller {n} long")
 
     def test_ice_and_rollers_make_you_slide(self) -> None:
         ice, roller = self.glide("ICE"), self.glide("ROLLER")
@@ -485,6 +514,35 @@ class BombBlocks(Arena):
         self.assertEqual((g.tile(10, 20), g.tile(10, 19)), (0, 0))
         self.assertEqual(g.tile(14, 20), T["EXPLOSIVE"])
 
+    def arm(self, col: int, row: int, fuse: int = 2) -> None:
+        """A bomb block at (col, row) with its fuse already burning."""
+        g = self.g
+        g.put_tiles(col, row, [T["EXPLOSIVE"]])
+        for name, value in (("tt_col", col), ("tt_row", row), ("tt_t", fuse), ("tt_ph", 0), ("tt_kind", 0), ("tt_orig", T["EXPLOSIVE"])):
+            g.poke_bytes(g.labels[name], [value])
+
+    def test_a_bomb_going_off_just_over_your_head_does_not_hurt(self) -> None:
+        g = self.g
+        self.arena()
+        self.stand(40)  # head at y 168; the block's bottom is at 167
+        self.arm(10, 20)
+        g.run(8)
+        self.assertEqual(g.tile(10, 20), T["BOOM"])
+        self.assertEqual(g.mode, PLAY)
+
+    def test_a_bomb_going_off_beside_your_knees_does_not_hurt_but_beside_your_feet_does(self) -> None:
+        g = self.g
+        self.arena()
+        self.stand(36)
+        self.arm(10, 21)  # a tile above his feet
+        g.run(8)
+        self.assertEqual(g.mode, PLAY)
+        self.arena()
+        self.stand(36)
+        self.arm(10, 22)  # level with his feet
+        g.run(8)
+        self.assertEqual(g.mode, DYING)
+
     def test_the_blast_does_not_reach_far(self) -> None:
         g = self.g
         self.build(48)
@@ -642,6 +700,22 @@ class Pegs(Arena):
         g.run(150)
         self.assertEqual(g.mode, PLAY)
         self.assertLess(g.px, 24 * 4, "pushed back to the end of the block, onto the ledge")
+
+    def test_a_peg_only_pushes_a_player_whose_feet_are_beside_it(self) -> None:
+        g = self.g
+        self.goto(4)
+        # the peg is 8 lines tall at y 80: his feet (py + 15) must be on one of those lines
+        for py, pushed in ((72, True), (64, False), (80, False)):
+            g.poke_bytes(g.labels["pg_x"], [100])
+            g.poke_bytes(g.labels["pg_wait"], [0])
+            g.poke_bytes(g.labels["pg_dir"], [255])
+            g.poke("px", 100)
+            g.poke("py", py)
+            g.poke("state", AIR)
+            g.poke("jt", 0xFF)
+            g.poke("fall", 0)
+            g.step()
+            self.assertEqual(g.px < 100, pushed, f"py {py}: px is {g.px}")
 
     def test_the_peg_leaves_you_alone_when_you_are_behind_it(self) -> None:
         self.goto(4)

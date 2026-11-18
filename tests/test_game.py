@@ -47,6 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(ROOT / "tools"))
 import build_assets as _ba  # noqa: E402
+from tools.headless import PM_YOFF  # noqa: E402
 
 _TILES = _ba.parse_tiles(ROOT / "assets" / "tiles.txt")
 TILE = {t["name"]: t["byte"] for t in _TILES}
@@ -241,7 +242,8 @@ class Spawn(Base):
             g.idle()
             colours.add(g.mem(0x0200, 256)[0xC0])
         self.assertGreater(len(colours), 4)
-        self.assertEqual(g.mem(0x0200, 256)[0xC0], 0x1E)
+        self.assertEqual(g.mem(0x0200, 256)[0xC0], 0x4E, "the pink worm")
+        self.assertEqual(g.mem(0x0200, 256)[0xC3], 0x0E, "with white eyes")
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +482,15 @@ class GameLogic(Base):
         sprite = self.g.sprite()
         self.assertEqual(len(sprite), 16)
         self.assertEqual(sprite[1], 0xF0)  # the head row of the stand frame
+
+    def test_the_worms_eyes_are_player_3(self) -> None:
+        g = self.g
+        eyes = g.mem(g.pm0 + 0x300, 512)[PM_YOFF + g.py : PM_YOFF + g.py + 16]
+        want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[0][2]
+        self.assertEqual(list(eyes), want)
+        self.assertTrue(any(want), "the stand frame has eyes")
+        body = g.sprite()
+        self.assertTrue(all(not (e & b) for e, b in zip(eyes, body)), "an eye is never where the body is")
 
     def test_sprite_follows_the_player_vertically(self) -> None:
         g = self.g

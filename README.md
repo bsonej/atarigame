@@ -81,7 +81,7 @@ In the emulator: F5 warm reset, F9 quit.
 | `assets/tiles.txt` | 4x8 tiles, four colours, with the character each one has in level maps and what it does (`solid`, `oneway`, `alt`). The header documents the format. |
 | `assets/palette.txt` | The row hues, grey, white, ice blue, score row and background colours as Atari colour bytes. Generates `src/gen/palette.inc`; the editor gets them through `/api/tiles`. |
 | `assets/font.txt` | 3x5 text font (A-Z, 0-9, `- ! ? :`). Ids: digits 16-25, letters 32-57, others from 58. |
-| `assets/sprites.txt` | Player frames (4x16, one colour): stand, walk, climb, and the two death frames. |
+| `assets/sprites.txt` | The pink worm's frames (4x16): stand, walk, climb, and the two death frames. `#` is body (Player 0, pink), `e` is an eye (Player 3, white, shown only where the body has no pixel). |
 | `assets/levels/*.txt` | 40x24 maps, played in name order. `#` platform, `W` wall, `H` ladder, `*` item, `^` spike, `D` exit door, `@` start, `p` peg, plus the factory parts below. Row 0 is the score row. |
 | `assets/screens/*.txt` | Full-screen text maps (`title`, `gameover`). Letters/digits come from the font; a lowercase letter is the same glyph in the second text colour; `#` `*` `^` are tiles. Comments start with `#!`. |
 | `tools/build_assets.py` | Validates the assets and generates `src/gen/*.inc` (charset with the font merged in, `.charmap` so `.byte "TEXT"` works, the tile flags table, sprites, levels with their pegs and level tables, screens). |
@@ -105,14 +105,14 @@ jump through it and can stand on it.
 | `=` | platform | one-way: jump up through it, land on top, walk through it at body height |
 | `S` | stair | a thin ledge (the top 3 pixel rows of the tile). Not solid: walk past it, or jump up through it and land on top; a flight of them is climbed by jumping |
 | `\` `/` | chute | a ledge like stairs that also carries you right (`\`) or left (`/`) at 2 pixels a frame. Not solid; a diagonal row of them takes you down a slope (the walk-down step works on chutes), but you jump to go up one |
-| `{` `<` `(` | belt, left | slow (half a pixel a frame), normal (1), fast (2). Drifts you whether or not you walk |
+| `{` `<` `(` | belt, left | slow (half a pixel a frame), normal (1), fast (2). Drifts you whether or not you walk. Walking with it adds its speed to yours; walking against it, it pulls at you only 3/8 as hard, so you can always walk onto it and along it, slowly (a normal belt costs you 3/8 of a pixel a frame, a fast one 3/4) |
 | `}` `>` `)` | belt, right | the same, to the right |
 | `[` `]` | accelerating belt, left / right | starts slow, gains speed every few frames up to fast, resets when you step off |
 | `~` | ice | solid; you speed up slowly, turn round slowly and slide a long way after letting go |
-| `o` | roller | solid; the same idea with quicker grip, so you stop sooner |
-| `X` | bomb block | step on it and it flashes for about 0.9 seconds, then explodes. The blast kills you if you are within one tile either side or two above, and sets off bomb blocks next to it. The block is gone afterwards |
+| `o` | roller | solid; the same idea as ice with quicker grip, so you stop sooner. The longer the run of rollers under your feet, the harder it grips: it speeds you up by as many 1/16 pixels a frame as it is tiles long, up to 8 (a 1-tile roller is slower to get going than ice, an 8-tile one is almost instant) |
+| `X` | bomb block | step on it and it flashes for about 0.9 seconds, then explodes. The blast kills you if your feet are within one tile either side and between two tiles above the block and its bottom edge (so a bomb going off over your head, or beside your knees, does nothing), and sets off bomb blocks next to it. The block is gone afterwards |
 | `v` | vanishing block | step on it and it flickers for about 0.6 seconds, then goes (you fall); it comes back after about 3.6 seconds, waiting until you are out of the way |
-| `p` | peg | not a tile: marks where a peg starts. It sits on the platform under it and sweeps along the solid blocks there, pausing at each end, at half a pixel a frame. It pushes you along ahead of it (off the edge if you let it); jump over it. At most 2 per map, each needs a platform at least 2 tiles wide |
+| `p` | peg | not a tile: marks where a peg starts. It sits on the platform under it and sweeps along the solid blocks there, pausing at each end, at half a pixel a frame. It pushes you along ahead of it (off the edge if you let it) if it is beside your feet; jump over it. A peg on a block above you does not touch you. At most 2 per map, each needs a platform at least 2 tiles wide |
 
 ### End caps
 
@@ -218,7 +218,7 @@ whether the colour changes land cleanly at the start of each row (the interrupt 
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
 `render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
 (`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield) were only reasoned about. The same goes for the
-new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation and the red pegs have never been
+new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the red pegs and the pink worm with its white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.
 Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 32 and 16 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,
 crosses roller, bomb and vanishing blocks) but does not know to jump pegs or ride belts to the end, and nobody has played them. Run `task run` and, if
@@ -227,4 +227,4 @@ the player is a few pixels off from the floor, adjust `PM_YOFF`.
 ## Memory map
 
 `$2000-$5FFF` code and data (levels, screens, sprites) · `$6000` character set (1 KB aligned) · `$6400` display list ·
-`$6500` screen (40x24) · `$7000` player/missile area (2 KB aligned; player 0 at `$7400`) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).
+`$6500` screen (40x24) · `$7000` player/missile area (2 KB aligned; player 0 at `$7400`, the pegs are players 1 and 2 and the worm's eyes player 3) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).

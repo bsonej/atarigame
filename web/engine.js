@@ -27,6 +27,7 @@ const CHAIN_FUSE = 8;
 const BOOM_FRAMES = 8;
 const PEG_WAIT = 40;
 const SLICK_MAX = 20;
+const ROLLER_LONG = 8; // a roller this long (or longer) has the most grip
 const MAX_FALL = 64;
 const SPR_H = 16;
 export const START_LIVES = 3;
@@ -443,6 +444,7 @@ export class Game {
     if (!found) this.under = mid;
     const u = this.under;
     let speed;
+    let k0 = false; // true for a belt (not a chute)
     if (u === this.T.SLIDE_R || u === this.T.SLIDE_L) {
       this.cdir = u === this.T.SLIDE_R ? 0 : 1;
       this.cacc = 4;
@@ -457,6 +459,7 @@ export class Game {
         return;
       }
       this.cdir = CONV_DIR[k];
+      k0 = true;
       if (CONV_SPD[k]) {
         this.cacc = 4;
         this.cacc_t = 0;
@@ -467,6 +470,11 @@ export class Game {
         speed = this.cacc;
       }
     }
+    if (k0) {
+      // a belt turning against the way he is walking pulls at him only 3/8 as hard (he can always walk onto it)
+      const against = this.cdir ? this.joy & JOY.RIGHT : this.joy & JOY.LEFT;
+      if (against) speed = (speed >> 2) + (speed >> 3);
+    }
     this.cfrac = u8(this.cfrac + speed);
     while (this.cfrac >= 16) {
       this.cfrac -= 16;
@@ -475,9 +483,29 @@ export class Game {
     }
   }
 
+  /** Roller tiles in the run under the feet, 1..ROLLER_LONG: a longer roller grips harder. */
+  rollerLen() {
+    const y = u8(this.py + SPR_H);
+    let mid = 0;
+    for (let i = 0; i < 3; i++) {
+      mid = u8(u8(this.px + PROBE_DX[i]) & 0xfc);
+      if (this.getTile(mid, y) === this.T.ROLLER) break;
+    }
+    let n = 1;
+    for (let x = mid - 4; x >= 0; x -= 4) {
+      if (this.getTile(x, y) !== this.T.ROLLER) break;
+      if (++n >= ROLLER_LONG) return n;
+    }
+    for (let x = mid + 4; ; x += 4) {
+      if (this.getTile(x, y) !== this.T.ROLLER) break;
+      if (++n >= ROLLER_LONG) return n;
+    }
+    return n;
+  }
+
   /** Ice (x=0) and rollers (x=1): speed up gradually, glide when you let go. */
   slickMove(x) {
-    const acc = SLICK_ACC[x];
+    const acc = x === 1 ? this.rollerLen() : SLICK_ACC[x];
     const fric = SLICK_FRIC[x];
     const fmask = SLICK_FMASK[x];
     this.fcount = u8(this.fcount + 1);
@@ -695,7 +723,7 @@ export class Game {
       u8(this.px + 3) >= ox &&
       u8(ox + 11) >= this.px &&
       u8(this.py + 15) >= oy &&
-      u8(u8(s.row << 3) + 7) >= this.py
+      u8(u8(s.row << 3) + 7) >= u8(this.py + 15) // only his feet count
     )
       this.die();
     // chain reaction: bomb blocks next to this one (down, up, right, left)
@@ -730,7 +758,7 @@ export class Game {
       u8(this.px + 3) < p.x ||
       u8(p.x + 3) < this.px ||
       u8(this.py + 15) < p.y ||
-      u8(p.y + 7) < this.py
+      u8(p.y + 7) < u8(this.py + 15) // only his feet touch it
     )
       return;
     if (p.dir & 0x80) {

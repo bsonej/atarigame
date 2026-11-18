@@ -44,6 +44,7 @@ STRIG0  = $0284
 PCOLR0  = $02C0
 PCOLR1  = $02C1
 PCOLR2  = $02C2
+PCOLR3  = $02C3
 COLOR0  = $02C4         ; playfield colour for pixel value 1
 COLOR1  = $02C5         ; ... value 2
 COLOR2  = $02C6         ; ... value 3
@@ -59,6 +60,7 @@ WSYNC   = $D40A
 NMIEN   = $D40E
 HPOSP0  = $D000
 HPOSP1  = $D001         ; HPOSP2 follows: pegs are Player 1 and 2
+HPOSP3  = $D003         ; the worm's eyes
 SIZEP0  = $D008
 GRACTL  = $D01D
 PAL     = $D014         ; bits 1-3 are zero on a PAL machine
@@ -73,6 +75,8 @@ PMAREA  = $7000         ; 2 KB aligned, single-line resolution
 PM0     = PMAREA + $0400
 PM_YOFF = 32            ; PM byte index of the first playfield scan line
 PM0Y    = PM0 + PM_YOFF
+PM3Y    = PM0Y + $300     ; Player 3: the eyes
+WORM    = $4E             ; the worm's colour (pink); its eyes are white
 
 ; ---- game constants --------------------------------------------------------
 S_GROUND = 0
@@ -119,6 +123,7 @@ VANISH_BACK = 180       ; ... until it comes back
 CHAIN_FUSE  = 8         ; a bomb block next to a blast goes off this soon
 BOOM_FRAMES = 8
 PEG_WAIT    = 40        ; frames a peg rests at each end of its block
+ROLLER_LONG = 8         ; a roller this long (or longer) has the most grip
 SLICK_MAX   = 20        ; top speed on ice and rollers, in 1/16 pixel per frame
 DEMO_LEVELS = 3         ; the attract AI plays the first this many maps (it knows nothing of the factory parts)
 
@@ -774,13 +779,32 @@ surface_drift:
         inc cacc
 @gotacc:
         lda cacc
-        jmp @drift
+        jmp @belt
 @fixed: pha
         lda #4
         sta cacc
         lda #0
         sta cacc_t
         pla
+@belt:  sta tmp                 ; walking with the belt: carried at its full speed on top of his own. Walking
+        lda joy                 ; against it: it pulls at him only 3/8 as hard, so he can always walk onto
+        ldx cdir                ; it and along it, just slowly
+        bne @bl
+        and #JOY_LEFT           ; the belt carries right: left is against it
+        jmp @bt
+@bl:    and #JOY_RIGHT
+@bt:    beq @full               ; not walking against it
+        lda tmp
+        lsr a
+        lsr a
+        pha                     ; speed/4 + speed/8
+        lsr a
+        sta tmp
+        pla
+        clc
+        adc tmp
+        jmp @drift
+@full:  lda tmp
         jmp @drift
 @sr:    lda #0
         sta cdir
@@ -862,12 +886,16 @@ push_left:
 
 ; Ice and rollers (X = 0 ice, 1 roller): speed up gradually, glide when you let go.
 slick_move:
-        lda slick_acc,x
-        sta s_acc
         lda slick_fric,x
         sta s_fric
         lda slick_fmask,x
         sta s_fmask
+        lda slick_acc,x
+        cpx #1
+        bne @gotacc
+        jsr roller_len          ; a roller grips harder the longer it is
+@gotacc:
+        sta s_acc
         inc fcount
         lda joy
         and #JOY_RIGHT
@@ -950,6 +978,58 @@ slick_move:
         sta vx
         sta vfrac
 @rts:   rts
+
+; How many roller tiles are in this run under the feet (1..ROLLER_LONG): the longer the roller, the faster it
+; picks the player up (acceleration = its length in 1/16 pixel per frame per frame).
+roller_len:
+        ldx #0
+@base:  lda px                  ; the roller tile under the feet (middle, then each foot), as a pixel column
+        clc
+        adc probe_dx,x
+        and #$FC
+        sta tt_c
+        jsr @probe
+        beq @found
+        inx
+        cpx #3
+        bcc @base
+@found: lda #1
+        sta tt_k
+        lda tt_c
+        sta tt_j
+@l:     lda tt_j
+        sec
+        sbc #4
+        bcc @r0
+        jsr @probe
+        bne @r0
+        inc tt_k
+        lda tt_k
+        cmp #ROLLER_LONG
+        bcc @l
+        rts
+@r0:    lda tt_c
+        sta tt_j
+@r:     lda tt_j
+        clc
+        adc #4
+        jsr @probe
+        bne @done
+        inc tt_k
+        lda tt_k
+        cmp #ROLLER_LONG
+        bcc @r
+@done:  lda tt_k
+        rts
+@probe: sta tt_j                ; A = pixel column: Z set if there is a roller under it
+        sta tx
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+        jsr get_tile
+        cmp #T_ROLLER
+        rts
 
 ; Snap onto the ladder column and start climbing.
 start_climb:
@@ -1454,7 +1534,7 @@ mode_dying:
         beq @c1
         lda #$44
         bne @c2
-@c1:    lda #$1E
+@c1:    lda #WORM
 @c2:    sta PCOLR0
         lda mtimer              ; falling pitch
         cmp #44
@@ -1531,7 +1611,7 @@ mode_spawn:
         sta mode
         lda #16
         sta drawn
-        lda #$1E
+        lda #WORM
         sta PCOLR0
 @rts:   rts
 
@@ -1836,8 +1916,10 @@ game_colors:
         inx
         cpx #24
         bne @row
-        lda #$1E
-        sta PCOLR0              ; yellow player
+        lda #WORM
+        sta PCOLR0              ; pink worm
+        lda #$0E
+        sta PCOLR3              ; white eyes
         lda #$46
         sta PCOLR1              ; red pegs
         sta PCOLR2
@@ -1924,6 +2006,7 @@ hide_player:
         jsr clear_pm
         lda #0
         sta HPOSP0
+        sta HPOSP3
         sta HPOSP1
         sta HPOSP1+1
         sta oldpy
@@ -1974,6 +2057,7 @@ draw_player:
         ldy #SPR_H
         lda #0
 @erase: sta PM0Y,x
+        sta PM3Y,x
         inx
         dey
         bne @erase
@@ -1981,6 +2065,7 @@ draw_player:
         clc
         adc #48                 ; left edge of the playfield is colour clock 48
         sta HPOSP0
+        sta HPOSP3
         lda py
         sta oldpy
         cmp #200
@@ -1990,12 +2075,18 @@ draw_player:
         sta ptr
         lda spr_hi,x
         sta ptr+1
+        lda spr_elo,x
+        sta ptr2
+        lda spr_ehi,x
+        sta ptr2+1
         ldx py
         ldy #0
 @draw:  cpy drawn
         bcs @rts
         lda (ptr),y
         sta PM0Y,x
+        lda (ptr2),y
+        sta PM3Y,x
         inx
         iny
         cpy #SPR_H
@@ -2396,15 +2487,20 @@ explode:
         adc #15
         cmp ov_y
         bcc @safe
-        lda tt_row,x
+        lda tt_row,x            ; ... and only his feet count: below the block, his head in it, he is safe
         asl a
         asl a
         asl a
         clc
         adc #7
-        cmp py
-        bcc @safe
-        stx tt_i
+        sta tmp
+        lda py
+        clc
+        adc #15
+        cmp tmp
+        beq @hit
+        bcs @safe
+@hit:   stx tt_i
         jsr die
         ldx tt_i
 @safe:  stx tt_i                ; chain reaction: bomb blocks next to this one
@@ -2549,7 +2645,7 @@ update_pegs:
         bcc @peg
 @rts:   rts
 
-; Push the player along if peg X overlaps it and the player is ahead of the peg.
+; Push the player along if peg X is beside his feet and the player is ahead of the peg.
 peg_push:
         lda px                  ; overlap in x ...
         clc
@@ -2569,9 +2665,14 @@ peg_push:
         lda pg_y,x
         clc
         adc #7
-        cmp py
-        bcc @no
-        stx pg_i
+        sta tmp
+        lda py
+        clc
+        adc #15
+        cmp tmp
+        beq @hit
+        bcs @no                 ; his feet are below the peg: a peg on the block above does not touch him
+@hit:   stx pg_i
         lda pg_dir,x
         bmi @left
         lda px                  ; moving right: only if the player is not behind the peg
@@ -3054,7 +3155,7 @@ conv_mask: .byte 7,3,1,3,7,3,1,3
 belt_pat:  .byte $EA,$BA,$AE,$AB        ; one bright pixel (3) in a row of 2s, in each of 4 places
 
 ; Ice, roller: acceleration per frame, friction per step, friction on frames where (count & mask) = 0.
-slick_acc:   .byte 2,4
+slick_acc:   .byte 2,4          ; (a roller's is its length instead, see roller_len)
 slick_fric:  .byte 1,2
 slick_fmask: .byte 1,0
 
@@ -3068,6 +3169,12 @@ wrap_tab:  .byte LEVEL_COUNT,DEMO_LEVELS
 pt_dx:  .byte 0,3,0,3,0,3
 pt_dy:  .byte 3,3,8,8,13,13
 
+spr_elo: .repeat SPR_COUNT, i
+        .byte <(spr_eyes + SPR_H * i)
+        .endrepeat
+spr_ehi: .repeat SPR_COUNT, i
+        .byte >(spr_eyes + SPR_H * i)
+        .endrepeat
 spr_lo: .repeat SPR_COUNT, i
         .byte <(spr_frames + SPR_H * i)
         .endrepeat

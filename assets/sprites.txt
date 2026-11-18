@@ -1,114 +1,122 @@
-# Player sprite frames (hardware Player 0). Each frame is 16 rows of 4 pixels: # = lit, . = clear.
+# The player: a pink worm with eyes. Each frame is 16 rows of 4 pixels (one pixel = one colour clock, the width
+# of a tile; a row is one scan line, so the worm is two tiles tall). The width is as much as the player's
+# 4-pixel collision box allows.
+#
+#   #  body: hardware Player 0 (pink)
+#   e  eye: hardware Player 3 (white). It sits behind the body, so it shows only where the body has no pixel
+#   .  nothing (the playfield shows through)
+#
 # Frame order matters: the game expects 0=stand 1=walk A 2=walk B (also used in the air) 3=climb A 4=climb B
-# 5=die A 6=die B (the death animation alternates between these two).
+# 5=die A 6=die B (the death animation alternates between these two). The stand frame must have a '#' in every row
+# (the spawn animation reveals it a line at a time and the tests check each line is lit).
 
 frame stand
 .##.
 ####
-.##.
-.##.
+e#e#
+e#e#
 ####
-####
 .##.
 .##.
+##..
+##..
+.##.
+..##
+..##
 .##.
 .##.
-.##.
-.##.
-.##.
-.##.
-.##.
-####
+##..
+.#..
 
 frame walk_a
 .##.
 ####
-.##.
-.##.
+e#e#
+e#e#
 ####
-####
-.##.
-.##.
-.##.
 .##.
 ##..
 ##..
+.##.
+..##
+..##
+.##.
+##..
 ##..
 .##.
-.##.
-.###
+..#.
 
 frame walk_b
 .##.
 ####
-.##.
-.##.
+e#e#
+e#e#
 ####
-####
-.##.
-.##.
-.##.
 .##.
 ..##
 ..##
+.##.
+##..
+##..
+.##.
+..##
 ..##
 .##.
-.##.
-###.
+.#..
 
 frame climb_a
 .##.
 ####
-.##.
-.##.
+e#e#
+e#e#
 ####
-#.##
-#.##
-.##.
 .##.
 .##.
 ##..
 ##..
-##..
 .##.
 .##.
+..##
+..##
 .##.
+.##.
+.#..
 
 frame climb_b
 .##.
 ####
-.##.
-.##.
+e#e#
+e#e#
 ####
-##.#
-##.#
-.##.
 .##.
 .##.
 ..##
 ..##
-..##
 .##.
 .##.
+##..
+##..
 .##.
+.##.
+.#..
 
 frame die_a
-#..#
-#..#
 .##.
 ####
-.##.
-.##.
+e#e#
+e#e#
 ####
 .##.
+#..#
 .##.
+#..#
 .##.
 #..#
+.##.
 #..#
+.##.
 #..#
-#..#
-#..#
-#..#
+.##.
 
 frame die_b
 ....
@@ -121,9 +129,9 @@ frame die_b
 ....
 .##.
 ####
-.##.
-####
+e#e#
 ####
 .##.
 #..#
 #..#
+.##.

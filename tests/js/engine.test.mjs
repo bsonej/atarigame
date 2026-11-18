@@ -197,14 +197,64 @@ test('the last life lost is game over', () => {
 
 test('a belt carries you: normal speed is one pixel a frame', () => {
   const g = play(room({ '23,1': '>'.repeat(38) }));
-  g.py = 168 - 8; // on top of the belt row (row 23 is the belt now)
   g.py = FLOOR_Y;
   run(g, 2);
   const x0 = g.px;
   run(g, 20);
   assert.equal(g.px - x0, 20, 'drifts right with no input');
+  run(g, 20, JOY.RIGHT);
+  assert.equal(g.px - x0, 60, 'walking with the belt: both add up');
+});
+
+test('walking against a belt is slowed by it, not stopped', () => {
+  const g = play(room({ '23,1': '>'.repeat(38) }));
+  g.px = 100;
+  run(g, 2);
+  const x0 = g.px;
   run(g, 20, JOY.LEFT);
-  assert.equal(g.px - x0, 20, 'walking left at the same speed stands still');
+  // a pixel a frame to the left, less 3/8 of the belt's pixel a frame: 20 - 7.5, give or take a pixel
+  assert.ok(x0 - g.px >= 12 && x0 - g.px <= 13, `moved ${x0 - g.px} pixels left`);
+});
+
+test('you can walk onto a fast belt that is turning against you, in both directions', () => {
+  const right = play(room({ '23,10': ')'.repeat(10) })); // fast belt carrying right: walk onto it from its right
+  right.px = 90;
+  run(right, 260, JOY.LEFT);
+  assert.ok(right.px < 10 * 4, `got to ${right.px}, past the belt's left end`);
+  const left = play(room({ '23,10': '('.repeat(10) })); // fast belt carrying left: walk onto it from its left
+  left.px = 20;
+  run(left, 260, JOY.RIGHT);
+  assert.ok(left.px > 20 * 4 + 2, `got to ${left.px}, past the belt's right end`);
+});
+
+test('a chute is not a belt: it carries you at full speed whatever you do', () => {
+  const g = play(room({ '22,10': '\\\\\\\\' }));
+  g.px = 11 * 4;
+  g.py = 22 * 8 - 16;
+  run(g, 2);
+  const x0 = g.px;
+  run(g, 10, JOY.LEFT);
+  assert.ok(g.px >= x0, 'walking against it does not get you anywhere');
+});
+
+test('a roller grips harder the longer it is', () => {
+  const lens = {};
+  for (const n of [1, 2, 4, 6, 8, 12]) {
+    const g = play(room({ '23,10': 'o'.repeat(n) }));
+    g.px = 10 * 4 + 2;
+    run(g, 1);
+    lens[n] = g.rollerLen();
+    run(g, 1, JOY.RIGHT);
+    assert.equal(g.vx, Math.min(n, 8), `a roller ${n} long speeds you up by ${Math.min(n, 8)}`);
+  }
+  assert.deepEqual(lens, { 1: 1, 2: 2, 4: 4, 6: 6, 8: 8, 12: 8 });
+});
+
+test('the length counts the roller to both sides of the feet', () => {
+  const g = play(room({ '23,10': 'oooo' }));
+  g.px = 12 * 4 + 1; // under the third tile
+  run(g, 1);
+  assert.equal(g.rollerLen(), 4);
 });
 
 test('ice: you speed up slowly and slide after letting go', () => {
@@ -255,6 +305,54 @@ test('standing on a bomb block when it goes off is fatal', () => {
   assert.equal(g.mode, MODE.PLAY);
   run(g, 2);
   assert.equal(g.mode, MODE.DYING);
+});
+
+test('a bomb block going off over his head does not hurt him: only his feet count', () => {
+  const g = play(room({ '20,5': 'X' })); // its bottom is just above his head when he stands on the floor
+  g.px = 5 * 4;
+  run(g, 2);
+  g.armCell(5, 20, 0, 2, g.map[20 * 40 + 5]);
+  run(g, 4);
+  assert.equal(g.map[20 * 40 + 5], T.BOOM, 'it went off');
+  assert.equal(g.mode, MODE.PLAY);
+  assert.equal(g.lives, 3);
+});
+
+test('a bomb block going off beside his feet kills; beside his knees, level with the tile above, it does not', () => {
+  for (const [row, dies] of [[22, true], [21, false]]) {
+    const g = play(room({ [`${row},6`]: 'X' }));
+    g.px = 5 * 4;
+    run(g, 2);
+    g.armCell(6, row, 0, 2, g.map[row * 40 + 6]);
+    run(g, 4);
+    assert.equal(g.mode, dies ? MODE.DYING : MODE.PLAY, `row ${row}`);
+  }
+});
+
+test('standing on a bomb block when it goes off kills him, in the blast zone two tiles above it too', () => {
+  for (const above of [0, 1, 2]) {
+    const g = play(room({ '23,5': 'X', '23,7': 'W' }));
+    g.px = 5 * 4;
+    g.py = (23 - above) * 8 - 16; // feet on the top of the block (0) or this many tiles above it
+    g.state = STATE.AIR; // hanging in the air for the test: the block goes off before he falls far
+    g.jt = 0xff;
+    g.armCell(5, 23, 0, 1, g.map[23 * 40 + 5]);
+    run(g, 2);
+    assert.equal(g.mode, MODE.DYING, `${above} tiles above the block`);
+  }
+});
+
+test('a peg on the block above does not push him from below', () => {
+  const g = play(room());
+  const peg = { x: 40, y: 170, min: 20, max: 60, dir: 1, wait: 0 }; // overlaps his head and chest, not his feet
+  g.px = 40;
+  g.pegs = [peg];
+  g.pegPush(peg);
+  assert.equal(g.px, 40);
+  const level = { x: 40, y: 176, min: 20, max: 60, dir: 1, wait: 0 }; // beside his feet
+  g.pegs = [level];
+  g.pegPush(level);
+  assert.equal(g.px, 41);
 });
 
 test('a ladder is climbed with up and down', () => {

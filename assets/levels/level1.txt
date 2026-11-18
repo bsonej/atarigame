@@ -1,5 +1,5 @@
-# Level 1. 40 columns x 24 rows. Row 0 is reserved for the score display.
-# .=empty  #=platform  W=wall  H=ladder  *=item  ^=spikes  D=exit door  @=player start (top tile of the player, who is 2 tall)
+# Level 1: Worm?. 40 columns x 24 rows. Row 0 is reserved for the score display.
+# Characters are defined in assets/tiles.txt (see the table in README.md). p = a peg (one per block)
 ........................................
 W......................................W
 W......................................W
