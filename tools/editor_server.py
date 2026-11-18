@@ -93,12 +93,14 @@ class Project:
                 for t in tiles
             ],
             "caps": {str(k): v for k, v in caps.items()},
+                    "twinOf": t.get("twin_of"),
             "dots": {str(k): v for k, v in ba.dot_families(tiles).items()},
             "door": list(door) if door else None,
             "doorCells": [list(c) for c in ba.DOOR_CELLS],
             "fade": ba.fade_thresholds(),
             "fadeSteps": ba.FADE_STEPS,
             "palette": ba.parse_palette(pal_path) if pal_path.exists() else None,
+            "twins": {str(k): v for k, v in ba.twin_families(tiles).items()},
             "maxCollect": ba.MAX_COLLECT,
             "flags": flags,
             "canon": canon,
@@ -136,7 +138,7 @@ class Project:
         solid = {t["byte"] for t in tiles if t["solid"]}
         try:
             ba.parse_level(Path(f"{name}.txt"), chars, solid, ba.cap_families(tiles), text=text,
-                           dots=ba.dot_families(tiles), door=ba.door_bytes(tiles))
+                           dots=ba.dot_families(tiles), door=ba.door_bytes(tiles), twins=ba.twin_families(tiles))
         except ba.AssetError as e:
             raise ApiError(400, str(e).removeprefix(f"{name}.txt: ")) from None
         rows = [ln for ln in text.splitlines() if ln.strip() and not ba._is_comment(ln)]

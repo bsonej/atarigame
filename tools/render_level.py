@@ -59,16 +59,23 @@ def write_png(path: Path, width: int, height: int, rows: list[bytes]) -> None:
     )
 
 
-def render(level: Path, out: Path, scale: int = 6, root: Path = ROOT, level_index: int | None = None) -> None:
+def render(level: Path, out: Path, scale: int = 6, root: Path = ROOT, level_index: int | None = None, tick: int = 0) -> None:
+    """``tick`` is how many 50 Hz frames into the game the picture is: it only matters to the chutes, whose thread turns."""
     tiles = ba.parse_tiles(root / "assets" / "tiles.txt")
     pal = ba.parse_palette(root / "assets" / "palette.txt")
     chars = {t["char"]: t["byte"] for t in tiles if t["char"] is not None}
     solid = {t["byte"] for t in tiles if t["solid"]}
-    lv = ba.parse_level(level, chars, solid, ba.cap_families(tiles), dots=ba.dot_families(tiles), door=ba.door_bytes(tiles))
+    lv = ba.parse_level(level, chars, solid, ba.cap_families(tiles), dots=ba.dot_families(tiles), door=ba.door_bytes(tiles),
+                         twins=ba.twin_families(tiles))
     if level_index is None:  # its place among the shipped levels
         names = sorted((root / "assets" / "levels").glob("*.txt"), key=ba.natural_key)
         level_index = next((i for i, n in enumerate(names) if n.stem == level.stem), 0)
-    by_byte = {t["byte"]: t for t in tiles}
+    by_byte = {t["byte"]: dict(t) for t in tiles}
+    for name in ("SLIDE_R", "SLIDE_L"):  # the chutes' thread, turned to this moment
+        twin = next((t for t in tiles if t["name"] == f"{name}_B"), None)
+        plain = next((t for t in tiles if t["name"] == name), None)
+        if twin and plain:
+            by_byte[plain["byte"]]["rows"], by_byte[twin["byte"]]["rows"] = ba.chute_frame(plain["rows"] + twin["rows"], tick)
     w, h = ba.COLS * ba.TILE_W, ba.ROWS * ba.TILE_H
     pix = [[(0, 0, 0)] * w for _ in range(h)]
     for i, b in enumerate(lv["data"][: ba.COLS * ba.ROWS]):
@@ -104,8 +111,9 @@ def main() -> int:
     ap.add_argument("level", type=Path)
     ap.add_argument("out", type=Path)
     ap.add_argument("--scale", type=int, default=6)
+    ap.add_argument("--tick", type=int, default=0, help="50 Hz frames into the game: turns the chutes' thread (default 0)")
     a = ap.parse_args()
-    render(a.level, a.out, a.scale)
+    render(a.level, a.out, a.scale, tick=a.tick)
     return 0
 
 

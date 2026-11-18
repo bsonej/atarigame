@@ -112,6 +112,11 @@ DOOR_GLYPHS  = CHARSET_ADDR + (T_DOOR_BL & $7F) * 8
         .assert (T_DOOR_TR & $7F) - (T_DOOR_BL & $7F) = 5, error, "the six door tiles need consecutive ids"
 FADE_STEPS   = 16
 CONV_GLYPHS  = CHARSET_ADDR + T_CONV_FIRST * 8
+; the chutes' glyphs: each is one of a pair (the plain tile on even screen rows, its twin on odd ones)
+CHUTE_R_A    = CHARSET_ADDR + T_SLIDE_R * 8
+CHUTE_R_B    = CHARSET_ADDR + T_SLIDE_R_B * 8
+CHUTE_L_A    = CHARSET_ADDR + T_SLIDE_L * 8
+CHUTE_L_B    = CHARSET_ADDR + T_SLIDE_L_B * 8
 
 KIND_EXPL   = 0         ; timed tiles
 KIND_VANISH = 1
@@ -380,6 +385,7 @@ mainloop:
         sta vec+1
         jsr run_mode
         jsr animate_belts
+        jsr animate_chutes
         jsr update_fx
 frame_end:
         jmp mainloop
@@ -2769,6 +2775,34 @@ animate_belts:
         rts
 
 ; ---------------------------------------------------------------------------
+; Chutes: a screw thread that turns. The thread is 16 rows tall (assets/tiles.txt: a chute tile and its twin, which
+; the level puts on every second screen row, so a stack of chutes is one unbroken thread). Every second frame the
+; 16 rows (helix_r / helix_l, each twice over) are written into the glyphs one row further down: the plain tile
+; gets the 8 rows from the phase on, its twin the next 8. A right chute's "/" thread and a left chute's "\" thread
+; both travel down the stack, which makes the two turn opposite ways.
+animate_chutes:
+        lda RTCLOK+2
+        lsr a
+        bcs @done               ; odd frame: nothing to do
+        eor #15                 ; the phase counts down, so the thread moves down
+        and #15
+        tax
+        ldy #0
+@row:   lda helix_r,x
+        sta CHUTE_R_A,y
+        lda helix_r+8,x
+        sta CHUTE_R_B,y
+        lda helix_l,x
+        sta CHUTE_L_A,y
+        lda helix_l+8,x
+        sta CHUTE_L_B,y
+        inx
+        iny
+        cpy #8
+        bne @row
+@done:  rts
+
+; ---------------------------------------------------------------------------
 ; The AI that plays in attract mode. It produces the same joy bits a person would.
 ;
 ;   - It picks the item that is cheapest to reach (columns apart + 8 per row apart, so items on
@@ -3171,6 +3205,7 @@ ai_ground:
         .include "gen/levels.inc"       ; the maps and the level tables
         .include "gen/screens.inc"      ; screen_title, screen_gameover
         .include "gen/fade.inc"         ; door_thr: when each pixel of the exit door shows
+        .include "gen/helix.inc"        ; helix_r, helix_l: the thread of the chutes
         .include "gen/tileflags.inc"    ; tile_flags: bit 0 solid, bit 1 one-way
 
 row_lo: .repeat 24, i

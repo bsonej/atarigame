@@ -3,8 +3,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { applyCaps, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows, COLS, ROWS } from '../../web/model.js';
+import { applyCaps, applyTwins, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows, COLS, ROWS } from '../../web/model.js';
 import { GROUPS, STAMPS, offeredTiles } from '../../web/palette.js';
+import { Atlas, chuteFrame } from '../../web/render.js';
 import { api, tables, ROOT, room } from './helpers.mjs';
 
 const T = tables.T;
@@ -136,4 +137,79 @@ test('every level needs an exit door with room above it and beside it', () => {
 test('the palette from the server drives the row colours (assets/palette.txt)', () => {
   assert.equal(tables.palette.hues.length, 8);
   for (const k of ['grey', 'white', 'ice', 'hud', 'background']) assert.equal(typeof tables.palette[k], 'number', k);
+});
+
+// ---- the chutes' screw thread -----------------------------------------------------------------------------------
+
+const thread = (name) => [...tables.byByte[T[name]].rows, ...tables.byByte[T[`${name}_B`]].rows];
+const asRows = (frame) => [...frame[0], ...frame[1]];
+
+test('a chute and its twin: the twin goes on odd rows only and the game sees a plain chute', () => {
+  assert.equal(tables.twins[T.SLIDE_R], T.SLIDE_R_B);
+  assert.equal(tables.twins[T.SLIDE_L], T.SLIDE_L_B);
+  for (const [plain, twin] of Object.entries(tables.twins)) assert.equal(tables.canon[twin], Number(plain));
+  const data = Array(COLS * ROWS).fill(0);
+  for (let r = 4; r < 12; r++) data[r * COLS + 7] = T.SLIDE_R;
+  data[5 * COLS + 8] = T.BRICK;
+  const out = applyTwins(data, tables.twins);
+  assert.deepEqual([4, 5, 6, 7, 8, 9, 10, 11].map((r) => out[r * COLS + 7]), [T.SLIDE_R, T.SLIDE_R_B, T.SLIDE_R, T.SLIDE_R_B, T.SLIDE_R, T.SLIDE_R_B, T.SLIDE_R, T.SLIDE_R_B]);
+  assert.equal(out[5 * COLS + 8], T.BRICK);
+  assert.equal(data[5 * COLS + 7], T.SLIDE_R, 'the input is left alone');
+});
+
+test('a level compiles with the twins in: stacks and diagonal runs alternate', () => {
+  const rows = room({ '10,10': '\\', '11,11': '\\', '12,12': '\\', '13,13': '\\', '14,25': '/', '15,25': '/', '16,25': '/' });
+  const c = compileLevel(rows, tables);
+  const at = (r, col) => c.map[r * COLS + col];
+  assert.deepEqual([at(10, 10), at(11, 11), at(12, 12), at(13, 13)], [T.SLIDE_R, T.SLIDE_R_B, T.SLIDE_R, T.SLIDE_R_B]);
+  assert.deepEqual([at(14, 25), at(15, 25), at(16, 25)], [T.SLIDE_L, T.SLIDE_L_B, T.SLIDE_L]);
+});
+
+test('the thread of each chute lines up from tile to tile, and the left one is the right one mirrored', () => {
+  const R = thread('SLIDE_R').map((r) => [...r].map(Number));
+  const L = thread('SLIDE_L').map((r) => [...r].map(Number));
+  for (let y = 0; y < 16; y++) {
+    assert.deepEqual(L[y], [...R[y]].reverse());
+    for (let x = 0; x < 3; x++) {
+      assert.equal(R[(y + 4) % 16][x], R[y][x + 1], `right, row ${y}`);
+      assert.equal(L[(y + 4) % 16][x + 1], L[y][x], `left, row ${y}`);
+    }
+  }
+});
+
+test('chuteFrame: the thread moves a row down every second frame and comes round in 32 frames', () => {
+  const h = thread('SLIDE_R');
+  for (let t = 0; t < 64; t += 2) {
+    const now = asRows(chuteFrame(h, t));
+    assert.deepEqual(asRows(chuteFrame(h, t + 1)), now, 'odd frames change nothing');
+    assert.deepEqual(asRows(chuteFrame(h, t + 2)).slice(1), now.slice(0, -1), 'everything moves down by one row');
+    assert.deepEqual(asRows(chuteFrame(h, t + 32)), now);
+  }
+});
+
+test('the editor draws the thread the way the game does (same rows at the same frame), and nothing else moves', () => {
+  const saved = globalThis.document;
+  globalThis.document = { createElement: () => ({ getContext: () => ({ set fillStyle(v) {}, fillRect() {} }), width: 0, height: 0 }) };
+  try {
+    const atlas = new Atlas(api);
+    const brick = atlas.rows[T.BRICK];
+    for (const tick of [0, 1, 2, 7, 30, 31, 46, 63, 64]) {
+      atlas.animateBelts(tick);
+      for (const name of ['SLIDE_R', 'SLIDE_L']) {
+        const want = chuteFrame(thread(name), tick);
+        assert.deepEqual(atlas.rows[T[name]], want[0], `${name} at ${tick}`);
+        assert.deepEqual(atlas.rows[T[`${name}_B`]], want[1], `${name}_B at ${tick}`);
+      }
+      assert.equal(atlas.rows[T.BRICK], brick);
+    }
+  } finally {
+    globalThis.document = saved;
+  }
+});
+
+test('the palette offers the chutes and the ready-made runs, and not the twins', () => {
+  const offered = offeredTiles();
+  assert.ok(offered.has('SLIDE_R') && offered.has('SLIDE_L'));
+  assert.ok(!offered.has('SLIDE_R_B') && !offered.has('SLIDE_L_B'));
+  for (const label of ['Chute right', 'Chute left']) assert.ok(STAMPS.some((s) => s.label === label), label);
 });

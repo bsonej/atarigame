@@ -38,8 +38,8 @@ export const GROUPS = [
     items: [
       { kind: 'tile', name: 'LADDER', tip: 'Ladder: climb with up and down' },
       { kind: 'tile', name: 'STAIR', tip: 'Step: a thin ledge to jump up onto (you can walk straight past it and jump up through it)' },
-      { kind: 'tile', name: 'SLIDE_R', tip: 'Chute that carries you right (and down a diagonal run of them); you can walk past it and jump up through it' },
-      { kind: 'tile', name: 'SLIDE_L', tip: 'Chute that carries you left' },
+      { kind: 'tile', name: 'SLIDE_R', tip: 'Chute: a turning screw that carries you right (and down a diagonal run of them); stacked chutes join into one thread. You can walk past it and jump up through it' },
+      { kind: 'tile', name: 'SLIDE_L', tip: 'Chute: a screw turning the other way, carries you left' },
     ],
   },
   {

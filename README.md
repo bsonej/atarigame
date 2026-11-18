@@ -88,7 +88,7 @@ In the emulator: F5 warm reset, F9 quit.
 | `assets/sprites.txt` | Mr. Bubble's 13 frames (8x16): stand (front, looking right, looking left), lean right and left, squash (front, right, left), stretch (front, right, left) and two pop frames. `#` is body (Player 0, pink), `e` is an eye (Player 3, white, shown only where the body has no pixel). Pupils and the grin are holes in both. |
 | `assets/levels/*.txt` | 40x24 maps, played in name order. `#` platform, `W` wall, `H` ladder, `*` item, `^` spike, `D` exit door, `@` start, `p` peg, plus the factory parts below. Row 0 is the score row. |
 | `assets/screens/*.txt` | Full-screen text maps (`title`, `gameover`). Letters/digits come from the font; a lowercase letter is the same glyph in the second text colour; `#` `*` `^` are tiles. Comments start with `#!`. |
-| `tools/build_assets.py` | Validates the assets and generates `src/gen/*.inc` (charset with the font merged in, `.charmap` so `.byte "TEXT"` works, the tile flags table, sprites, levels with their pegs and level tables, screens). |
+| `tools/build_assets.py` | Validates the assets and generates `src/gen/*.inc` (charset with the font merged in, `.charmap` so `.byte "TEXT"` works, the tile flags table, the chutes' thread, sprites, levels with their pegs and level tables, screens). |
 | `tools/mkxex.py` | Packs the linker output into an Atari `.xex` with a RUNAD. |
 | `tools/headless.py` | Runs the game in atari800's monitor with no window, frame by frame, for tests. |
 | `cfg/` | ld65 memory layouts (normal and TEST). |
@@ -108,7 +108,7 @@ jump through it and can stand on it.
 | `#` | brick | solid |
 | `=` | platform | one-way: jump up through it, land on top, walk through it at body height |
 | `S` | stair | a thin ledge (the top 3 pixel rows of the tile). Not solid: walk past it, or jump up through it and land on top; a flight of them is climbed by jumping |
-| `\` `/` | chute | a ledge like stairs that also carries you right (`\`) or left (`/`) at 2 pixels a frame. Not solid; a diagonal row of them takes you down a slope (the walk-down step works on chutes), but you jump to go up one |
+| `\` `/` | chute | a ledge like stairs that also carries you right (`\`) or left (`/`) at 2 pixels a frame. Drawn as a turning screw thread (see "Chutes"). Not solid; a diagonal row of them takes you down a slope (the walk-down step works on chutes), but you jump to go up one |
 | `{` `<` `(` | belt, left | slow (half a pixel a frame), normal (1), fast (2). Drifts you whether or not you walk. Walking with it adds its speed to yours; walking against it, it pulls at you only 3/8 as hard, so you can always walk onto it and along it, slowly (a normal belt costs you 3/8 of a pixel a frame, a fast one 3/4) |
 | `}` `>` `)` | belt, right | the same, to the right |
 | `[` `]` | accelerating belt, left / right | starts slow, gains speed every few frames up to fast, resets when you step off |
@@ -129,6 +129,24 @@ exact byte it had. Caps are art only. To change one, edit its rows in `tiles.txt
 round off the plain tile again). One limitation: while a vanishing or bomb block is gone, its neighbours keep the end cap
 they were built with, so the gap's edges look unchanged until it returns.
 
+### Chutes
+
+A chute is drawn as a screw thread: a diagonal stroke two pixels wide that crosses the tile and carries on in the tile
+below, so a stack of chutes, and a diagonal run of them, is one unbroken thread with no seams. One turn of the thread is
+16 rows, two tiles, so each chute is a pair in `assets/tiles.txt`: the plain tile (`SLIDE_R` id 14, `SLIDE_L` id 15) and
+its `twin` (`SLIDE_R_B` id 123, `SLIDE_L_B` id 124), which holds the next 8 rows. You write one character in a map; the asset
+tool (and the editor) puts the twin on every odd screen row, so tiles alternate plain, twin, plain, twin down a stack or
+along a diagonal run. Like caps and dots, a twin is the plain tile to the game (`tile_canon`), so carrying, walking
+through, jumping up through, the AI and `levelcheck` are unchanged.
+
+To make it turn, the game rewrites the four glyphs every second frame (`animate_chutes` in `src/main.s`, reusing the
+belts' trick of changing the character set): the 16 rows move one row further down the stack each time and come round
+every 32 frames, with no state in RAM (the phase is read from the frame counter). The right chute's `/` thread and the
+left chute's mirror-image `\` thread both travel down the stack, so the right one's surface moves right and the left one's
+left: they turn opposite ways. `build_assets.py` writes the thread to `src/gen/helix.inc` (from the art of the four tiles, so
+changing the art in `tiles.txt` is all it takes); `web/render.js` (`chuteFrame`), `tools/render_level.py --tick N` and
+`build_assets.chute_frame` do the same sum, and the tests check they agree.
+
 Notes for map builders:
 
 - Bomb blocks and vanishing blocks in the bottom row leave a one-tile hole you can walk out of, not a pit: put them on
@@ -140,7 +158,7 @@ Notes for map builders:
   shorter on NTSC.
 - Durations and speeds are constants at the top of `src/main.s` (`FUSE_EXPL`, `FUSE_VANISH`, `VANISH_BACK`, `PEG_WAIT`,
   `SLICK_MAX`, and the belt tables `conv_spd`, `slick_acc`...).
-- To add a tile, add it to `assets/tiles.txt` (ids 0-15 and 64-71 are in use; an alt-colour tile is stored with bit 7
+- To add a tile, add it to `assets/tiles.txt` (ids 0-15, 64-124 are mostly in use, see the header of that file; an alt-colour tile is stored with bit 7
   set, so its map byte is its id plus 128) and give it behaviour in `main.s` if it needs any; flags alone make it solid
   or one-way.
 
@@ -205,7 +223,7 @@ one frame (and `Game.run(n)` pipelines many). Tests inject joystick state, then 
 screen and sprite memory. They cover the physics, the title, the spawn/death/clear animations, lives, game over,
 hi-score, the score row, dots and the door, the 30-second attract run, and the AI clearing maps 1-3 (dots, items, door) without dying. `test_engine.py` also checks that the colour tables the game's display-list interrupt loads are the editor's colours for every level, and that the interrupt fires once per row, every frame. `test_factory.py` builds small arenas
 by poking tiles into screen RAM and checks each part (platform jump-through, stairs and chutes as ledges you walk past and jump onto, belt speeds and
-direction, acceleration and reset, ice and roller glide, chutes, vanishing and bomb timing and chain reaction, peg
+direction, acceleration and reset, ice and roller glide, chutes (including runs laid out with their twin tiles, and that the thread in the character set turns one row at a time), vanishing and bomb timing and chain reaction, peg
 start/sweep/push/jump-over) and that maps 4 and 5 load. They are skipped if
 atari800 or the test build is missing. `test_engine.py` (see "Level editor") replays scripted input on both the game and the
 editor's JavaScript engine; `task test-js` runs just the node tests, which need no emulator.
@@ -222,7 +240,7 @@ whether the colour changes land cleanly at the start of each row (the interrupt 
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
 `render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
 (`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield) were only reasoned about. The same goes for the
-new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) have never been
+new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the chutes' turning thread (the art, its speed and how it reads on a real display, and the two directions), the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.
 Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 32 and 16 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,
 crosses roller, bomb and vanishing blocks) but does not know to jump pegs or ride belts to the end, and nobody has played them. Run `task run` and, if

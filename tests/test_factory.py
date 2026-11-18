@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 from test_game import Base, decode, needs_emulator  # noqa: E402
+from tools import build_assets as ba  # noqa: E402
 from tools.headless import (  # noqa: E402
     AIR,
     CLEAR,
@@ -32,6 +33,7 @@ from tools.headless import (  # noqa: E402
 
 T = {m.group(1): int(m.group(2)) for m in re.finditer(r"^T_(\w+)\s*=\s*(\d+)", (ROOT / "src/gen/tiles.inc").read_text(), re.M)}
 FLOOR_Y = 168  # py of a player standing on the bottom floor (tile row 23)
+TILES = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
 PEG_WAIT = 40  # frames a peg rests at each end of its block
 
 
@@ -400,6 +402,66 @@ class Chutes(Arena):
         g.run(40)
         self.assertLessEqual(g.px, 108)
         self.assertEqual((g.py, g.state), (FLOOR_Y, GROUND))
+
+    def test_a_chute_run_with_its_twins_carries_you_just_the_same(self) -> None:
+        # the way the asset tool lays a diagonal run out: the twin on every odd screen row
+        g = self.g
+        self.arena()
+        g.put_tiles(5, 19, [T["BRICK"]] * 5)
+        g.put_tiles(10, 20, [T["SLIDE_R"]])
+        g.put_tiles(11, 21, [T["SLIDE_R_B"]])
+        g.put_tiles(12, 22, [T["SLIDE_R"]])
+        self.stand(24, 136)
+        g.run_until(lambda g: g.under == T["SLIDE_R"], limit=60, buttons=RIGHT, every=1)
+        g.run(60)
+        self.assertGreaterEqual(g.px, 52)
+        self.assertEqual((g.py, g.state), (FLOOR_Y, GROUND))
+
+    def test_a_left_chute_run_with_its_twins_carries_you_just_the_same(self) -> None:
+        g = self.g
+        self.arena()
+        g.put_tiles(30, 19, [T["BRICK"]] * 5)
+        g.put_tiles(29, 20, [T["SLIDE_L"]])
+        g.put_tiles(28, 21, [T["SLIDE_L_B"]])
+        g.put_tiles(27, 22, [T["SLIDE_L"]])
+        self.stand(130, 136)
+        g.run_until(lambda g: g.under == T["SLIDE_L"], limit=60, buttons=LEFT, every=1)
+        g.run(60)
+        self.assertLessEqual(g.px, 104)
+        self.assertEqual((g.py, g.state), (FLOOR_Y, GROUND))
+
+    def test_a_twin_is_a_chute_you_walk_past_and_jump_up_through_and_stand_on(self) -> None:
+        g = self.g
+        self.arena()
+        g.put_tiles(12, 22, [T["SLIDE_R_B"]])
+        self.stand(36)
+        g.run(30, RIGHT)
+        self.assertEqual((g.px, g.py), (66, FLOOR_Y), "not solid: no climbing it, no being stopped by it")
+        self.stand(48)
+        g.step(FIRE)
+        g.run_until(lambda g: g.state == GROUND, limit=60, every=1)
+        self.assertEqual(g.py, FLOOR_Y - 8, "standing on it")
+        g.idle()
+        self.assertEqual(g.under, T["SLIDE_R"], "the game sees the plain chute")
+
+    def test_the_thread_of_the_chutes_turns_down_the_stack(self) -> None:
+        g = self.g  # on the title screen: the chutes turn in every mode
+        helix = {name: ba.helix_rows(TILES, name) for name in ("SLIDE_R", "SLIDE_L")}
+        states = {name: [] for name in helix}
+        for _ in range(40):
+            g.idle()
+            charset = g.mem(0x6000, 0x400)
+            for name in helix:
+                a, b = T[name] * 8, T[name + "_B"] * 8
+                states[name].append(list(charset[a : a + 8] + charset[b : b + 8]))
+        for name, seen in states.items():
+            valid = [[helix[name][(y + ph) % 16] for y in range(16)] for ph in range(16)]
+            for st in seen:
+                self.assertIn(st, valid, f"{name}: the glyphs always show the thread, scrolled by whole rows")
+            changes = [(valid.index(a), valid.index(b)) for a, b in zip(seen, seen[1:]) if a != b]
+            self.assertGreaterEqual(len(changes), 15, f"{name} keeps turning")
+            for before, after in changes:
+                self.assertEqual((before - after) % 16, 1, f"{name}: one row down at a time")  # row y shows helix[y + phase]
 
     def test_you_walk_straight_past_a_chute(self) -> None:
         g = self.g

@@ -1,7 +1,7 @@
 // The level editor: drag parts from the palette onto the board, test-play the level right in the page, and
 // save it as assets/levels/<name>.txt for the real game to pick up (task build / task run-map).
 
-import { COLS, ROWS, makeTables, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows, applyCaps, applyDots } from './model.js';
+import { COLS, ROWS, makeTables, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows, applyCaps, applyDots, applyTwins } from './model.js';
 import { Game, MODE, JOY, STATE } from './engine.js';
 import { Atlas, COLORS, cellSize, drawMap, drawTile, drawSprite, drawPlayer, drawHud, PEG_SHAPE } from './render.js';
 import { GROUPS, STAMPS, DOOR_NAMES, DOOR_CELLS, SCENE_W, SCENE_H, sceneFor } from './palette.js';
@@ -383,6 +383,7 @@ function sceneCanvas(cells, w, h, cell, baseRow) {
   for (const [c, r, name] of cells) if (name !== 'PEG') data[at(c, r)] = tables.T[name];
   let map = applyCaps(data, tables.caps);
   map = applyDots(data, map, tables.dots, tables.solid);
+  map = applyTwins(map, tables.twins);
   atlas.levelIndex = 0;
   for (let r = 0; r < h; r++)
     for (let c = 0; c < w; c++) {

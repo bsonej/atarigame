@@ -39,6 +39,17 @@ const CONV_MASK = [7, 3, 1, 3, 7, 3, 1, 3];
 const CONV_DIR = [0, 0, 0, 0, 1, 1, 1, 1];
 const CONV_FIRST = 64;
 
+/**
+ * The chutes' screw thread (animate_chutes in main.s). `helix` is the 16 rows of a chute's thread (its tile's 8 rows,
+ * then its twin's 8). Every second frame the thread moves one row down the stack: the plain tile (even screen rows)
+ * shows 8 rows from the phase on, its twin (odd rows) the next 8. Returns [rows of the plain tile, rows of the twin].
+ */
+export function chuteFrame(helix, tick) {
+  const ph = ((tick >> 1) & 15) ^ 15;
+  const at = (y) => helix[(y + ph) & 15];
+  return [[0, 1, 2, 3, 4, 5, 6, 7].map(at), [8, 9, 10, 11, 12, 13, 14, 15].map(at)];
+}
+
 export class Atlas {
   /**
    * Tiles are stored as pixel values 0-3 and coloured per row of the screen, as the game does with its
@@ -65,6 +76,13 @@ export class Atlas {
     for (const t of api.tiles) this.rows[t.byte] = t.rows;
     for (const t of api.tiles) this.paint(t.byte);
     this.beltPhase = -1;
+    this.chuteTick = -1;
+    // each chute and its twin: the thread they draw between them (16 rows)
+    const byName = {};
+    for (const t of api.tiles) byName[t.name] = t;
+    this.chutes = ['SLIDE_R', 'SLIDE_L']
+      .filter((n) => byName[n] && byName[`${n}_B`])
+      .map((n) => ({ a: byName[n].byte, b: byName[`${n}_B`].byte, helix: [...byName[n].rows, ...byName[`${n}_B`].rows] }));
   }
 
   /** The canvas holding the tiles as they look in screen row `row`. */
@@ -95,8 +113,23 @@ export class Atlas {
     });
   }
 
-  /** March the belts. `tick` counts 50 Hz frames. */
+  /** Turn the chutes' thread. `tick` counts 50 Hz frames. */
+  animateChutes(tick) {
+    const ph = (tick >> 1) & 15;
+    if (ph === this.chuteTick) return;
+    this.chuteTick = ph;
+    for (const c of this.chutes) {
+      const [a, b] = chuteFrame(c.helix, tick);
+      this.rows[c.a] = a;
+      this.rows[c.b] = b;
+      this.paint(c.a);
+      this.paint(c.b);
+    }
+  }
+
+  /** March the belts (and turn the chutes). `tick` counts 50 Hz frames. */
   animateBelts(tick) {
+    this.animateChutes(tick);
     if (tick === this.beltPhase) return;
     this.beltPhase = tick;
     for (let k = 0; k < 8; k++) {

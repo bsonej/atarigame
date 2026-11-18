@@ -42,12 +42,13 @@ CHARS = {t["char"]: t["byte"] for t in TILES if t["char"] is not None}
 SOLID = {t["byte"] for t in TILES if t["solid"]}
 CAPS = ba.cap_families(TILES)
 DOTS = ba.dot_families(TILES)
+TWINS = ba.twin_families(TILES)
 DOOR = ba.door_bytes(TILES)
 
 
 def compile_level(path: Path, text: str | None = None) -> dict:
     """What the asset tool makes of a level (caps, dots, the door)."""
-    return ba.parse_level(path, CHARS, SOLID, CAPS, text=text, dots=DOTS, door=DOOR)
+    return ba.parse_level(path, CHARS, SOLID, CAPS, text=text, dots=DOTS, door=DOOR, twins=TWINS)
 LEVELS = sorted((ROOT / "assets" / "levels").glob("*.txt"), key=ba.natural_key)
 
 BELTS = [n for n in CHAR if n.startswith("CONV_")]
@@ -140,6 +141,21 @@ class CompileParity(unittest.TestCase):
         for seed in range(25):
             with self.subTest(seed=seed):
                 self.check(random_level(seed))
+
+    def test_the_editor_turns_the_chute_thread_like_the_asset_tool_does(self) -> None:
+        script = (
+            "import { chuteFrame } from './web/render.js';"
+            "const h = JSON.parse(process.argv[1]);"
+            "console.log(JSON.stringify([...Array(70).keys()].map((t) => chuteFrame(h, t))));"
+        )
+        for name in ("SLIDE_R", "SLIDE_L"):
+            helix = ba.helix_rows(TILES, name)
+            rows = [f"{(b >> 6) & 3}{(b >> 4) & 3}{(b >> 2) & 3}{b & 3}" for b in helix]
+            out = subprocess.run(["node", "--input-type=module", "-e", script, json.dumps(rows)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            for t, frame in enumerate(json.loads(out.stdout)):
+                with self.subTest(chute=name, tick=t):
+                    self.assertEqual(frame, [list(r) for r in ba.chute_frame(rows, t)])
 
     def test_the_editor_rejects_what_the_asset_tool_rejects(self) -> None:
         good = LEVELS[0].read_text().splitlines()

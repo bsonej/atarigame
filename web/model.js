@@ -2,7 +2,7 @@
 // game would get (tile bytes with platform end caps and dots, the door, the start, the number of things to
 // collect and the pegs).
 //
-// This is a port of the level parts of tools/build_assets.py (parse_level, peg_for, apply_caps, apply_dots); the
+// This is a port of the level parts of tools/build_assets.py (parse_level, peg_for, apply_caps, apply_dots, apply_twins); the
 // tests compare the two on every shipped level, so keep them in step.
 
 export const COLS = 40;
@@ -31,8 +31,10 @@ export function makeTables(api) {
   const dots = {};
   for (const [fam, v] of Object.entries(api.dots || {})) dots[Number(fam)] = v;
   const dotted = new Set(Object.values(dots));
+  const twins = {};
+  for (const [fam, v] of Object.entries(api.twins || {})) twins[Number(fam)] = v;
   return {
-    chars, solid, caps, dots, dotted, byByte, T, flags: api.flags, canon: api.canon, tiles: api.tiles,
+    chars, solid, caps, dots, dotted, twins, byByte, T, flags: api.flags, canon: api.canon, tiles: api.tiles,
     door: api.door || null, doorCells: api.doorCells || [], fade: api.fade || [], fadeSteps: api.fadeSteps || 16,
     palette: api.palette || null, maxCollect: api.maxCollect || 250,
   };
@@ -106,6 +108,15 @@ export function applyCaps(data, caps) {
     const right = col < COLS - 1 && i + 1 < data.length && data[i + 1] !== data[i];
     const kind = left && right ? 'LR' : left ? 'L' : right ? 'R' : null;
     if (kind && variants[kind] !== undefined) out[i] = variants[kind];
+  }
+  return out;
+}
+
+/** Swap each tile's twin in on every odd screen row, so art that is two tiles tall lines up in a stack (the chutes' thread). */
+export function applyTwins(data, twins) {
+  const out = data.slice();
+  for (let i = 0; i < data.length; i++) {
+    if (Math.floor(i / COLS) % 2 === 1 && data[i] in twins) out[i] = twins[data[i]];
   }
   return out;
 }
@@ -216,6 +227,7 @@ export function compileLevel(rows, tables) {
   if ('^' in tables.chars) blocking.add(tables.chars['^']);
   map = applyDots(data, map, tables.dots, blocking);
   const dots = map.filter((b) => tables.dotted.has(b)).length;
+  map = applyTwins(map, tables.twins);
   const items = stars + dots; // everything to collect before the door opens
   if (items > tables.maxCollect) errors.push({ msg: `${stars} items and ${dots} dots is too much to collect (at most ${tables.maxCollect} in all)` });
   // the game's loader copies whole pages

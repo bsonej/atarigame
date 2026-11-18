@@ -29,6 +29,11 @@
 #           has some), and the player eats a dot by walking over it, which scores a point and leaves the
 #           plain tile behind. The game treats a dotted tile as the plain tile.
 #
+#   twin <id> <FAMILY>
+#           a second tile that goes on every odd screen row in place of the plain one (8 rows of art follow), for
+#           art that is 16 rows tall and has to line up from one tile to the one below it: a stack of the tile
+#           alternates plain, twin, plain, twin. You never put these in a map. The game treats a twin as the plain tile.
+#
 # Ids must be below 128. Ids 16-25 and 32-61 belong to the text font (assets/font.txt); the conveyor
 # belts must stay at 64-71 (the game animates those glyphs, and the order is fixed: right slow,
 # right, right fast, right accelerating, then the same for left) and their end caps at 72-79 (left
@@ -404,25 +409,53 @@ tile 13 VANISH_B none solid
 
 # Chutes: they carry you along and down the diagonal chain of tiles. Like the steps you can walk past them
 # and jump up through them; you stand on the top edge of the tile.
+#
+# The art is a screw thread: one diagonal stroke two pixels wide, stepping 4 rows for every pixel across, so that
+# one turn of the thread is 16 rows - two tiles. A chute tile is therefore one of a pair: the plain tile (the
+# first 8 rows of the thread) and its twin (the next 8). The asset tool and the editor put the twin on every
+# odd screen row (see "twin" below), so a stack of chutes, and every diagonal run of them, is one unbroken
+# thread with no seam. The game scrolls the 16 rows down the stack (animate_chutes in main.s, which reads
+# the art of these four tiles as the thread to turn), so the thread appears to turn: the surface of a right chute
+# moves right (a "/" thread travelling down), a left chute is the mirror image and turns the other way.
 tile 14 SLIDE_R \ oneway
-0000
+3110
+2110
 2200
-0220
-0022
+2200
+1103
+1102
 2002
-2200
-0220
+2002
+
+twin 123 SLIDE_R
+1031
+1021
 0022
+0022
+0311
+0211
+0220
+0220
 
 tile 15 SLIDE_L / oneway
-0000
+0113
+0112
 0022
-0220
-2200
+0022
+3011
+2011
 2002
-0022
-0220
+2002
+
+twin 124 SLIDE_L
+1301
+1201
 2200
+2200
+1130
+1120
+0220
+0220
 
 # Conveyor belts (ids 64-71). The two top rows are redrawn by the game to make the belt move.
 tile 64 CONV_R_SLOW } solid

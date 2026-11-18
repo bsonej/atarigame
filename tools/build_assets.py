@@ -3,7 +3,8 @@
 
     assets/tiles.txt         -> gen/tiles.inc    (T_<NAME> constants)  gen/charset.inc (1 KB character set)
                                 gen/tileflags.inc (256-byte tables indexed by map byte: tile_flags = solid / one-way,
-                                tile_canon = the plain tile a platform end cap stands for)
+                                tile_canon = the plain tile a platform end cap, dotted tile or twin stands for)
+                                gen/helix.inc (the chutes' thread, which the game scrolls)
     assets/font.txt          -> merged into the character set; gen/font.inc (.charmap lines so that
                                 .byte "TEXT" in the source produces glyph ids)
     assets/sprites.txt       -> gen/sprites.inc  (player frames)
@@ -101,6 +102,9 @@ def parse_tiles(path: Path) -> list[dict]:
             tiles.append(cur)
         elif text.startswith("dot "):
             cur = parse_dot(path, n, text, tiles)
+            tiles.append(cur)
+        elif text.startswith("twin "):
+            cur = parse_twin(path, n, text, tiles)
             tiles.append(cur)
         else:
             if cur is None:
@@ -203,6 +207,38 @@ def parse_dot(path: Path, n: int, text: str, tiles: list[dict]) -> dict:
     }
 
 
+def parse_twin(path: Path, n: int, text: str, tiles: list[dict]) -> dict:
+    """``twin <id> <FAMILY>``: the tile that goes on every odd screen row in place of the plain one, for art that is
+    16 rows tall and so has to alternate from one tile of a stack to the next. The 8 rows of art follow."""
+    parts = text.split()
+    if len(parts) != 3:
+        raise AssetError(f"{path}:{n}: expected 'twin <id> <FAMILY>'")
+    try:
+        tid = int(parts[1])
+    except ValueError:
+        raise AssetError(f"{path}:{n}: tile id must be a number")
+    if not 0 <= tid < GLYPHS:
+        raise AssetError(f"{path}:{n}: tile id {tid} must be 0-{GLYPHS - 1}")
+    if any(t["id"] == tid for t in tiles):
+        raise AssetError(f"{path}:{n}: duplicate tile id {tid}")
+    fam = next((t for t in tiles if t["name"] == parts[2] and not t.get("family") and not t.get("dot_of") and not t.get("twin_of")), None)
+    if fam is None:
+        raise AssetError(f"{path}:{n}: twin of unknown tile {parts[2]!r} (define the tile first)")
+    name = f"{fam['name']}_B"
+    if any(t["name"] == name for t in tiles):
+        raise AssetError(f"{path}:{n}: {name} is defined twice (a tile has one twin)")
+    return {
+        "id": tid,
+        "byte": tid | 0x80 if fam["byte"] & 0x80 else tid,
+        "name": name,
+        "char": None,
+        "solid": fam["solid"],
+        "oneway": fam["oneway"],
+        "rows": [],
+        "twin_of": fam["name"],
+    }
+
+
 def auto_cap(rows: list[str], cap: str, lo: int | None, hi: int | None, outline: int) -> list[str]:
     """Round off the end(s) of a tile: the outermost pixel column becomes a solid ``outline`` edge, and the
     corners are cut. ``lo``..``hi`` is the range of rows to change (default: the rows that have any art)."""
@@ -292,6 +328,8 @@ def tile_tables(tiles: list[dict]) -> tuple[list[int], list[int]]:
             canon[byte] = fam_byte
     for fam_byte, dotted in dot_families(tiles).items():
         canon[dotted] = fam_byte
+    for fam_byte, twin in twin_families(tiles).items():
+        canon[twin] = fam_byte
     return flags, canon
 
 
@@ -321,6 +359,56 @@ def dot_families(tiles: list[dict]) -> dict[int, int]:
     """{map byte of a plain tile: map byte of the same tile with a dot in it}."""
     by_name = {t["name"]: t for t in tiles}
     return {by_name[t["dot_of"]]["byte"]: t["byte"] for t in tiles if t.get("dot_of")}
+
+
+def twin_families(tiles: list[dict]) -> dict[int, int]:
+    """{map byte of a plain tile: map byte of its twin (the tile drawn on odd screen rows)}."""
+    by_name = {t["name"]: t for t in tiles}
+    return {by_name[t["twin_of"]]["byte"]: t["byte"] for t in tiles if t.get("twin_of")}
+
+
+def apply_twins(data: list[int], twins: dict[int, int]) -> list[int]:
+    """Swap the twin in for the plain tile on every odd screen row, so that a tile whose art is two tiles tall lines
+    up with itself in a stack and along a diagonal run (each step of a diagonal is one row down)."""
+    out = list(data)
+    for i, b in enumerate(data):
+        if (i // COLS) % 2 and b in twins:
+            out[i] = twins[b]
+    return out
+
+
+def helix_rows(tiles: list[dict], name: str) -> list[int]:
+    """The 16 rows (as screen bytes) of the thread of a chute tile: its own art, then its twin's, which the game
+    scrolls down a stack of them (animate_chutes)."""
+    by_name = {t["name"]: t for t in tiles}
+    twin = by_name.get(f"{name}_B")
+    if name not in by_name or twin is None or not twin.get("twin_of"):
+        raise AssetError(f"the chute {name} needs a twin (a 'twin <id> {name}' entry in tiles.txt)")
+    out = []
+    for t in (by_name[name], twin):
+        out += [sum(int(c) << (6 - 2 * x) for x, c in enumerate(row)) for row in t["rows"]]
+    return out
+
+
+def chute_frame(helix: list, tick: int) -> tuple[list, list]:
+    """The thread of a chute ``tick`` frames (50 Hz) into the game, as the game's animate_chutes draws it: every second
+    frame it moves one row down the stack. Returns (the 8 rows of the plain tile, the 8 rows of its twin); ``helix`` is
+    the 16 rows of the thread (helix_rows, or the rows as text). web/render.js has the same function."""
+    ph = ((tick >> 1) & 15) ^ 15
+    return [helix[(y + ph) & 15] for y in range(8)], [helix[(y + 8 + ph) & 15] for y in range(8)]
+
+
+def render_helix(tiles: list[dict]) -> str:
+    """helix_r / helix_l: the 16 rows of the right and left chute's thread, twice over (32 bytes each) so the game
+    can read 8 rows (or the 8 after them) from any of the 16 starting places without wrapping."""
+    out = ["; Generated by tools/build_assets.py - do not edit."]
+    names = {t["name"] for t in tiles}
+    for label, name in (("helix_r", "SLIDE_R"), ("helix_l", "SLIDE_L")):
+        if name not in names:  # a tile set without chutes (the asset tests') has nothing to turn
+            continue
+        rows = helix_rows(tiles, name)
+        out += [f"{label}:", _bytes_block(rows * 2, 16)]
+    return "\n".join(out) + "\n"
 
 
 def apply_dots(plain: list[int], capped: list[int], dots: dict[int, int], solid: set[int]) -> list[int]:
@@ -471,9 +559,10 @@ def render_sprites(frames: list[tuple[str, list[int], list[int]]]) -> str:
 
 def parse_level(path: Path, tile_chars: dict[str, int], solid_bytes: set[int] | None = None,
                 caps: dict[int, dict[str, int]] | None = None, text: str | None = None,
-                dots: dict[int, int] | None = None, door: tuple[int, ...] | None = None) -> dict:
+                dots: dict[int, int] | None = None, door: tuple[int, ...] | None = None,
+                twins: dict[int, int] | None = None) -> dict:
     """Compile one level file (or `text`, with `path` only naming it in messages). ``dots`` maps a platform tile
-    to its dotted twin; ``door`` is the bytes of the six tiles of the exit door (see ``door_bytes``). A ``D`` in the map
+    to its dotted twin; ``twins`` maps a tile to the one drawn in its place on odd rows; ``door`` is the bytes of the six tiles of the exit door (see ``door_bytes``). A ``D`` in the map
     is the door's bottom left tile; the compiler fills in the other five."""
     solid_bytes = solid_bytes if solid_bytes is not None else {1}
     if text is None:
@@ -535,6 +624,8 @@ def parse_level(path: Path, tile_chars: dict[str, int], solid_bytes: set[int] | 
         ndots = sum(1 for b in data if b in dots.values())
     if stars + ndots > MAX_COLLECT:
         raise AssetError(f"{path}: {stars} items and {ndots} dots is too much to collect (at most {MAX_COLLECT} in all)")
+    if twins:
+        data = apply_twins(data, twins)
     data += [0] * (LEVEL_BYTES - len(data))
     return {"name": path.stem, "data": data, "spawn": spawn, "items": stars + ndots, "stars": stars, "dots": ndots,
             "doors": doors, "pegs": pegs}
@@ -724,8 +815,9 @@ def build(root: Path, out: Path) -> None:
         raise AssetError("no levels in assets/levels/")
     caps = cap_families(tiles)
     dots = dot_families(tiles)
+    twins = twin_families(tiles)
     door = door_bytes(tiles)
-    levels = [parse_level(p, chars, solid_bytes, caps, dots=dots, door=door) for p in paths]
+    levels = [parse_level(p, chars, solid_bytes, caps, dots=dots, door=door, twins=twins) for p in paths]
     cmap = font_charmap(font)
     screens = [(p.stem, parse_screen(p, cmap, chars)) for p in sorted((assets / "screens").glob("*.txt"))]
     out.mkdir(parents=True, exist_ok=True)
@@ -735,6 +827,7 @@ def build(root: Path, out: Path) -> None:
     if (assets / "palette.txt").exists():
         (out / "palette.inc").write_text(render_palette(parse_palette(assets / "palette.txt")))
     (out / "fade.inc").write_text(render_fade())
+    (out / "helix.inc").write_text(render_helix(tiles))
     (out / "font.inc").write_text(render_font_include(font))
     (out / "sprites.inc").write_text(render_sprites(frames))
     (out / "levels.inc").write_text(render_levels(levels))

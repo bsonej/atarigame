@@ -24,6 +24,7 @@ tasks:
     generates:
       - src/gen/tiles.inc
       - src/gen/tileflags.inc
+      - src/gen/helix.inc
       - src/gen/charset.inc
       - src/gen/sprites.inc
       - src/gen/levels.inc

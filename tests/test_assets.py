@@ -589,12 +589,198 @@ class DotsAndDoors(unittest.TestCase):
                 self.assertIn(message, str(cm.exception))
 
 
+class Twins(unittest.TestCase):
+    """Tiles whose art is two tiles tall: the twin goes on every odd screen row."""
+
+    CHUTE = flagged(14, "SLIDE_R", "\\", "oneway")
+    TWIN = "twin 123 SLIDE_R\n" + "\n".join(["0110"] * 8)
+
+    def setUp(self) -> None:
+        self.p = Project()
+        self.addCleanup(self.p.cleanup)
+
+    def tiles(self, *extra: str) -> None:
+        self.p.write("assets/tiles.txt", "\n".join([EMPTY_TILE, SOLID_BRICK, ITEM_TILE, *extra]) + "\n")
+
+    def test_a_twin_is_a_tile_of_its_own_with_the_flags_of_its_family(self) -> None:
+        self.tiles(self.CHUTE, self.TWIN)
+        tiles = {t["name"]: t for t in ba.parse_tiles(self.p.dir / "assets" / "tiles.txt")}
+        twin = tiles["SLIDE_R_B"]
+        self.assertEqual((twin["id"], twin["byte"], twin["char"], twin["oneway"], twin["solid"]), (123, 123, None, True, False))
+        self.assertEqual(twin["rows"], ["0110"] * 8)
+        self.assertEqual(ba.twin_families(list(tiles.values())), {14: 123})
+
+    def test_the_twin_of_an_alt_tile_is_alt(self) -> None:
+        self.tiles(flagged(14, "SLIDE_R", "\\", "oneway alt"), self.TWIN)
+        tiles = ba.parse_tiles(self.p.dir / "assets" / "tiles.txt")
+        self.assertEqual(ba.twin_families(tiles), {14 | 0x80: 123 | 0x80})
+
+    def test_the_twin_goes_on_odd_screen_rows_only(self) -> None:
+        grid = [0] * (ba.COLS * ba.ROWS)
+        for r in range(4, 12):  # a stack
+            grid[r * ba.COLS + 5] = 14
+        grid[4 * ba.COLS + 6] = 1  # something that has no twin
+        grid[5 * ba.COLS + 6] = 1
+        out = ba.apply_twins(grid, {14: 123})
+        self.assertEqual([out[r * ba.COLS + 5] for r in range(4, 12)], [14, 123, 14, 123, 14, 123, 14, 123])
+        self.assertEqual((out[4 * ba.COLS + 6], out[5 * ba.COLS + 6]), (1, 1))
+        self.assertEqual(grid[5 * ba.COLS + 5], 14, "the input is left alone")
+
+    def test_a_diagonal_run_alternates_too(self) -> None:
+        grid = [0] * (ba.COLS * ba.ROWS)
+        for k in range(6):
+            grid[(4 + k) * ba.COLS + 5 + k] = 14
+        out = ba.apply_twins(grid, {14: 123})
+        self.assertEqual([out[(4 + k) * ba.COLS + 5 + k] for k in range(6)], [14, 123] * 3)
+
+    def test_a_level_gets_its_twins_and_the_game_sees_the_plain_tile(self) -> None:
+        self.tiles(self.CHUTE, self.TWIN)
+        rows = good_rows()
+        for r in range(15, 21):
+            rows[r] = rows[r][:10] + "\\" + rows[r][11:]
+        self.p.write("assets/levels/level1.txt", level(rows))
+        out = self.p.build()
+        text = (out / "levels.inc").read_text()
+        data = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text.split("level1:")[1].split("level1_spawn:")[0])]
+        self.assertEqual([data[r * ba.COLS + 10] for r in range(15, 21)], [123, 14, 123, 14, 123, 14])
+        flags = (out / "tileflags.inc").read_text()
+        canon = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", flags.split("tile_canon:")[1])]
+        table = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", flags.split("tile_canon:")[0])]
+        self.assertEqual(canon[123], 14)
+        self.assertEqual((table[14], table[123]), (ba.F_ONEWAY, ba.F_ONEWAY), "a twin is as one-way as its tile")
+
+    def test_the_dot_flag_and_caps_leave_twins_alone(self) -> None:
+        self.tiles(self.CHUTE, self.TWIN)
+        self.assertEqual(ba.cap_families(ba.parse_tiles(self.p.dir / "assets" / "tiles.txt")), {})
+
+    def test_bad_twin_lines_are_rejected(self) -> None:
+        for lines, message in (
+            (["twin 123 NOPE"], "unknown tile"),
+            ([self.CHUTE, "twin 14 SLIDE_R"], "duplicate tile id"),
+            ([self.CHUTE, "twin 200 SLIDE_R"], "must be 0-127"),
+            ([self.CHUTE, "twin x SLIDE_R"], "must be a number"),
+            ([self.CHUTE, "twin 123"], "expected 'twin"),
+            ([self.CHUTE, self.TWIN, "twin 124 SLIDE_R\n" + "\n".join(["0000"] * 8)], "defined twice"),
+            ([self.CHUTE, "twin 123 SLIDE_R\n" + "\n".join(["0000"] * 7)], "needs 8"),
+        ):
+            with self.subTest(message):
+                self.tiles(*lines)
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.p.build()
+                self.assertIn(message, str(cm.exception))
+
+    def test_a_chute_without_a_twin_cannot_be_animated(self) -> None:
+        self.tiles(self.CHUTE)
+        tiles = ba.parse_tiles(self.p.dir / "assets" / "tiles.txt")
+        with self.assertRaises(ba.AssetError):
+            ba.helix_rows(tiles, "SLIDE_R")
+
+    def test_a_tile_set_without_chutes_has_an_empty_helix_file(self) -> None:
+        self.assertNotIn("helix_r", self.p.build().joinpath("helix.inc").read_text())
+
+
+class ChuteThread(unittest.TestCase):
+    """The real chutes: a screw thread that joins up from tile to tile and turns."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tiles = {t["name"]: t for t in ba.parse_tiles(ROOT / "assets" / "tiles.txt")}
+        cls.right = ba.helix_rows(list(cls.tiles.values()), "SLIDE_R")
+        cls.left = ba.helix_rows(list(cls.tiles.values()), "SLIDE_L")
+
+    def pixels(self, name: str) -> list[list[int]]:
+        out = []
+        for t in (self.tiles[name], self.tiles[f"{name}_B"]):
+            out += [[int(c) for c in row] for row in t["rows"]]
+        return out
+
+    def test_the_chutes_have_twins_that_are_chutes(self) -> None:
+        for name in ("SLIDE_R", "SLIDE_L"):
+            plain, twin = self.tiles[name], self.tiles[f"{name}_B"]
+            self.assertEqual((twin["twin_of"], twin["oneway"], twin["solid"], twin["char"]), (name, True, False, None))
+            self.assertEqual(ba.twin_families(list(self.tiles.values()))[plain["byte"]], twin["byte"])
+
+    def test_the_thread_is_one_diagonal_that_lines_up_from_tile_to_tile(self) -> None:
+        # four rows further down the thread is one pixel further across: also over the join of the two tiles
+        # and of the twin with the next plain tile (the thread is 16 rows, then it starts again)
+        right, left = self.pixels("SLIDE_R"), self.pixels("SLIDE_L")
+        for y in range(16):
+            for x in range(3):
+                self.assertEqual(right[(y + 4) % 16][x], right[y][x + 1], f"right chute, row {y}, column {x}")
+                self.assertEqual(left[(y + 4) % 16][x + 1], left[y][x], f"left chute, row {y}, column {x}")
+
+    def test_the_left_chute_is_the_right_one_mirrored(self) -> None:
+        r, l = self.pixels("SLIDE_R"), self.pixels("SLIDE_L")
+        for y in range(16):
+            self.assertEqual(l[y], r[y][::-1])
+
+    def test_the_thread_has_no_gaps_and_no_solid_rows(self) -> None:
+        for name in ("SLIDE_R", "SLIDE_L"):
+            px = self.pixels(name)
+            for y, row in enumerate(px):
+                self.assertTrue(any(row), f"{name} row {y} is empty: the thread would break")
+                self.assertTrue(0 in row, f"{name} row {y} is solid: it would not look like a thread")
+            self.assertTrue(all(any(row[x] for row in px) for x in range(4)), "the thread reaches every column")
+
+    def test_the_thread_is_drawn_with_grey_white_and_the_row_colour(self) -> None:
+        used = {v for name in ("SLIDE_R", "SLIDE_L") for row in self.pixels(name) for v in row}
+        self.assertEqual(used, {0, 1, 2, 3})
+
+    def test_the_helix_file_is_the_thread_twice_over(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ba.build(ROOT, Path(tmp))
+            text = (Path(tmp) / "helix.inc").read_text()
+        for label, rows in (("helix_r", self.right), ("helix_l", self.left)):
+            body = text.split(label + ":")[1].split("helix_")[0]
+            self.assertEqual([int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", body)], rows * 2)
+        self.assertEqual(self.right[:8], [sum(int(c) << (6 - 2 * x) for x, c in enumerate(r)) for r in self.tiles["SLIDE_R"]["rows"]])
+
+    def test_the_thread_moves_one_row_down_every_second_frame_and_comes_round_in_32(self) -> None:
+        h = self.right
+        for t in range(0, 64):
+            a, b = ba.chute_frame(h, t)
+            self.assertEqual(a + b, [h[(y + ((t >> 1) & 15 ^ 15)) % 16] for y in range(16)])
+            if t % 2 == 0:
+                na, nb = ba.chute_frame(h, t + 2)
+                self.assertEqual((na + nb)[1:], (a + b)[:-1], "everything moves down by one row")
+                self.assertEqual(ba.chute_frame(h, t + 32), (a, b))
+            else:
+                self.assertEqual(ba.chute_frame(h, t), ba.chute_frame(h, t - 1))
+
+    def test_a_stack_is_one_unbroken_thread_at_every_moment(self) -> None:
+        for name, h in (("SLIDE_R", self.right), ("SLIDE_L", self.left)):
+            for t in range(0, 32, 2):
+                a, b = ba.chute_frame(h, t)
+                tile = [[(r >> (6 - 2 * x)) & 3 for x in range(4)] for r in a + b]
+                for y in range(16):
+                    for x in range(3):
+                        if name == "SLIDE_R":
+                            self.assertEqual(tile[(y + 4) % 16][x], tile[y][x + 1])
+                        else:
+                            self.assertEqual(tile[(y + 4) % 16][x + 1], tile[y][x])
+
+    def test_left_and_right_chutes_turn_opposite_ways(self) -> None:
+        # the right thread "/" and the left thread "\\" both travel down the stack. Eight frames later the thread has
+        # moved four rows down, which is one pixel across on the surface: to the right for the right chute, to the
+        # left for the left one.
+        def pixels(h, t):
+            a, b = ba.chute_frame(h, t)
+            return [[(r >> (6 - 2 * x)) & 3 for x in range(4)] for r in a + b]
+
+        for h, step in ((self.right, +1), (self.left, -1)):
+            before, after = pixels(h, 0), pixels(h, 8)
+            for y in range(16):
+                for x in range(4):
+                    if 0 <= x + step < 4:
+                        self.assertEqual(after[y][x + step], before[y][x], f"step {step}, row {y}, column {x}")
+
+
 class RealAssets(unittest.TestCase):
     def test_project_assets_convert(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ba.build(ROOT, Path(tmp))
             names = {p.name for p in Path(tmp).iterdir()}
-            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "charset.inc", "font.inc", "palette.inc", "fade.inc", "sprites.inc", "levels.inc", "screens.inc"})
+            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "helix.inc", "charset.inc", "font.inc", "palette.inc", "fade.inc", "sprites.inc", "levels.inc", "screens.inc"})
             self.assertIn("T_BRICK", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("T_DIGIT0       = 16", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("level1_spawn", (Path(tmp) / "levels.inc").read_text())
