@@ -19,8 +19,8 @@
         .exportzp px, py, state, jt, fall, score, hiscore, left, lives, level, lvlidx
         .exportzp mode, demo, demo_n, timer, mtimer, frame, drawn, deaths, joy, anim, moved, flash
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
-        .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n
-        .export tt_col, tt_row, tt_t, tt_ph, tt_kind, pg_x, pg_y, pg_min, pg_max, pg_dir, pg_wait, cph
+        .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir
+        .export tt_col, tt_row, tt_t, tt_ph, tt_kind, tt_orig, pg_x, pg_y, pg_min, pg_max, pg_dir, pg_wait, cph
 
         .include "gen/tiles.inc"
         .include "gen/font.inc"                 ; .charmap: .byte "TEXT" gives glyph ids
@@ -199,6 +199,7 @@ tt_k:     .res 1
 tt_f:     .res 1
 ov_x:     .res 1
 ov_y:     .res 1
+tt_o:     .res 1        ; the screen byte (with its end cap) of the tile being armed
 
         .segment "BSS"
 tt_col:   .res 8        ; timed tiles (bomb blocks and vanishing blocks that have been stepped on)
@@ -206,6 +207,7 @@ tt_row:   .res 8
 tt_t:     .res 8        ; frames left in the current phase
 tt_ph:    .res 8        ; PH_FUSE, PH_GONE, PH_BOOM, or $FF = free slot
 tt_kind:  .res 8
+tt_orig:  .res 8        ; the screen byte to put back (it may be an end cap)
 pg_x:     .res 2        ; pegs: left edge in pixels
 pg_y:     .res 2        ;       top line
 pg_min:   .res 2
@@ -415,7 +417,8 @@ inc_mtimer:
 @r:     rts
 
 ; ---------------------------------------------------------------------------
-; Tile lookup. In: tx, ty (pixels). Out: A = tile id, ptr -> its screen byte.
+; Tile lookup. In: tx, ty (pixels). Out: A = tile id, ptr -> its screen byte. A platform end cap comes back
+; as the plain tile it is a cap of (tile_canon), so none of the rules below care how a block's ends look.
 ; Anything outside the playfield (and the score row) counts as brick so the player cannot leave it.
 get_tile:
         lda ty
@@ -443,6 +446,8 @@ get_tile:
         sta ptr+1
         ldy #0
         lda (ptr),y
+        tax
+        lda tile_canon,x
         rts
 @solid: lda #T_BRICK
         rts
@@ -1959,6 +1964,11 @@ arm_under:
 ; Arm the tile at (tx,ty) if it is a bomb or vanishing block.
 arm_at:
         jsr get_tile
+        pha
+        ldy #0
+        lda (ptr),y             ; the byte as drawn, end caps and all
+        sta tt_o
+        pla
         cmp #T_EXPLOSIVE
         beq @e
         cmp #T_EXPLOSIVE_B
@@ -2008,7 +2018,9 @@ arm_cell:
         dex
         bpl @free
 @rts:   rts
-@put:   lda tt_c
+@put:   lda tt_o
+        sta tt_orig,x
+        lda tt_c
         sta tt_col,x
         lda tt_r
         sta tt_row,x
@@ -2080,8 +2092,9 @@ update_timed:
         ldx #7
 @slot:  lda tt_ph,x
         cmp #$FF
-        beq @next
-        cmp #PH_GONE
+        bne @live
+        jmp @next
+@live:  cmp #PH_GONE
         beq @gone
         bcs @boom               ; PH_BOOM
         dec tt_t,x              ; ---- fuse burning
@@ -2093,7 +2106,7 @@ update_timed:
         beq @e0
         lda #T_EXPLOSIVE_B
         bne @put
-@e0:    lda #T_EXPLOSIVE
+@e0:    lda tt_orig,x
         bne @put
 @vflick:
         lda tt_t,x              ; vanishing block: flicker every 2 frames
@@ -2101,7 +2114,7 @@ update_timed:
         beq @v0
         lda #T_VANISH_B
         bne @put
-@v0:    lda #T_VANISH
+@v0:    lda tt_orig,x
 @put:   jsr set_cell
         jmp @next
 @burst: lda tt_kind,x
@@ -2120,7 +2133,7 @@ update_timed:
         bne @next
         jsr player_in_cell      ; do not come back inside the player
         bcs @wait
-        lda #T_VANISH
+        lda tt_orig,x
         jsr set_cell
         lda #$FF
         sta tt_ph,x
@@ -2218,6 +2231,11 @@ explode:
         asl a
         sta ty
         jsr get_tile
+        pha
+        ldy #0
+        lda (ptr),y
+        sta tt_o
+        pla
         cmp #T_EXPLOSIVE
         beq @arm
         cmp #T_EXPLOSIVE_B
@@ -2395,8 +2413,14 @@ animate_belts:
         asl a
         tay
         pla
-        sta CONV_GLYPHS,y
+        sta CONV_GLYPHS,y       ; the belt, and its left, right and both-ends caps (ids 72-95)
         sta CONV_GLYPHS+1,y
+        sta CONV_GLYPHS+64,y
+        sta CONV_GLYPHS+65,y
+        sta CONV_GLYPHS+128,y
+        sta CONV_GLYPHS+129,y
+        sta CONV_GLYPHS+192,y
+        sta CONV_GLYPHS+193,y
 @next:  dex
         bpl @k
         rts

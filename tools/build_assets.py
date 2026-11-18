@@ -2,7 +2,8 @@
 """Turn the plain-text assets into ca65 include files in src/gen/.
 
     assets/tiles.txt         -> gen/tiles.inc    (T_<NAME> constants)  gen/charset.inc (1 KB character set)
-                                gen/tileflags.inc (a 256-byte table: solid / one-way, indexed by map byte)
+                                gen/tileflags.inc (256-byte tables indexed by map byte: tile_flags = solid / one-way,
+                                tile_canon = the plain tile a platform end cap stands for)
     assets/font.txt          -> merged into the character set; gen/font.inc (.charmap lines so that
                                 .byte "TEXT" in the source produces glyph ids)
     assets/sprites.txt       -> gen/sprites.inc  (player frames)
@@ -94,20 +95,94 @@ def parse_tiles(path: Path) -> list[dict]:
                 "rows": [],
             }
             tiles.append(cur)
+        elif text.startswith("cap "):
+            cur = parse_cap(path, n, text, tiles)
+            tiles.append(cur)
         else:
             if cur is None:
                 raise AssetError(f"{path}:{n}: pixel row before any 'tile' line")
             if not re.fullmatch(rf"[0-3]{{{TILE_W}}}", text):
                 raise AssetError(f"{path}:{n}: tile rows are {TILE_W} digits 0-3, got {text!r}")
             cur["rows"].append(text)
+            cur["auto"] = None  # (only caps have this; art that is typed in is used as written)
             if len(cur["rows"]) > TILE_H:
                 raise AssetError(f"{path}:{n}: tile {cur['name']} has more than {TILE_H} rows")
+    by_name = {t["name"]: t for t in tiles}
     for t in tiles:
+        if t.get("auto") is not None:  # a cap with no art of its own: derive it from its family
+            fam = by_name[t["family"]]
+            if len(fam["rows"]) != TILE_H:
+                raise AssetError(f"{path}: tile {fam['name']} has {len(fam['rows'])} rows, needs {TILE_H}")
+            t["rows"] = auto_cap(fam["rows"], t["cap"], *t["auto"])
         if len(t["rows"]) != TILE_H:
             raise AssetError(f"{path}: tile {t['name']} has {len(t['rows'])} rows, needs {TILE_H}")
     if not any(t["id"] == 0 for t in tiles):
         raise AssetError(f"{path}: tile 0 (the empty tile) is required")
     return tiles
+
+
+def parse_cap(path: Path, n: int, text: str, tiles: list[dict]) -> dict:
+    """``cap <id> <FAMILY> <L|R|LR> [rows=a-b] [outline=n]``: the left end, right end, or both ends of a
+    platform tile. The 8 rows of art follow; without them the cap is made from the family's art."""
+    parts = text.split()
+    if len(parts) < 4:
+        raise AssetError(f"{path}:{n}: expected 'cap <id> <FAMILY> <L|R|LR> [rows=a-b] [outline=n]'")
+    try:
+        tid = int(parts[1])
+    except ValueError:
+        raise AssetError(f"{path}:{n}: tile id must be a number")
+    if not 0 <= tid < GLYPHS:
+        raise AssetError(f"{path}:{n}: tile id {tid} must be 0-{GLYPHS - 1}")
+    if any(t["id"] == tid for t in tiles):
+        raise AssetError(f"{path}:{n}: duplicate tile id {tid}")
+    fam = next((t for t in tiles if t["name"] == parts[2] and not t.get("family")), None)
+    if fam is None:
+        raise AssetError(f"{path}:{n}: cap of unknown tile {parts[2]!r} (define the tile first)")
+    if parts[3] not in ("L", "R", "LR"):
+        raise AssetError(f"{path}:{n}: cap kind must be L, R or LR, got {parts[3]!r}")
+    name = f"{fam['name']}_{parts[3]}"
+    if any(t["name"] == name for t in tiles):
+        raise AssetError(f"{path}:{n}: {name} is defined twice")
+    lo, hi, outline = None, None, 3
+    for opt in parts[4:]:
+        m = re.fullmatch(r"rows=([0-7])-([0-7])", opt)
+        if m:
+            lo, hi = int(m.group(1)), int(m.group(2))
+            if lo > hi:
+                raise AssetError(f"{path}:{n}: rows={lo}-{hi} is backwards")
+        elif re.fullmatch(r"outline=[0-3]", opt):
+            outline = int(opt[-1])
+        else:
+            raise AssetError(f"{path}:{n}: unknown cap option {opt!r}")
+    return {
+        "id": tid,
+        "byte": tid | 0x80 if fam["byte"] & 0x80 else tid,
+        "name": name,
+        "char": None,
+        "solid": fam["solid"],
+        "oneway": fam["oneway"],
+        "rows": [],
+        "family": fam["name"],
+        "cap": parts[3],
+        "auto": (lo, hi, outline),  # cleared if the art is given
+    }
+
+
+def auto_cap(rows: list[str], cap: str, lo: int | None, hi: int | None, outline: int) -> list[str]:
+    """Round off the end(s) of a tile: the outermost pixel column becomes a solid ``outline`` edge, and the
+    corners are cut. ``lo``..``hi`` is the range of rows to change (default: the rows that have any art)."""
+    used = [y for y, r in enumerate(rows) if r != "0" * TILE_W]
+    first, last = (used[0], used[-1]) if used else (0, TILE_H - 1)
+    a = first if lo is None else lo
+    b = last if hi is None else hi
+    out = [list(r) for r in rows]
+    for col in ([0] if "L" in cap else []) + ([TILE_W - 1] if "R" in cap else []):
+        for y in range(a, b + 1):
+            if y == b or (y == a and a == first):
+                out[y][col] = "0"
+            elif rows[y][col] != "0":
+                out[y][col] = str(outline)
+    return ["".join(r) for r in out]
 
 
 # ----------------------------------------------------------------- font
@@ -168,11 +243,50 @@ def font_charmap(glyphs: list[dict]) -> dict[str, int]:
 
 
 def render_tile_flags(tiles: list[dict]) -> str:
-    """tile_flags[map byte]: bit 0 solid, bit 1 one-way. Indexed by the byte stored on the screen."""
+    """tile_flags[map byte]: bit 0 solid, bit 1 one-way. tile_canon[map byte]: the tile that byte stands for
+    (a platform end cap stands for its plain tile, every other byte for itself), so the game's rules never need
+    to know about caps. Both are indexed by the byte stored on the screen."""
     table = [0] * 256
+    canon = list(range(256))
     for t in tiles:
         table[t["byte"]] = (F_SOLID if t["solid"] else 0) | (F_ONEWAY if t["oneway"] else 0)
-    return "; Generated by tools/build_assets.py - do not edit.\ntile_flags:\n" + _bytes_block(table) + "\n"
+    for fam_byte, caps in cap_families(tiles).items():
+        for byte in caps.values():
+            canon[byte] = fam_byte
+    return (
+        "; Generated by tools/build_assets.py - do not edit.\ntile_flags:\n"
+        + _bytes_block(table)
+        + "\ntile_canon:\n"
+        + _bytes_block(canon)
+        + "\n"
+    )
+
+
+def cap_families(tiles: list[dict]) -> dict[int, dict[str, int]]:
+    """{map byte of a plain tile: {'L': byte, 'R': byte, 'LR': byte}} for the tiles that have end caps."""
+    by_name = {t["name"]: t for t in tiles if not t.get("family")}
+    fams: dict[int, dict[str, int]] = {}
+    for t in tiles:
+        if t.get("family"):
+            fams.setdefault(by_name[t["family"]]["byte"], {})[t["cap"]] = t["byte"]
+    return fams
+
+
+def apply_caps(data: list[int], caps: dict[int, dict[str, int]]) -> list[int]:
+    """Put the left/right/both-ends variant on every tile whose left or right neighbour is a different tile.
+    The edges of the screen count as more of the same, so a floor that runs into a wall has no cap there."""
+    out = list(data)
+    for i, b in enumerate(data):
+        variants = caps.get(b)
+        if not variants:
+            continue
+        col = i % COLS
+        left = col > 0 and data[i - 1] != b
+        right = col < COLS - 1 and i + 1 < len(data) and data[i + 1] != b
+        kind = "LR" if left and right else "L" if left else "R" if right else None
+        if kind in variants:
+            out[i] = variants[kind]
+    return out
 
 
 def render_font_include(glyphs: list[dict]) -> str:
@@ -266,9 +380,13 @@ def render_sprites(frames: list[tuple[str, list[int]]]) -> str:
 # --------------------------------------------------------------- levels
 
 
-def parse_level(path: Path, tile_chars: dict[str, int], solid_bytes: set[int] | None = None) -> dict:
+def parse_level(path: Path, tile_chars: dict[str, int], solid_bytes: set[int] | None = None,
+                caps: dict[int, dict[str, int]] | None = None, text: str | None = None) -> dict:
+    """Compile one level file (or `text`, with `path` only naming it in messages)."""
     solid_bytes = solid_bytes if solid_bytes is not None else {1}
-    grid = [line.rstrip("\n") for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and not _is_comment(line)]
+    if text is None:
+        text = path.read_text(encoding="utf-8")
+    grid = [line.rstrip("\n") for line in text.splitlines() if line.strip() and not _is_comment(line)]
     # Lines starting with '#' are map rows (walls); header comments start with '# '.
     if len(grid) != ROWS:
         raise AssetError(f"{path}: has {len(grid)} map rows, needs {ROWS}")
@@ -300,6 +418,8 @@ def parse_level(path: Path, tile_chars: dict[str, int], solid_bytes: set[int] | 
     pegs = [peg_for(path, data, c, r, solid_bytes) for c, r in peg_marks]
     if len(pegs) > MAX_PEGS:
         raise AssetError(f"{path}: {len(pegs)} pegs, at most {MAX_PEGS} per level")
+    if caps:
+        data = apply_caps(data, caps)
     data += [0] * (LEVEL_BYTES - len(data))
     return {"name": path.stem, "data": data, "spawn": spawn, "items": items, "pegs": pegs}
 
@@ -404,7 +524,8 @@ def build(root: Path, out: Path) -> None:
     paths = sorted((assets / "levels").glob("*.txt"), key=natural_key)
     if not paths:
         raise AssetError("no levels in assets/levels/")
-    levels = [parse_level(p, chars, solid_bytes) for p in paths]
+    caps = cap_families(tiles)
+    levels = [parse_level(p, chars, solid_bytes, caps) for p in paths]
     cmap = font_charmap(font)
     screens = [(p.stem, parse_screen(p, cmap, chars)) for p in sorted((assets / "screens").glob("*.txt"))]
     out.mkdir(parents=True, exist_ok=True)

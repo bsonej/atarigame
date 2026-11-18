@@ -44,6 +44,17 @@ SPAWN_X, SPAWN_Y = 12, 168  # tile (3,21)
 FLOOR_Y = {23: 168, 18: 128, 13: 88, 8: 48}  # py of a player standing on the floor in that tile row
 ROOT = Path(__file__).resolve().parent.parent
 
+sys.path.insert(0, str(ROOT / "tools"))
+import build_assets as _ba  # noqa: E402
+
+_CANON = {b: fam for fam, caps in _ba.cap_families(_ba.parse_tiles(ROOT / "assets" / "tiles.txt")).items() for b in caps.values()}
+
+
+def canon(b: int) -> int:
+    """The plain tile a map byte stands for (a platform end cap stands for its tile)."""
+    return _CANON.get(b, b)
+
+
 needs_emulator = unittest.skipUnless(shutil.which("atari800") and XEX.exists() and LABELS.exists(), "needs atari800 and `task build-test`")
 
 
@@ -237,7 +248,7 @@ class GameLogic(Base):
         self.assertEqual(g.tile(8, 20), T_LADDER)
         self.assertEqual(g.tile(14, 22), T_ITEM)
         self.assertEqual(g.tile(20, 22), T_SPIKE)
-        self.assertEqual(g.tile(0, 10), T_BRICK)
+        self.assertEqual(canon(g.tile(0, 10)), T_BRICK)  # a wall's edge may be an end cap
 
     def test_idle_player_does_not_move(self) -> None:
         self.g.idle(30)
@@ -412,7 +423,10 @@ class GameLogic(Base):
         tiles = {".": 0, "#": 1, "H": 2, "*": 3, "^": 4, "@": 0}
         expected = bytes(tiles[c] for row in lines for c in row)
         self.assertEqual(len(expected), COLS * 24)
-        self.assertEqual(g.mem(g.screen_addr, 1024)[COLS : COLS * 24], expected[COLS:])  # ignoring the score row
+        got = bytes(canon(b) for b in g.mem(g.screen_addr, 1024)[COLS : COLS * 24])  # ignoring the score row
+        self.assertEqual(got, expected[COLS:])
+        # ...and the build really did put end caps on the floor where it meets something else
+        self.assertTrue(any(b != canon(b) for b in g.mem(g.screen_addr, 1024)[COLS : COLS * 24]))
 
     # ---- display ----
     def test_player_sprite_is_in_player_memory(self) -> None:

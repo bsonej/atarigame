@@ -206,7 +206,7 @@ class Components(unittest.TestCase):
         self.p.write("assets/tiles.txt", "\n".join([EMPTY_TILE, SOLID_BRICK, ITEM_TILE, *extra]) + "\n")
 
     def flags(self) -> list[int]:
-        text = self.p.build().joinpath("tileflags.inc").read_text()
+        text = self.p.build().joinpath("tileflags.inc").read_text().split("tile_canon:")[0]
         return [int(x.strip("$"), 16) for x in re.findall(r"\$[0-9A-Fa-f]{2}", text)]
 
     def test_flags_land_in_the_table_at_the_map_byte(self) -> None:
@@ -300,6 +300,121 @@ class Components(unittest.TestCase):
                 self.assertIn(message, str(cm.exception))
 
 
+class EndCaps(unittest.TestCase):
+    """Left/right/both-ends variants of platform tiles."""
+
+    def setUp(self) -> None:
+        self.p = Project()
+        self.addCleanup(self.p.cleanup)
+
+    def tiles(self, *extra: str) -> None:
+        self.p.write("assets/tiles.txt", "\n".join([EMPTY_TILE, SOLID_BRICK, ITEM_TILE, *extra]) + "\n")
+
+    def test_auto_cap_rounds_the_end_and_draws_an_edge(self) -> None:
+        rows = ["1111", "2232", "2232", "3333", "2322", "2322", "3333", "2222"]
+        left = ba.auto_cap(rows, "L", None, None, 3)
+        self.assertEqual(left[0], "0111")  # corners cut
+        self.assertEqual(left[7], "0222")
+        self.assertEqual(left[1], "3232")  # the outermost column becomes the edge colour
+        self.assertEqual([r[1:] for r in left[1:7]], [r[1:] for r in rows[1:7]], "the rest is untouched")
+        right = ba.auto_cap(rows, "R", None, None, 3)
+        self.assertEqual((right[0], right[7]), ("1110", "2220"))
+        both = ba.auto_cap(rows, "LR", None, None, 1)
+        self.assertEqual((both[0], both[1]), ("0110", "1231"))
+
+    def test_auto_cap_leaves_alone_the_rows_outside_its_range(self) -> None:
+        rows = ["3222", "3222", "2222", "2222", "2222", "2222", "2222", "1111"]
+        cap = ba.auto_cap(rows, "L", 2, 7, 3)
+        self.assertEqual(cap[:2], rows[:2], "the animated surface rows are not touched")
+        self.assertEqual(cap[2], "3222")  # not a corner: the top of the range is not the top of the art
+        self.assertEqual(cap[7], "0111")
+
+    def test_empty_rows_stay_empty_in_a_cap(self) -> None:
+        rows = ["3333", "2222", "0000", "0000", "0000", "0000", "0000", "0000"]
+        self.assertEqual(ba.auto_cap(rows, "L", None, None, 3)[2:], rows[2:])
+
+    def test_caps_get_ids_names_and_inherit_flags(self) -> None:
+        self.tiles(
+            flagged(7, "ICE", "~", "solid alt"),
+            "cap 20 BRICK L\n" + "\n".join(["0000"] * 8),
+            "cap 21 ICE R",
+        )
+        tiles = {t["name"]: t for t in ba.parse_tiles(self.p.dir / "assets" / "tiles.txt")}
+        self.assertEqual((tiles["BRICK_L"]["id"], tiles["BRICK_L"]["solid"], tiles["BRICK_L"]["char"]), (20, True, None))
+        self.assertEqual(tiles["ICE_R"]["byte"], 21 | 0x80, "a cap of an alt tile is alt too")
+        self.assertEqual(tiles["BRICK_L"]["rows"], ["0000"] * 8, "typed art is used as written")
+        self.assertEqual(len(tiles["ICE_R"]["rows"]), 8, "no art: made from the plain tile")
+
+    def test_bad_caps_are_rejected(self) -> None:
+        for line, message in (
+            ("cap 20 NOPE L", "unknown tile"),
+            ("cap 20 BRICK X", "L, R or LR"),
+            ("cap 1 BRICK L", "duplicate tile id"),
+            ("cap 20 BRICK L rows=5-2", "backwards"),
+            ("cap 20 BRICK L color=3", "unknown cap option"),
+            ("cap 200 BRICK L", "must be 0-127"),
+            ("cap 20 BRICK", "expected"),
+        ):
+            with self.subTest(line):
+                self.tiles(line)
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.p.build()
+                self.assertIn(message, str(cm.exception))
+        self.tiles("cap 20 BRICK L", "cap 21 BRICK L")
+        with self.assertRaises(ba.AssetError) as cm:
+            self.p.build()
+        self.assertIn("defined twice", str(cm.exception))
+
+    def test_apply_caps_picks_the_end_variant_from_the_neighbours(self) -> None:
+        caps = {1: {"L": 20, "R": 21, "LR": 22}}
+        row = [0, 1, 1, 1, 0, 1, 0] + [0] * (ba.COLS - 7)
+        out = ba.apply_caps(row, caps)
+        self.assertEqual(out[:7], [0, 20, 1, 21, 0, 22, 0])
+
+    def test_the_edge_of_the_screen_is_not_an_end(self) -> None:
+        caps = {1: {"L": 20, "R": 21, "LR": 22}}
+        row = [1] * ba.COLS
+        self.assertEqual(ba.apply_caps(row, caps), row, "a floor that runs wall to wall has no ends")
+        row = [1, 1, 0] + [0] * (ba.COLS - 3)
+        self.assertEqual(ba.apply_caps(row, caps)[:3], [1, 21, 0])
+        self.assertEqual(ba.apply_caps(row, caps)[0], 1, "no cap on the screen edge side")
+
+    def test_a_different_neighbour_counts_as_an_end(self) -> None:
+        caps = {1: {"L": 20, "R": 21, "LR": 22}}
+        row = [5, 1, 1, 6] + [0] * (ba.COLS - 4)
+        self.assertEqual(ba.apply_caps(row, caps)[:4], [5, 20, 21, 6])
+
+    def test_a_missing_variant_leaves_the_plain_tile(self) -> None:
+        caps = {1: {"L": 20}}
+        row = [0, 1, 0] + [0] * (ba.COLS - 3)
+        self.assertEqual(ba.apply_caps(row, caps)[1], 1)
+
+    def test_canon_table_maps_caps_back_to_their_tile(self) -> None:
+        self.tiles(flagged(7, "ICE", "~", "solid alt"), "cap 20 BRICK L", "cap 21 ICE LR")
+        text = self.p.build().joinpath("tileflags.inc").read_text()
+        canon = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text.split("tile_canon:")[1])]
+        self.assertEqual(len(canon), 256)
+        self.assertEqual((canon[20], canon[21 | 0x80], canon[1], canon[7 | 0x80], canon[99]), (1, 7 | 0x80, 1, 7 | 0x80, 99))
+        flags = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text.split("tile_canon:")[0])]
+        self.assertEqual((flags[20], flags[21 | 0x80]), (1, 1), "caps are as solid as their tile")
+
+    def test_levels_are_built_with_the_caps_in_place(self) -> None:
+        self.tiles("cap 20 BRICK L", "cap 21 BRICK R", "cap 22 BRICK LR")
+        rows = good_rows()
+        rows[10] = "." * 3 + "###" + "." * 3 + "#" + "." * 30
+        self.p.write("assets/levels/level1.txt", level(rows))
+        text = self.p.build().joinpath("levels.inc").read_text()
+        self.assertIn("$14,$01,$15,$00,$00,$00,$16", text)  # L, plain, R, gap, single
+
+    def test_pegs_are_found_before_caps_are_applied(self) -> None:
+        self.tiles("cap 20 BRICK L", "cap 21 BRICK R", "cap 22 BRICK LR")
+        rows = good_rows()
+        rows[19] = "." * 10 + "#" * 8 + "." * 22
+        rows[18] = "." * 11 + "p" + "." * 28
+        self.p.write("assets/levels/level1.txt", level(rows))
+        self.assertIn("level1_pegs:\n        .byte 1,40,144,40,68,1", self.p.build().joinpath("levels.inc").read_text())
+
+
 class RealAssets(unittest.TestCase):
     def test_project_assets_convert(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -311,6 +426,32 @@ class RealAssets(unittest.TestCase):
             self.assertIn("level1_spawn", (Path(tmp) / "levels.inc").read_text())
             self.assertIn("screen_title", (Path(tmp) / "screens.inc").read_text())
             self.assertIn("screen_gameover", (Path(tmp) / "screens.inc").read_text())
+
+    def test_the_project_has_end_caps_for_every_platform_type(self) -> None:
+        tiles = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
+        caps = ba.cap_families(tiles)
+        by_char = {t["char"]: t for t in tiles if t["char"]}
+        for ch in "#=~oXv}>)]{<([":
+            with self.subTest(ch):
+                self.assertEqual(set(caps[by_char[ch]["byte"]]), {"L", "R", "LR"}, f"{by_char[ch]['name']} needs both ends")
+        for ch in "HS\\/":  # ladders, stairs and chutes have no ends
+            self.assertNotIn(by_char[ch]["byte"], caps)
+        ids = [t["id"] for t in tiles]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertLess(max(ids), 128)
+
+    def test_belt_caps_sit_at_the_ids_the_game_animates(self) -> None:
+        by_name = {t["name"]: t["id"] for t in ba.parse_tiles(ROOT / "assets" / "tiles.txt")}
+        belts = ["CONV_R_SLOW", "CONV_R", "CONV_R_FAST", "CONV_R_ACC", "CONV_L_SLOW", "CONV_L", "CONV_L_FAST", "CONV_L_ACC"]
+        for i, b in enumerate(belts):
+            self.assertEqual(by_name[b], 64 + i)
+            self.assertEqual((by_name[b + "_L"], by_name[b + "_R"], by_name[b + "_LR"]), (72 + i, 80 + i, 88 + i))
+
+    def test_belt_caps_keep_the_moving_surface_rows(self) -> None:
+        tiles = {t["name"]: t for t in ba.parse_tiles(ROOT / "assets" / "tiles.txt")}
+        for b in ("CONV_R", "CONV_L_FAST"):
+            for kind in ("L", "R", "LR"):
+                self.assertEqual(tiles[f"{b}_{kind}"]["rows"][:2], tiles[b]["rows"][:2])
 
     def test_every_project_level_is_listed_in_the_level_tables(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

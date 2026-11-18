@@ -497,6 +497,97 @@ class BombBlocks(Arena):
 
 
 @needs_emulator
+class EndCaps(Arena):
+    """Platform end caps look different but behave exactly like the plain tile."""
+
+    def test_caps_are_solid_and_stand_for_their_tile(self) -> None:
+        self.arena()
+        self.g.put_tiles(10, 20, [T["BRICK_L"], T["BRICK"], T["BRICK_R"]])
+        self.stand(40, 144)
+        self.g.run(10)
+        self.assertEqual((self.g.py, self.g.state), (144, GROUND), "stands on a cap")
+        self.g.run(30, RIGHT)  # walks off the right end onto the floor
+        self.assertEqual(self.g.py, FLOOR_Y)
+
+    def test_you_cannot_walk_through_a_cap(self) -> None:
+        self.arena()
+        self.g.put_tiles(20, 21, [T["BRICK_L"]] * 1)
+        self.g.put_tiles(20, 22, [T["BRICK_L"]] * 1)
+        self.stand(60)
+        self.g.run(40, RIGHT)
+        self.assertEqual(self.g.px, 20 * 4 - 4)
+
+    def test_a_belt_end_cap_drifts_you_like_the_belt(self) -> None:
+        self.arena()
+        self.g.put_tiles(8, 23, [T["CONV_R_FAST_L"]] + [T["CONV_R_FAST"]] * 29 + [T["CONV_R_FAST_R"]])
+        self.stand(60)
+        self.assertEqual(self.moved(20), 40)
+        self.stand(32)  # on the left cap itself (column 8)
+        self.assertEqual(self.moved(5), 10)
+
+    def test_an_ice_cap_is_slippery_too(self) -> None:
+        self.arena()
+        self.g.put_tiles(1, 23, [T["ICE_L"]] + [T["ICE"]] * 36 + [T["ICE_R"]])
+        self.stand(8)  # on the left cap
+        self.g.run(12, RIGHT)
+        at = self.g.px
+        self.g.run(40)
+        self.assertGreater(self.g.px - at, 8)
+
+    def test_a_one_way_cap_is_still_one_way(self) -> None:
+        self.arena()
+        self.g.put_tiles(10, 21, [T["PLATFORM_L"]] + [T["PLATFORM"]] * 3 + [T["PLATFORM_R"]])
+        self.stand(44)
+        self.g.step(FIRE)
+        self.g.run(40)
+        self.assertEqual((self.g.py, self.g.state), (FLOOR_Y - 16, GROUND))
+
+    def test_a_vanishing_cap_keeps_its_end_when_it_flickers_and_comes_back(self) -> None:
+        g = self.g
+        self.arena()
+        g.put_tiles(10, 20, [T["VANISH_L"], T["VANISH"], T["VANISH_R"]])
+        self.stand(40, 144)
+        seen = set()
+        for _ in range(28):
+            g.step()
+            seen.add(g.tile(10, 20))
+        self.assertEqual(seen, {T["VANISH_L"], T["VANISH_B"]})
+        g.run(15)
+        self.assertEqual(g.tile(10, 20), 0)
+        g.run(200)
+        self.assertEqual(g.tile(10, 20), T["VANISH_L"], "back with its end intact")
+
+    def test_a_bomb_block_end_goes_off_and_sets_off_its_neighbours(self) -> None:
+        g = self.g
+        self.arena()
+        g.put_tiles(10, 20, [T["EXPLOSIVE_L"], T["EXPLOSIVE"], T["EXPLOSIVE_R"]])
+        self.stand(48, 144)  # on the right end
+        g.run_until(lambda g: g.tile(12, 20) == T["BOOM"], limit=80, buttons=RIGHT, every=1)
+        g.run(90, RIGHT)
+        self.assertEqual([g.tile(c, 20) for c in (10, 11, 12)], [0, 0, 0])
+        self.assertEqual(g.mode, PLAY)
+
+    def test_the_end_caps_of_a_belt_animate_with_the_belt(self) -> None:
+        g = self.g  # the title screen: belts animate in every mode
+        seen = []
+        for _ in range(20):
+            g.idle()
+            page = g.mem(0x6200, 256)  # glyph ids 64-95 live in $6200-$62FF
+            row = lambda name: page[T[name] * 8 - 0x200]
+            seen.append((row("CONV_R"), row("CONV_R_L"), row("CONV_R_R"), row("CONV_R_LR")))
+        for sample in seen:
+            self.assertEqual(len(set(sample)), 1, f"the caps show the same moving surface as the belt: {sample}")
+        self.assertGreater(len({s[0] for s in seen}), 1)
+
+    def test_the_caps_art_is_drawn_below_the_moving_surface(self) -> None:
+        g = self.g
+        page = g.mem(0x6200, 256)
+        plain = page[T["CONV_R"] * 8 - 0x200 + 2 : T["CONV_R"] * 8 - 0x200 + 8]
+        cap = page[T["CONV_R_L"] * 8 - 0x200 + 2 : T["CONV_R_L"] * 8 - 0x200 + 8]
+        self.assertNotEqual(plain, cap)
+
+
+@needs_emulator
 class Pegs(Arena):
     """Map 5 (index 4) has one peg on a floating block in tile columns 24-31, row 11."""
 

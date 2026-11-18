@@ -11,9 +11,17 @@
 #   alt     drawn in the second colour (COLOR3) for pixel value 3: the map byte is id + 128, so
 #           T_<NAME> is that byte. Use it for a tile that needs a colour the others do not have.
 #
+#   cap <id> <FAMILY> <L|R|LR> [rows=a-b] [outline=n]
+#           the left end, right end, or both ends of a platform tile. You never put these in a map: the
+#           asset tool swaps them in wherever the tile's left or right neighbour is something else (the
+#           screen edge counts as the same), and the game treats them as the plain tile. Give 8 rows of
+#           art, or none and the tool rounds off the plain tile's art itself (rows= limits the rows it
+#           changes, outline= is the colour of the new edge).
+#
 # Ids must be below 128. Ids 16-25 and 32-61 belong to the text font (assets/font.txt); the conveyor
 # belts must stay at 64-71 (the game animates those glyphs, and the order is fixed: right slow,
-# right, right fast, right accelerating, then the same for left).
+# right, right fast, right accelerating, then the same for left) and their end caps at 72-79 (left
+# end), 80-87 (right end) and 88-95 (both), in the same order.
 
 tile 0 EMPTY .
 0000
@@ -264,3 +272,214 @@ tile 71 CONV_L_ACC [ solid
 3131
 1313
 3131
+
+# ---- platform end caps ----------------------------------------------------------------------
+
+cap 96 BRICK L
+0111
+1232
+1232
+3333
+1322
+1322
+3333
+0222
+
+cap 97 BRICK R
+1110
+2231
+2231
+3333
+2321
+2321
+3333
+2220
+
+cap 98 BRICK LR
+0110
+1231
+1231
+3333
+1321
+1321
+3333
+0220
+
+cap 99 PLATFORM L
+0333
+2222
+2000
+0000
+0000
+0000
+0000
+0000
+
+cap 100 PLATFORM R
+3330
+2222
+0002
+0000
+0000
+0000
+0000
+0000
+
+cap 101 PLATFORM LR
+0330
+2222
+2002
+0000
+0000
+0000
+0000
+0000
+
+cap 102 ICE L
+0333
+3303
+3033
+3330
+3303
+3033
+3330
+0333
+
+cap 103 ICE R
+3330
+3303
+3033
+3333
+3303
+3033
+3333
+3330
+
+cap 104 ICE LR
+0330
+3303
+3033
+3333
+3303
+3033
+3333
+0330
+
+cap 105 ROLLER L
+0333
+0332
+3223
+3223
+3223
+3223
+0332
+0111
+
+cap 106 ROLLER R
+3330
+2330
+3223
+3223
+3223
+3223
+2330
+1110
+
+cap 107 ROLLER LR
+0330
+0330
+3223
+3223
+3223
+3223
+0330
+0110
+
+cap 108 EXPLOSIVE L
+0111
+1331
+3113
+3113
+3113
+3113
+1331
+0111
+
+cap 109 EXPLOSIVE R
+1110
+1331
+3113
+3113
+3113
+3113
+1331
+1110
+
+cap 110 EXPLOSIVE LR
+0110
+1331
+3113
+3113
+3113
+3113
+1331
+0110
+
+cap 111 VANISH L
+0333
+2332
+2002
+2002
+2002
+2002
+2332
+0333
+
+cap 112 VANISH R
+3330
+2332
+2002
+2002
+2002
+2002
+2332
+3330
+
+cap 113 VANISH LR
+0330
+2332
+2002
+2002
+2002
+2002
+2332
+0330
+
+# Conveyor belts: the end wheels are made from the belt art; rows 0-1 are the moving surface and stay as they are.
+
+cap 72 CONV_R_SLOW L rows=2-7
+cap 73 CONV_R L rows=2-7
+cap 74 CONV_R_FAST L rows=2-7
+cap 75 CONV_R_ACC L rows=2-7
+cap 76 CONV_L_SLOW L rows=2-7
+cap 77 CONV_L L rows=2-7
+cap 78 CONV_L_FAST L rows=2-7
+cap 79 CONV_L_ACC L rows=2-7
+
+cap 80 CONV_R_SLOW R rows=2-7
+cap 81 CONV_R R rows=2-7
+cap 82 CONV_R_FAST R rows=2-7
+cap 83 CONV_R_ACC R rows=2-7
+cap 84 CONV_L_SLOW R rows=2-7
+cap 85 CONV_L R rows=2-7
+cap 86 CONV_L_FAST R rows=2-7
+cap 87 CONV_L_ACC R rows=2-7
+
+cap 88 CONV_R_SLOW LR rows=2-7
+cap 89 CONV_R LR rows=2-7
+cap 90 CONV_R_FAST LR rows=2-7
+cap 91 CONV_R_ACC LR rows=2-7
+cap 92 CONV_L_SLOW LR rows=2-7
+cap 93 CONV_L LR rows=2-7
+cap 94 CONV_L_FAST LR rows=2-7
+cap 95 CONV_L_ACC LR rows=2-7
