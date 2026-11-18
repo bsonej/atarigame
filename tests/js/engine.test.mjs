@@ -2,7 +2,7 @@
 // input on the 6502 code and on this engine and compares them.) Run with: node --test tests/js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { JOY, MODE, STATE } from '../../web/engine.js';
+import { JOY, MODE, STATE, FRAME } from '../../web/engine.js';
 import { room, play, run, tables, vertical } from './helpers.mjs';
 
 const T = tables.T;
@@ -353,6 +353,41 @@ test('a peg on the block above does not push him from below', () => {
   g.pegs = [level];
   g.pegPush(level);
   assert.equal(g.px, 41);
+});
+
+test('he looks at you until he moves, then the way he last went, leaning while he walks', () => {
+  const g = play(room());
+  run(g, 5);
+  assert.equal(g.frame, FRAME.STAND);
+  const seen = new Set();
+  for (let i = 0; i < 20; i++) {
+    g.step(JOY.RIGHT);
+    seen.add(g.frame);
+  }
+  assert.deepEqual([...seen].sort(), [FRAME.STAND + 1, FRAME.LEAN]);
+  run(g, 5);
+  assert.equal(g.frame, FRAME.STAND + 1);
+  seen.clear();
+  for (let i = 0; i < 20; i++) {
+    g.step(JOY.LEFT);
+    seen.add(g.frame);
+  }
+  assert.deepEqual([...seen].sort(), [FRAME.STAND + 2, FRAME.LEAN + 1]);
+});
+
+test('he squashes to take off, stretches in the air and squashes again on landing', () => {
+  const g = play(room());
+  run(g, 3, JOY.RIGHT);
+  g.step(JOY.FIRE | JOY.RIGHT);
+  assert.equal(g.frame, FRAME.SQUASH + 1);
+  run(g, 3, JOY.RIGHT);
+  assert.equal(g.frame, FRAME.STRETCH + 1);
+  while (g.state !== STATE.GROUND) g.step(0);
+  for (let i = 0; i < 4; i++) {
+    assert.equal(g.frame, FRAME.SQUASH + 1, `landing frame ${i}`);
+    g.step(0);
+  }
+  assert.equal(g.frame, FRAME.STAND + 1);
 });
 
 test('a ladder is climbed with up and down', () => {

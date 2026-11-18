@@ -51,6 +51,7 @@ from tools.headless import PM_YOFF  # noqa: E402
 
 _TILES = _ba.parse_tiles(ROOT / "assets" / "tiles.txt")
 TILE = {t["name"]: t["byte"] for t in _TILES}
+FR_STAND, FR_LEAN, FR_SQUASH, FR_STRETCH, FR_DIE_A = 0, 3, 5, 8, 11  # the frame families of assets/sprites.txt
 DOOR_NAMES = _ba.DOOR_NAMES
 TILE_ROWS = {t["name"]: t["rows"] for t in _TILES}
 DOOR_GLYPHS = 0x6000 + (TILE["DOOR_BL"] & 0x7F) * 8  # where the door's six glyphs are in the character set
@@ -242,7 +243,7 @@ class Spawn(Base):
             g.idle()
             colours.add(g.mem(0x0200, 256)[0xC0])
         self.assertGreater(len(colours), 4)
-        self.assertEqual(g.mem(0x0200, 256)[0xC0], 0x4E, "the pink worm")
+        self.assertEqual(g.mem(0x0200, 256)[0xC0], 0x4E, "the pink bubble")
         self.assertEqual(g.mem(0x0200, 256)[0xC3], 0x0E, "with white eyes")
 
 
@@ -297,6 +298,47 @@ class GameLogic(Base):
     def test_idle_player_does_not_move(self) -> None:
         self.g.idle(30)
         self.assertEqual((self.g.px, self.g.py, self.g.state), (SPAWN_X, SPAWN_Y, GROUND))
+
+    # ---- which frame he is drawn with ----
+    def frames_seen(self, buttons: int, frames: int) -> set[int]:
+        seen = set()
+        for _ in range(frames):
+            self.g.step(buttons)
+            seen.add(self.g.frame)
+        return seen
+
+    def test_he_looks_at_you_until_he_first_moves(self) -> None:
+        self.g.idle(10)
+        self.assertEqual(self.g.frame, FR_STAND)
+
+    def test_he_leans_and_looks_the_way_he_walks(self) -> None:
+        g = self.g
+        self.assertEqual(self.frames_seen(RIGHT, 20), {FR_STAND + 1, FR_LEAN})
+        g.idle(5)
+        self.assertEqual(g.frame, FR_STAND + 1, "stopped: still looking right")
+        self.assertEqual(self.frames_seen(LEFT, 20), {FR_STAND + 2, FR_LEAN + 1})
+        g.idle(5)
+        self.assertEqual(g.frame, FR_STAND + 2)
+
+    def test_he_squashes_to_jump_stretches_in_the_air_and_squashes_on_landing(self) -> None:
+        g = self.g
+        g.step(RIGHT, 2)
+        g.step(FIRE | RIGHT)
+        self.assertEqual(g.frame, FR_SQUASH + 1, "taking off")
+        g.run(3, RIGHT)
+        self.assertEqual(g.frame, FR_STRETCH + 1, "rising")
+        g.run_until(lambda g: g.state == GROUND, limit=60, every=1)
+        for _ in range(4):
+            self.assertEqual(g.frame, FR_SQUASH + 1, "landing")
+            g.step()
+        self.assertEqual(g.frame, FR_STAND + 1, "back to normal")
+
+    def test_a_jump_straight_up_from_the_start_is_all_front_on(self) -> None:
+        g = self.g
+        g.step(FIRE)
+        self.assertEqual(g.frame, FR_SQUASH)
+        g.run(4)
+        self.assertEqual(g.frame, FR_STRETCH)
 
     # ---- walking ----
     def test_walks_one_pixel_per_frame_and_animates(self) -> None:
@@ -481,9 +523,9 @@ class GameLogic(Base):
     def test_player_sprite_is_in_player_memory(self) -> None:
         sprite = self.g.sprite()
         self.assertEqual(len(sprite), 16)
-        self.assertEqual(sprite[1], 0xF0)  # the head row of the stand frame
+        self.assertEqual(sprite[1], 0x7E)  # the second row of the stand frame: .######.
 
-    def test_the_worms_eyes_are_player_3(self) -> None:
+    def test_his_eyes_are_player_3(self) -> None:
         g = self.g
         eyes = g.mem(g.pm0 + 0x300, 512)[PM_YOFF + g.py : PM_YOFF + g.py + 16]
         want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[0][2]
@@ -496,7 +538,8 @@ class GameLogic(Base):
         g = self.g
         g.step(FIRE, 3)
         self.assertNotEqual(g.py, SPAWN_Y)
-        self.assertEqual(g.sprite()[1], 0xF0)
+        want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][1]
+        self.assertEqual(list(g.sprite()), want, "the body of the frame he is on")
         raw = g.mem(g.pm0, 256)
         self.assertEqual(raw[32 + SPAWN_Y + 15], 0, "no stale image left at the old position")
 
@@ -538,7 +581,7 @@ class DeathAndLives(Base):
         self.assertLess(min(ys), SPAWN_Y - 12, "rises first")
         self.assertEqual(ys[top:], sorted(ys[top:]), "then only falls")
         self.assertGreaterEqual(ys[-1], 200, "ends below the screen")
-        self.assertEqual(frames, {5, 6}, "tumbles between the two death frames")
+        self.assertEqual(frames, {FR_DIE_A, FR_DIE_A + 1}, "tumbles between the two death frames")
 
     def test_dying_player_cannot_be_steered_or_pick_things_up(self) -> None:
         g = self.g

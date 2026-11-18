@@ -3,7 +3,7 @@
 
 import { COLS, ROWS, makeTables, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows, applyCaps, applyDots } from './model.js';
 import { Game, MODE, JOY, STATE } from './engine.js';
-import { Atlas, COLORS, cellSize, drawMap, drawTile, drawSprite, drawWorm, drawHud, PEG_SHAPE } from './render.js';
+import { Atlas, COLORS, cellSize, drawMap, drawTile, drawSprite, drawPlayer, drawHud, PEG_SHAPE } from './render.js';
 import { GROUPS, STAMPS, DOOR_NAMES, DOOR_CELLS, SCENE_W, SCENE_H, sceneFor } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -407,7 +407,7 @@ function iconFor(item, size) {
   }
   if (item.kind === 'start') {
     const sc = sceneCanvas([[0, 2, 'BRICK'], [1, 2, 'BRICK'], [2, 2, 'BRICK'], [3, 2, 'BRICK']], SCENE_W, SCENE_H, cell, baseRow);
-    drawWorm(sc.getContext('2d'), sprites[0], 6, 0, cell);
+    drawPlayer(sc.getContext('2d'), sprites[0], 6, 0, cell);
     return sc;
   }
   if (item.kind === 'erase') {
@@ -619,7 +619,7 @@ function drawEditor() {
       ctx.textAlign = 'left';
     }
   }
-  if (comp.spawn) drawWorm(ctx, sprites[0], comp.spawn[0] * 4, comp.spawn[1] * 8, cell);
+  if (comp.spawn) drawPlayer(ctx, sprites[0], comp.spawn[0] * 4, comp.spawn[1] * 8, cell);
   // grid
   if (S.gridOn) {
     ctx.strokeStyle = 'rgba(255,255,255,0.10)';
@@ -674,7 +674,7 @@ function drawGhost(cell) {
   const put = (cc, rr, name) => {
     if (!inside(cc, rr)) return;
     if (name === 'PEG') drawSprite(ctx, PEG_SHAPE, cc * 4, rr * 8, cell, 'rgba(255,90,74,0.7)', 8);
-    else if (name === 'START') drawWorm(ctx, sprites[0], cc * 4, rr * 8, cell, 'rgba(255,170,200,0.75)', 16, 'rgba(255,255,255,0.75)');
+    else if (name === 'START') drawPlayer(ctx, sprites[0], cc * 4, rr * 8, cell, 'rgba(255,170,200,0.75)', 16, 'rgba(255,255,255,0.75)');
     else if (name === 'ERASE') {
       ctx.fillStyle = 'rgba(255,255,255,0.2)';
       ctx.fillRect(cc * cell, rr * cell, cell, cell);
@@ -772,7 +772,7 @@ function drawPlay() {
     let colour = COLORS.player;
     if (g.mode === MODE.SPAWN) colour = `hsl(${(g.mtimer * 22) % 360} 90% 60%)`;
     else if (g.mode === MODE.DYING) colour = g.mtimer & 2 ? '#e84a4a' : COLORS.player;
-    drawWorm(ctx, sprites[g.frame] || sprites[0], g.px, g.py, cell, colour, g.drawn);
+    drawPlayer(ctx, sprites[g.frame] || sprites[0], g.px, g.py, cell, colour, g.drawn);
   }
   drawHud(ctx, cell, { score: g.score, level: p.level, lives: g.lives, left: g.left });
   if (g.mode === MODE.CLEAR) {

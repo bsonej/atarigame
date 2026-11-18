@@ -1,137 +1,249 @@
-# The player: a pink worm with eyes. Each frame is 16 rows of 4 pixels (one pixel = one colour clock, the width
-# of a tile; a row is one scan line, so the worm is two tiles tall). The width is as much as the player's
-# 4-pixel collision box allows.
+# The player: Mr. Bubble, a round pink bubble with goggle eyes and a grin. Each frame is 16 rows of 8 pixels (one
+# pixel = one colour clock, half a tile wide; a row is one scan line, so he is two tiles tall and, since a pixel is
+# twice as wide as a row is tall, a circle). The hardware player is exactly 8 pixels wide. The physics box is only 4
+# wide (a tile): the game draws him centred on it, 2 pixels to either side (src/main.s, draw_player).
 #
 #   #  body: hardware Player 0 (pink)
 #   e  eye: hardware Player 3 (white). It sits behind the body, so it shows only where the body has no pixel
-#   .  nothing (the playfield shows through)
+#   .  nothing (the playfield shows through): the pupils and the grin are such holes, black on the pink
 #
-# Frame order matters: the game expects 0=stand 1=walk A 2=walk B (also used in the air) 3=climb A 4=climb B
-# 5=die A 6=die B (the death animation alternates between these two). The stand frame must have a '#' in every row
-# (the spawn animation reveals it a line at a time and the tests check each line is lit).
+# Frame order matters: the game picks a frame as (family base + which way he looks), see choose_frame in main.s.
+#   0-2   stand: looking at you, right, left            3-4   lean: right, left (walking, climbing)
+#   5-7   squash: front, right, left (taking off, landing)    8-10  stretch: front, right, left (in the air)
+#   11-12 pop A and B (the death animation alternates between these two)
+# The first frame must have a '#' in every row (the spawn animation reveals it a line at a time and the tests
+# check each line is lit).
 
 frame stand
-.##.
-####
-e#e#
-e#e#
-####
-.##.
-.##.
-##..
-##..
-.##.
-..##
-..##
-.##.
-.##.
-##..
-.#..
+..####..
+.######.
+.######.
+.ee##ee.
+#..##..#
+#..##..#
+#ee##ee#
+########
+########
+########
+#.####.#
+##....##
+.######.
+.######.
+.######.
+..####..
 
-frame walk_a
-.##.
-####
-e#e#
-e#e#
-####
-.##.
-##..
-##..
-.##.
-..##
-..##
-.##.
-##..
-##..
-.##.
-..#.
+frame stand_right
+..####..
+.######.
+.######.
+.ee##ee.
+#e.##e.#
+#e.##e.#
+#ee##ee#
+########
+########
+########
+#.####.#
+##....##
+.######.
+.######.
+.######.
+..####..
 
-frame walk_b
-.##.
-####
-e#e#
-e#e#
-####
-.##.
-..##
-..##
-.##.
-##..
-##..
-.##.
-..##
-..##
-.##.
-.#..
+frame stand_left
+..####..
+.######.
+.######.
+.ee##ee.
+#.e##.e#
+#.e##.e#
+#ee##ee#
+########
+########
+########
+#.####.#
+##....##
+.######.
+.######.
+.######.
+..####..
 
-frame climb_a
-.##.
-####
-e#e#
-e#e#
-####
-.##.
-.##.
-##..
-##..
-.##.
-.##.
-..##
-..##
-.##.
-.##.
-.#..
+frame lean_right
+...####.
+..######
+..######
+..ee##ee
+.#e.##e.
+.#e.##e.
+.#ee##ee
+.#######
+########
+########
+#.####.#
+##....##
+.######.
+.######.
+.######.
+..####..
 
-frame climb_b
-.##.
-####
-e#e#
-e#e#
-####
-.##.
-.##.
-..##
-..##
-.##.
-.##.
-##..
-##..
-.##.
-.##.
-.#..
+frame lean_left
+.####...
+######..
+######..
+ee##ee..
+.e##.e#.
+.e##.e#.
+ee##ee#.
+#######.
+########
+########
+#.####.#
+##....##
+.######.
+.######.
+.######.
+..####..
 
-frame die_a
-.##.
-####
-e#e#
-e#e#
-####
-.##.
-#..#
-.##.
-#..#
-.##.
-#..#
-.##.
-#..#
-.##.
-#..#
-.##.
+frame squash
+........
+........
+........
+........
+..####..
+.######.
+#ee##ee#
+#..##..#
+#ee##ee#
+########
+########
+#.####.#
+##....##
+########
+.######.
+..####..
 
-frame die_b
-....
-....
-....
-....
-....
-....
-....
-....
-.##.
-####
-e#e#
-####
-.##.
-#..#
-#..#
-.##.
+frame squash_right
+........
+........
+........
+........
+..####..
+.######.
+#ee##ee#
+#e.##e.#
+#ee##ee#
+########
+########
+#.####.#
+##....##
+########
+.######.
+..####..
+
+frame squash_left
+........
+........
+........
+........
+..####..
+.######.
+#ee##ee#
+#.e##.e#
+#ee##ee#
+########
+########
+#.####.#
+##....##
+########
+.######.
+..####..
+
+frame stretch
+...##...
+..####..
+..####..
+.ee##ee.
+...##...
+...##...
+.ee##ee.
+.######.
+.######.
+.######.
+.#.##.#.
+.##..##.
+.######.
+..####..
+..####..
+...##...
+
+frame stretch_right
+...##...
+..####..
+..####..
+.ee##ee.
+.e.##e..
+.e.##e..
+.ee##ee.
+.######.
+.######.
+.######.
+.#.##.#.
+.##..##.
+.######.
+..####..
+..####..
+...##...
+
+frame stretch_left
+...##...
+..####..
+..####..
+.ee##ee.
+..e##.e.
+..e##.e.
+.ee##ee.
+.######.
+.######.
+.######.
+.#.##.#.
+.##..##.
+.######.
+..####..
+..####..
+...##...
+
+frame pop_a
+........
+........
+........
+........
+..####..
+.######.
+#ee##ee#
+#..##..#
+#ee##ee#
+########
+###..###
+##.##.##
+###..###
+########
+.######.
+..####..
+
+frame pop_b
+........
+........
+........
+........
+........
+........
+..#..#..
+.#....#.
+#..##..#
+..#..#..
+.#.##.#.
+#......#
+.#.##.#.
+#..#..#.
+..#..#..
+.#....#.

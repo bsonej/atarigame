@@ -18,7 +18,7 @@ TILE = "\n".join(["tile {id} {name} {ch}"] + ["0000"] * 8)
 EMPTY_TILE = TILE.format(id=0, name="EMPTY", ch=".")
 BRICK_TILE = TILE.format(id=1, name="BRICK", ch="#")
 ITEM_TILE = TILE.format(id=3, name="ITEM", ch="*")
-SPRITE = "frame stand\n" + "\n".join(["#..#"] * 16)
+SPRITE = "frame stand\n" + "\n".join(["#......#"] * 16)
 
 
 FONT_A = "glyph A\n.#.\n#.#\n###\n#.#\n#.#\n"
@@ -695,9 +695,14 @@ class Validation(unittest.TestCase):
         dup = EMPTY_TILE + "\n" + TILE.format(id=0, name="OTHER", ch="x") + "\n"
         self.rejects("assets/tiles.txt", dup, "duplicate tile id")
 
-    def test_sprite_rows_must_be_four_wide(self) -> None:
-        bad = SPRITE.replace("#..#", "#..", 1)
-        self.rejects("assets/sprites.txt", bad + "\n", "sprite rows are 4")
+    def test_sprite_rows_must_be_eight_wide(self) -> None:
+        bad = SPRITE.replace("#......#", "#..#", 1)
+        self.rejects("assets/sprites.txt", bad + "\n", "sprite rows are 8")
+
+    def test_sprite_eyes_are_a_second_player(self) -> None:
+        self.p.write("assets/sprites.txt", "frame stand\n" + "\n".join(["#ee....#"] * 16) + "\n")
+        ((_name, body, eyes),) = ba.parse_sprite_frames(self.p.dir / "assets" / "sprites.txt")
+        self.assertEqual((body[0], eyes[0]), (0x81, 0x60))
 
 
 if __name__ == "__main__":

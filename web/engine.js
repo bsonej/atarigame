@@ -12,7 +12,9 @@ export const ROWS = 24;
 export const JOY = { UP: 1, DOWN: 2, LEFT: 4, RIGHT: 8, FIRE: 16 };
 export const MODE = { TITLE: 0, PLAY: 1, DYING: 2, SPAWN: 3, CLEAR: 4, OVER: 5 };
 export const STATE = { GROUND: 0, AIR: 1, CLIMB: 2 };
-export const FRAME = { STAND: 0, WALK_A: 1, AIR: 2, CLIMB: 3, DIE_A: 5, DIE_B: 6 };
+// Sprite frames (assets/sprites.txt): families to which `face` (0 at you, 1 right, 2 left) is added.
+export const FRAME = { STAND: 0, LEAN: 3, SQUASH: 5, STRETCH: 8, DIE_A: 11, DIE_B: 12 };
+const LAND_FRAMES = 4; // how long he stays squashed after landing
 
 const KIND_EXPL = 0;
 const KIND_VANISH = 1;
@@ -109,6 +111,9 @@ export class Game {
     this.doorDir = 0; // 1 fading in, -1 fading out
     this.doorPhase = 0; // how much of it shows, 0..fadeSteps
     this.doorTick = 0;
+    this.face = 0; // which way he looks: 0 at you (until he first moves), 1 right, 2 left
+    this.landT = 0; // frames of landing squash left
+    this.lastSt = 0; // his state on the previous frame
     this.frame = FRAME.STAND;
     this.drawn = 0;
     this.dyi = 0;
@@ -120,7 +125,7 @@ export class Game {
     return {
       mode: this.mode, px: this.px, py: this.py, state: this.state, left: this.left, lives: this.lives,
       score: this.score, jt: this.jt, fall: this.fall, vx: this.vx, vfrac: this.vfrac, under: this.under,
-      cacc: this.cacc, mtimer: this.mtimer, frame: this.frame,
+      cacc: this.cacc, mtimer: this.mtimer, frame: this.frame, face: this.face,
       doorOpen: this.doorOpen, doorDir: u8(this.doorDir), doorPhase: this.doorPhase,
     };
   }
@@ -281,10 +286,21 @@ export class Game {
   }
 
   chooseFrame() {
+    if (this.joy & JOY.RIGHT) this.face = 1;
+    else if (this.joy & JOY.LEFT) this.face = 2;
+    if (this.lastSt === STATE.AIR && this.state === STATE.GROUND) this.landT = LAND_FRAMES; // landing: squash
+    this.lastSt = this.state;
     if (this.state === STATE.CLIMB) {
-      this.frame = this.moved ? FRAME.CLIMB + ((this.anim >> 2) & 1) : FRAME.CLIMB;
-    } else if (this.state === STATE.AIR) this.frame = FRAME.AIR;
-    else this.frame = this.moved ? FRAME.WALK_A + ((this.anim >> 2) & 1) : FRAME.STAND;
+      this.landT = 0;
+      this.frame = this.moved ? FRAME.LEAN + ((this.anim >> 2) & 1) : FRAME.STAND; // wobbling up the ladder
+    } else if (this.state === STATE.AIR) {
+      this.landT = 0;
+      this.frame = (this.jt < 3 ? FRAME.SQUASH : FRAME.STRETCH) + this.face; // squashed at take-off, then stretched
+    } else if (this.landT > 0) {
+      this.landT--;
+      this.frame = FRAME.SQUASH + this.face;
+    } else if (this.moved && this.anim & 4) this.frame = FRAME.LEAN + (this.face === 2 ? 1 : 0);
+    else this.frame = FRAME.STAND + this.face;
   }
 
   // ---- the player ----------------------------------------------------------------------------

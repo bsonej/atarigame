@@ -29,6 +29,10 @@ ATTRACT: an AI plays for 30 s, then back to TITLE; fire starts a real game
   start of each row), so a level is banded in the way of the arcade games it imitates. The hues step round eight
   colours, and move one step per level, so each level looks different. The grey, white, ice blue and the score row's
   colour are the same on every row. All of it comes from `assets/palette.txt`, which the editor reads too.
+- **The player is Mr. Bubble**: a round pink bubble with eyes and a grin, 8x16 and drawn centred on the 4-wide physics
+  box (so he overhangs a tile by about 2 pixels each side; only the 4 pixels in the middle collide). His eyes look the
+  way he last moved (at you until he first moves), he leans while he walks, squashes to take off and on landing (4 frames),
+  stretches while he rises, and pops on death. 13 frames in all.
 - **Death animation**: red flash, the player hops, tumbles off the bottom of the screen, a falling tone.
 - **Come to life animation**: at every start and respawn the player is drawn line by line from the top, then blinks, in
   cycling colours with a rising tone. You cannot move until it ends.
@@ -81,7 +85,7 @@ In the emulator: F5 warm reset, F9 quit.
 | `assets/tiles.txt` | 4x8 tiles, four colours, with the character each one has in level maps and what it does (`solid`, `oneway`, `alt`). The header documents the format. |
 | `assets/palette.txt` | The row hues, grey, white, ice blue, score row and background colours as Atari colour bytes. Generates `src/gen/palette.inc`; the editor gets them through `/api/tiles`. |
 | `assets/font.txt` | 3x5 text font (A-Z, 0-9, `- ! ? :`). Ids: digits 16-25, letters 32-57, others from 58. |
-| `assets/sprites.txt` | The pink worm's frames (4x16): stand, walk, climb, and the two death frames. `#` is body (Player 0, pink), `e` is an eye (Player 3, white, shown only where the body has no pixel). |
+| `assets/sprites.txt` | Mr. Bubble's 13 frames (8x16): stand (front, looking right, looking left), lean right and left, squash (front, right, left), stretch (front, right, left) and two pop frames. `#` is body (Player 0, pink), `e` is an eye (Player 3, white, shown only where the body has no pixel). Pupils and the grin are holes in both. |
 | `assets/levels/*.txt` | 40x24 maps, played in name order. `#` platform, `W` wall, `H` ladder, `*` item, `^` spike, `D` exit door, `@` start, `p` peg, plus the factory parts below. Row 0 is the score row. |
 | `assets/screens/*.txt` | Full-screen text maps (`title`, `gameover`). Letters/digits come from the font; a lowercase letter is the same glyph in the second text colour; `#` `*` `^` are tiles. Comments start with `#!`. |
 | `tools/build_assets.py` | Validates the assets and generates `src/gen/*.inc` (charset with the font merged in, `.charmap` so `.byte "TEXT"` works, the tile flags table, sprites, levels with their pegs and level tables, screens). |
@@ -218,7 +222,7 @@ whether the colour changes land cleanly at the start of each row (the interrupt 
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
 `render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
 (`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield) were only reasoned about. The same goes for the
-new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the red pegs and the pink worm with its white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) have never been
+new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.
 Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 32 and 16 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,
 crosses roller, bomb and vanishing blocks) but does not know to jump pegs or ride belts to the end, and nobody has played them. Run `task run` and, if
@@ -227,4 +231,4 @@ the player is a few pixels off from the floor, adjust `PM_YOFF`.
 ## Memory map
 
 `$2000-$5FFF` code and data (levels, screens, sprites) · `$6000` character set (1 KB aligned) · `$6400` display list ·
-`$6500` screen (40x24) · `$7000` player/missile area (2 KB aligned; player 0 at `$7400`, the pegs are players 1 and 2 and the worm's eyes player 3) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).
+`$6500` screen (40x24) · `$7000` player/missile area (2 KB aligned; player 0 at `$7400`, the pegs are players 1 and 2 and Mr. Bubble's eyes player 3) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).

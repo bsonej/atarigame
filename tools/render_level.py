@@ -21,7 +21,7 @@ import build_assets as ba  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 # degrees of hue on a colour wheel for Atari hue numbers 1-15 (0 is grey); the web editor uses the same table
 HUE_DEG = [0, 45, 28, 12, 350, 325, 295, 265, 235, 215, 192, 170, 135, 95, 70, 45]
-PLAYER = (0xF8, 0xC0, 0xD4)  # the pink worm ...
+PLAYER = (0xF8, 0xC0, 0xD4)  # the pink bubble ...
 EYE = (0xFF, 0xFF, 0xFF)  # ... and its eyes
 PEG = (0xE0, 0x30, 0x30)
 
@@ -83,11 +83,11 @@ def render(level: Path, out: Path, scale: int = 6, root: Path = ROOT, level_inde
                 pix[y0 + y][x0 + x] = pal_row[4 if (v == 3 and b & 0x80) else v]
     sx, sy = lv["spawn"][0] * ba.TILE_W, lv["spawn"][1] * ba.TILE_H
     _name, body, eyes = ba.parse_sprite_frames(root / "assets" / "sprites.txt")[0]
-    for y in range(16):
-        for x in range(4):
+    for y in range(16):  # 8 pixels wide, drawn centred on his 4 pixel wide box
+        for x in range(ba.SPRITE_W):
             bit = 0x80 >> x
-            if body[y] & bit or eyes[y] & bit:
-                pix[min(h - 1, sy + y)][min(w - 1, sx + x)] = PLAYER if body[y] & bit else EYE
+            if (body[y] & bit or eyes[y] & bit) and 0 <= sx - 2 + x < w:
+                pix[min(h - 1, sy + y)][sx - 2 + x] = PLAYER if body[y] & bit else EYE
     for x, y, *_ in lv["pegs"]:
         for yy in range(8):
             for xx in range(4):

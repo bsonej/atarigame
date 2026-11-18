@@ -23,7 +23,7 @@ from pathlib import Path
 COLS, ROWS = 40, 24
 LEVEL_BYTES = 1024  # 960 tiles padded so the loader can copy whole pages
 TILE_W, TILE_H = 4, 8
-SPRITE_W, SPRITE_H = 4, 16
+SPRITE_W, SPRITE_H = 8, 16
 FONT_W, FONT_H = 3, 5
 # Which of the 8 lines of a tile each font row is drawn on (None = blank): one blank line on top, then
 # rows 0, 2 and 4 repeated so the 3x5 glyph fills an 8-line cell with roughly square-looking pixels.

@@ -72,7 +72,7 @@ class Reading(ServerCase):
         self.assertEqual(set(api["caps"][brick]), {"L", "R", "LR"})
         for byte in api["caps"][brick].values():
             self.assertEqual(api["canon"][byte], by_name["BRICK"]["byte"])
-        self.assertEqual(len(api["sprites"]), 7)
+        self.assertEqual(len(api["sprites"]), 13)
         self.assertEqual(len(api["sprites"][0]["rows"]), 16)
         for t in api["tiles"]:
             self.assertEqual(len(t["rows"]), 8)

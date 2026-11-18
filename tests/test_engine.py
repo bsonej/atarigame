@@ -158,8 +158,8 @@ class CompileParity(unittest.TestCase):
                 self.assertIn("error", node_trace({"text": text, "segments": []}))
 
 
-FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "fall", "vx", "vfrac"]
-DOOR_FIELDS = {"doorOpen": "door_open", "doorDir": "door_dir", "doorPhase": "door_phase"}  # engine name -> game variable
+FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "fall", "vx", "vfrac", "frame"]
+DOOR_FIELDS = {"doorOpen": "door_open", "doorDir": "door_dir", "doorPhase": "door_phase", "face": "face"}  # engine name -> game variable
 
 
 @needs_emulator

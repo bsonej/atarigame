@@ -21,7 +21,7 @@
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
         .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir
         .export tt_col, tt_row, tt_t, tt_ph, tt_kind, tt_orig, pg_x, pg_y, pg_min, pg_max, pg_dir, pg_wait, cph
-        .export pal0, pal1, pal2, pal3, dli_row, dli_n, ai_kind, door_open, door_dir, door_phase, door_art
+        .export pal0, pal1, pal2, pal3, dli_row, dli_n, ai_kind, door_open, door_dir, door_phase, door_art, face
 
         .include "gen/tiles.inc"
         .include "gen/font.inc"                 ; .charmap: .byte "TEXT" gives glyph ids
@@ -60,7 +60,7 @@ WSYNC   = $D40A
 NMIEN   = $D40E
 HPOSP0  = $D000
 HPOSP1  = $D001         ; HPOSP2 follows: pegs are Player 1 and 2
-HPOSP3  = $D003         ; the worm's eyes
+HPOSP3  = $D003         ; his eyes
 SIZEP0  = $D008
 GRACTL  = $D01D
 PAL     = $D014         ; bits 1-3 are zero on a PAL machine
@@ -76,7 +76,7 @@ PM0     = PMAREA + $0400
 PM_YOFF = 32            ; PM byte index of the first playfield scan line
 PM0Y    = PM0 + PM_YOFF
 PM3Y    = PM0Y + $300     ; Player 3: the eyes
-WORM    = $4E             ; the worm's colour (pink); its eyes are white
+BUBBLE    = $4E             ; his colour (pink); his eyes are white
 
 ; ---- game constants --------------------------------------------------------
 S_GROUND = 0
@@ -90,12 +90,13 @@ M_SPAWN  = 3
 M_CLEAR  = 4
 M_OVER   = 5
 
-FR_STAND  = 0           ; sprite frames, in the order of assets/sprites.txt
-FR_WALK_A = 1
-FR_AIR    = 2
-FR_CLIMB  = 3
-FR_DIE_A  = 5
-FR_DIE_B  = 6
+FR_STAND   = 0          ; sprite frames, in the order of assets/sprites.txt: families of frames, to which
+FR_LEAN    = 3          ; `face` (0 front, 1 right, 2 left) is added: stand (3), lean (2: right, left),
+FR_SQUASH  = 5          ; squash (3), stretch (3) and the two pop frames
+FR_STRETCH = 8
+FR_DIE_A   = 11
+FR_DIE_B   = 12
+LAND_FRAMES = 4         ; how long he stays squashed after landing
 
 JOY_UP    = $01
 JOY_DOWN  = $02
@@ -250,6 +251,9 @@ door_open: .res 1       ; 1 once everything is collected: the exit is there to w
 door_dir: .res 1        ; 1 = fading in, $FF = fading out, 0 = still
 door_phase: .res 1      ; how much of the door shows: 0 (none) .. FADE_STEPS (all)
 door_tick: .res 1
+face:     .res 1        ; which way he looks: 0 at you (until he first moves), 1 right, 2 left
+land_t:   .res 1        ; frames of landing squash left
+last_st:  .res 1        ; his state on the previous frame (to see a landing)
 door_art: .res 48       ; the door as the asset tool drew it (6 tiles of 8 bytes), copied at start
 d_i:      .res 1
 d_b:      .res 1
@@ -1534,7 +1538,7 @@ mode_dying:
         beq @c1
         lda #$44
         bne @c2
-@c1:    lda #WORM
+@c1:    lda #BUBBLE
 @c2:    sta PCOLR0
         lda mtimer              ; falling pitch
         cmp #44
@@ -1611,7 +1615,7 @@ mode_spawn:
         sta mode
         lda #16
         sta drawn
-        lda #WORM
+        lda #BUBBLE
         sta PCOLR0
 @rts:   rts
 
@@ -1858,6 +1862,9 @@ begin_level:
         sta door_dir
         sta door_phase
         sta door_tick
+        sta face                ; looking at you, not squashed
+        sta land_t
+        sta last_st
         jsr door_draw
         lda #FR_STAND
         sta frame
@@ -1916,8 +1923,8 @@ game_colors:
         inx
         cpx #24
         bne @row
-        lda #WORM
-        sta PCOLR0              ; pink worm
+        lda #BUBBLE
+        sta PCOLR0              ; pink bubble
         lda #$0E
         sta PCOLR3              ; white eyes
         lda #$46
@@ -2016,38 +2023,75 @@ hide_player:
 ; ---------------------------------------------------------------------------
 ; Which sprite frame matches what the player is doing.
 choose_frame:
+        lda joy                 ; he looks the way he last tried to go
+        and #JOY_RIGHT
+        beq @nr
+        lda #1
+        sta face
+        bne @face
+@nr:    lda joy
+        and #JOY_LEFT
+        beq @face
+        lda #2
+        sta face
+@face:  lda last_st             ; landing: squash for a few frames
+        cmp #S_AIR
+        bne @nl
         lda state
+        bne @nl                 ; (still in the air, or on a ladder)
+        lda #LAND_FRAMES
+        sta land_t
+@nl:    lda state
+        sta last_st
         cmp #S_CLIMB
         beq @climb
         cmp #S_AIR
         beq @air
-        lda moved               ; on the ground
+        lda land_t              ; on the ground
+        beq @walk
+        dec land_t
+        lda #FR_SQUASH
+        bne @fam                ; (always)
+@walk:  lda moved
         beq @stand
-        lda anim
-        lsr a
-        lsr a
-        and #1
-        clc
-        adc #FR_WALK_A          ; walk A / walk B
-        sta frame
+        lda anim                ; walking: lean one way, then look that way, every 4 pixels
+        and #4
+        beq @stand
+        lda #FR_LEAN
+        ldx face
+        cpx #2
+        bne @set
+        lda #FR_LEAN+1
+@set:   sta frame
         rts
 @stand: lda #FR_STAND
+@fam:   clc
+        adc face
         sta frame
         rts
-@air:   lda #FR_AIR
-        sta frame
-        rts
-@climb: lda moved
+@air:   lda #0
+        sta land_t
+        lda jt                  ; the first frames of a jump: squashed, then stretched out
+        cmp #3
+        bcs @stretch
+        lda #FR_SQUASH
+        bne @fam
+@stretch:
+        lda #FR_STRETCH
+        bne @fam
+@climb: lda #0
+        sta land_t
+        lda moved               ; wobbling up the ladder
         beq @c0
         lda anim
         lsr a
         lsr a
         and #1
         clc
-        adc #FR_CLIMB           ; climb A / climb B
+        adc #FR_LEAN            ; lean right / lean left
         sta frame
         rts
-@c0:    lda #FR_CLIMB
+@c0:    lda #FR_STAND
         sta frame
         rts
 
@@ -2063,7 +2107,7 @@ draw_player:
         bne @erase
         lda px
         clc
-        adc #48                 ; left edge of the playfield is colour clock 48
+        adc #46                 ; left edge of the playfield is colour clock 48; he is 8 wide on a 4 wide box
         sta HPOSP0
         sta HPOSP3
         lda py
