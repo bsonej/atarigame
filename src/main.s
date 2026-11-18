@@ -75,6 +75,8 @@ PMAREA  = $7000         ; 2 KB aligned, single-line resolution
 PM0     = PMAREA + $0400
 PM_YOFF = 32            ; PM byte index of the first playfield scan line
 PM0Y    = PM0 + PM_YOFF
+PLAYER_FLOAT = 2        ; he is a bubble: drawn this many scan lines above the surface he stands on (purely visual;
+                        ; the physics box is unchanged). Keep equal to FLOAT in web/spritemodel.js and tools/headless.py.
 PM3Y    = PM0Y + $300     ; Player 3: the eyes
 BUBBLE    = $4E             ; his colour (pink); his eyes are white
 
@@ -2101,7 +2103,10 @@ choose_frame:
         sta frame
         rts
 
-; Draw the player sprite: erase the old image, copy the first `drawn` lines of `frame`, position it.
+; Draw the player sprite: erase the old image, copy the first `drawn` lines of `frame`, position it. The image starts
+; PLAYER_FLOAT lines above the top of the physics box (py), i.e. at PM byte py - PLAYER_FLOAT + PM_YOFF. If py is
+; less than PLAYER_FLOAT (he is above the screen, as in the death hop) the subtraction wraps to 254 or 255 and, like any
+; value of 200 or more, hides him: nothing is drawn, nothing is written above or below the 256 bytes of a player.
 draw_player:
         ldx oldpy
         ldy #SPR_H
@@ -2117,9 +2122,14 @@ draw_player:
         sta HPOSP0
         sta HPOSP3
         lda py
-        sta oldpy
+        sec
+        sbc #PLAYER_FLOAT       ; he floats above his box
         cmp #200
-        bcs @rts                ; below the screen
+        bcc @on
+        lda #200                ; off the screen (above or below): nothing to draw, and next time nothing to erase
+@on:    sta oldpy
+        cmp #200
+        bcs @rts
         ldx frame
         lda spr_lo,x
         sta ptr
@@ -2129,7 +2139,7 @@ draw_player:
         sta ptr2
         lda spr_ehi,x
         sta ptr2+1
-        ldx py
+        ldx oldpy
         ldy #0
 @draw:  cpy drawn
         bcs @rts

@@ -186,6 +186,145 @@ class Saving(ServerCase):
         self.assertTrue((self.levels_dir() / "level6.txt").read_text().endswith("\n"))
 
 
+class Sprites(ServerCase):
+    """assets/sprites.txt through the server: read, save (validated), and never the real file."""
+
+    def sprites_path(self) -> Path:
+        return self.tmp / "assets" / "sprites.txt"
+
+    def frames(self) -> list[dict]:
+        status, res = self.req("GET", "/api/sprites")
+        self.assertEqual(status, 200, res)
+        return [{"name": f["name"], "rows": list(f["rows"])} for f in res["frames"]]
+
+    def put(self, frames, **kw):
+        return self.req("PUT", "/api/sprites", {"frames": frames}, **kw)
+
+    def test_the_frames_come_with_their_names_rows_and_bytes(self) -> None:
+        import build_assets as ba
+
+        status, res = self.req("GET", "/api/sprites")
+        self.assertEqual(status, 200)
+        self.assertEqual((res["width"], res["height"]), (8, 16))
+        self.assertEqual(res["text"], (ROOT / "assets/sprites.txt").read_text())
+        built = ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")
+        self.assertEqual(len(res["frames"]), len(built))
+        self.assertEqual(res["frames"][0]["name"], "stand")
+        self.assertEqual(res["frames"][11]["name"], "pop_a")
+        for f, (name, body, eyes) in zip(res["frames"], built):
+            self.assertEqual((f["name"], f["body"], f["eyes"]), (name, body, eyes))
+            self.assertEqual(len(f["rows"]), 16)
+            self.assertTrue(all(len(r) == 8 and set(r) <= set("#.e") for r in f["rows"]))
+
+    def test_saving_what_was_read_changes_nothing(self) -> None:
+        before = self.sprites_path().read_text()
+        status, res = self.put(self.frames())
+        self.assertEqual((status, res["frames"], res["path"]), (200, 13, "assets/sprites.txt"))
+        self.assertEqual(self.sprites_path().read_text(), before)
+
+    def test_a_changed_pixel_is_written_and_the_comments_stay(self) -> None:
+        before = self.sprites_path().read_text().splitlines()
+        frames = self.frames()
+        frames[1]["rows"][0] = "#.####.#"
+        self.assertEqual(self.put(frames)[0], 200)
+        after = self.sprites_path().read_text().splitlines()
+        self.assertEqual(len(after), len(before))
+        changed = [i for i, (a, b) in enumerate(zip(before, after)) if a != b]
+        self.assertEqual(len(changed), 1)
+        self.assertEqual(after[changed[0]], "#.####.#")
+        self.assertEqual([ln for ln in after if ln.startswith("# ")], [ln for ln in before if ln.startswith("# ")])
+        self.assertEqual([ln for ln in after if ln.startswith("frame ")], [ln for ln in before if ln.startswith("frame ")])
+        self.assertEqual([p.name for p in self.sprites_path().parent.glob(".editor-*")], [], "no temporary files are left")
+        self.assertEqual(self.frames()[1]["rows"][0], "#.####.#")
+
+    def test_a_saved_sprite_is_in_the_level_editor_s_data_and_builds_into_the_game(self) -> None:
+        import build_assets as ba
+
+        frames = self.frames()
+        frames[2]["rows"][15] = "e#e##e#e"
+        self.put(frames)
+        status, api = self.req("GET", "/api/tiles")
+        self.assertEqual((status, api["sprites"][2]["rows"][15], api["sprites"][2]["eyes"][15]), (200, 0x5A, 0xA5))
+        out = self.tmp / "gen"
+        ba.build(self.tmp, out)
+        self.assertIn("SPR_COUNT = 13", (out / "sprites.inc").read_text())
+
+    def test_the_wrong_number_of_frames_is_refused(self) -> None:
+        frames = self.frames()
+        before = self.sprites_path().read_text()
+        for what, bad in {"one short": frames[:-1], "one more": frames + [frames[-1]], "none": []}.items():
+            with self.subTest(what):
+                status, res = self.put(bad)
+                self.assertEqual(status, 400, res)
+                self.assertIn("frames", res["error"])
+        self.assertEqual(self.sprites_path().read_text(), before)
+
+    def test_bad_rows_are_refused_with_a_message_that_says_where(self) -> None:
+        before = self.sprites_path().read_text()
+        cases = {
+            "a bad character": ("stand_right", 3, "..#?##..", "frame stand_right row 3"),
+            "a short row": ("lean_left", 0, "..###", "needs 8 characters"),
+            "a long row": ("squash", 5, "..####...", "needs 8 characters"),
+            "a space": ("pop_b", 9, "..## ...", "needs 8 characters"),
+            "not text": ("stretch", 2, 7, "needs 8 characters"),
+        }
+        for what, (name, y, row, message) in cases.items():
+            with self.subTest(what):
+                frames = self.frames()
+                next(f for f in frames if f["name"] == name)["rows"][y] = row
+                status, res = self.put(frames)
+                self.assertEqual(status, 400, res)
+                self.assertIn(message, res["error"])
+        with self.subTest("a missing row"):
+            frames = self.frames()
+            frames[4]["rows"].pop()
+            status, res = self.put(frames)
+            self.assertEqual(status, 400)
+            self.assertIn("15 rows, needs 16", res["error"])
+        with self.subTest("an extra row"):
+            frames = self.frames()
+            frames[4]["rows"].append("........")
+            self.assertIn("17 rows, needs 16", self.put(frames)[1]["error"])
+        self.assertEqual(self.sprites_path().read_text(), before, "a refused save leaves the file alone")
+
+    def test_frames_cannot_be_renamed_or_reordered(self) -> None:
+        before = self.sprites_path().read_text()
+        frames = self.frames()
+        renamed = [dict(f) for f in frames]
+        renamed[3]["name"] = "wobble"
+        reordered = frames[1:2] + frames[:1] + frames[2:]
+        for what, bad in {"renamed": renamed, "reordered": reordered}.items():
+            with self.subTest(what):
+                status, res = self.put(bad)
+                self.assertEqual(status, 400, res)
+                self.assertIn("cannot be renamed or reordered", res["error"])
+        self.assertEqual(self.sprites_path().read_text(), before)
+
+    def test_the_first_frame_needs_a_body_pixel_on_every_row(self) -> None:
+        frames = self.frames()
+        frames[0]["rows"][7] = "........"
+        status, res = self.put(frames)
+        self.assertEqual(status, 400)
+        self.assertIn("row 7", res["error"])
+
+    def test_the_body_must_be_a_list_of_frames(self) -> None:
+        for body in ({"frames": "no"}, {"frames": [1, 2]}, {}, {"frames": None}):
+            with self.subTest(body):
+                self.assertEqual(self.req("PUT", "/api/sprites", body)[0], 400)
+
+    def test_a_save_that_is_not_the_editors_is_refused(self) -> None:
+        frames = self.frames()
+        frames[1]["rows"][0] = "#.####.#"
+        before = self.sprites_path().read_text()
+        self.assertEqual(self.put(frames, editor=False)[0], 403)
+        self.assertEqual(self.put(frames, headers={"Origin": "http://evil.example"})[0], 403)
+        self.assertEqual(self.put(frames, headers={"Host": "evil.example"})[0], 403)
+        self.assertEqual(self.sprites_path().read_text(), before)
+
+    def test_the_real_sprites_file_is_untouched_by_all_this(self) -> None:
+        self.assertNotEqual(self.sprites_path().resolve(), (ROOT / "assets" / "sprites.txt").resolve())
+
+
 class Checking(ServerCase):
     def test_a_good_level_has_no_problems(self) -> None:
         status, res = self.req("POST", "/api/check", {"text": LEVEL1})

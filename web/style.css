@@ -74,3 +74,29 @@ body.playing #board { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(24
 #toast.error { border-color: var(--bad); }
 #toast.warn { border-color: var(--warn); }
 .fatal { background: #5a1f1f; color: #fff; padding: 14px 18px; font-weight: 600; }
+
+/* the sprite editor (sprites.html) */
+a.button { text-decoration: none; display: inline-block; }
+#frame-box { width: 220px; flex: none; overflow-y: auto; padding: 4px 12px 16px; border-right: 1px solid var(--line); background: var(--panel); }
+#frames { list-style: none; margin: 0; padding: 0; }
+#frames li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; margin-bottom: 4px; border: 2px solid var(--line); border-radius: 6px; background: #14151a; cursor: pointer; outline: none; }
+#frames li:hover { border-color: #8a93a8; }
+#frames li.selected { border-color: var(--accent); background: #2a2216; }
+#frames canvas.thumb { width: 32px; height: 32px; image-rendering: pixelated; flex: none; background: #000; }
+#frames .findex { color: var(--dim); font: 11px ui-monospace, Menlo, monospace; width: 16px; text-align: right; }
+#frames .fname { flex: 1; font-size: 13px; }
+#frames .fdirty { color: var(--warn); font-size: 10px; visibility: hidden; }
+#frames li.changed .fdirty { visibility: visible; }
+.sprites-page #grid { background: #000; border: 2px solid var(--line); border-radius: 2px; image-rendering: pixelated; outline: none; flex: none; touch-action: none; cursor: crosshair; }
+.sprites-page #side { width: 300px; }
+.sprites-page .opts { margin: 6px 0; }
+.help.tight { margin: 0 0 8px; }
+.previews { display: flex; gap: 16px; align-items: flex-end; }
+.previews figure { margin: 0; text-align: center; }
+.previews figcaption { color: var(--dim); font-size: 11px; margin-top: 4px; }
+.previews canvas, #anim-canvas { display: block; image-rendering: pixelated; border: 1px solid var(--line); background: #000; }
+.status-line { color: var(--dim); font: 12px ui-monospace, Menlo, monospace; margin-top: 4px; min-height: 18px; }
+#problems { margin: 0 0 8px; font-weight: 600; }
+#problems.good { color: var(--good); }
+#problems.meh { color: var(--warn); }
+#problems.bad { color: var(--bad); }

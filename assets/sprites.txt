@@ -1,7 +1,9 @@
 # The player: Mr. Bubble, a round pink bubble with goggle eyes and a grin. Each frame is 16 rows of 8 pixels (one
 # pixel = one colour clock, half a tile wide; a row is one scan line, so he is two tiles tall and, since a pixel is
 # twice as wide as a row is tall, a circle). The hardware player is exactly 8 pixels wide. The physics box is only 4
-# wide (a tile): the game draws him centred on it, 2 pixels to either side (src/main.s, draw_player).
+# wide (a tile): the game draws him centred on it, 2 pixels to either side, and, being a bubble, 2 scan lines above
+# the surface he stands on (src/main.s, draw_player and PLAYER_FLOAT), so a frame needs no empty rows at the bottom
+# to hover. The web sprite editor (web/sprites.html) edits this file and keeps these comments.
 #
 #   #  body: hardware Player 0 (pink)
 #   e  eye: hardware Player 3 (white). It sits behind the body, so it shows only where the body has no pixel

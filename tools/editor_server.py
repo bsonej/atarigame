@@ -13,6 +13,8 @@ page cannot save levels through your browser). A level is only written once the 
     PUT  /api/level/<name>   save it (validated first)         body {"text": "..."}
     POST /api/check          validate and reachability-check   body {"text": "..."}
     POST /api/run            build the game and open it in the emulator on a saved level   body {"name": "..."}
+    GET  /api/sprites        Mr. Bubble's frames (assets/sprites.txt): the file's text and each frame's rows
+    PUT  /api/sprites        save them (validated like build_assets does)   body {"frames": [{"name": "...", "rows": [...]}]}
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ import build_assets as ba  # noqa: E402
 import levelcheck  # noqa: E402
 
 NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,39}")
+SPRITE_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+SPRITE_ROW_RE = re.compile(rf"[#.e]{{{ba.SPRITE_W}}}")
 MAX_BODY = 64 * 1024
 EDITOR_HEADER = "X-Editor"
 
@@ -57,6 +61,7 @@ class Project:
         self.root = Path(root).resolve()
         self.levels_dir = self.root / "assets" / "levels"
         self.web_dir = (self.root / "web").resolve()
+        self.sprites_path = self.root / "assets" / "sprites.txt"
         self._lock = threading.Lock()
 
     # -- tiles ---------------------------------------------------------------------------------
@@ -88,24 +93,103 @@ class Project:
                     "family": t.get("family"),
                     "cap": t.get("cap"),
                     "dotOf": t.get("dot_of"),
+                    "twinOf": t.get("twin_of"),
                     "rows": t["rows"],
                 }
                 for t in tiles
             ],
             "caps": {str(k): v for k, v in caps.items()},
-                    "twinOf": t.get("twin_of"),
             "dots": {str(k): v for k, v in ba.dot_families(tiles).items()},
+            "twins": {str(k): v for k, v in ba.twin_families(tiles).items()},
             "door": list(door) if door else None,
             "doorCells": [list(c) for c in ba.DOOR_CELLS],
             "fade": ba.fade_thresholds(),
             "fadeSteps": ba.FADE_STEPS,
             "palette": ba.parse_palette(pal_path) if pal_path.exists() else None,
-            "twins": {str(k): v for k, v in ba.twin_families(tiles).items()},
             "maxCollect": ba.MAX_COLLECT,
             "flags": flags,
             "canon": canon,
             "sprites": sprites,
         }
+
+    # -- sprites -------------------------------------------------------------------------------
+    @staticmethod
+    def sprite_layout(text: str) -> tuple[list[str], list[dict]]:
+        """The lines of sprites.txt and its frames as {"name", "at": [line numbers of the pixel rows], "rows": [...]}."""
+        lines = text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        frames: list[dict] = []
+        for i, raw in enumerate(lines):
+            t = raw.strip()
+            if not t or ba._is_comment(raw):
+                continue
+            if t.startswith("frame "):
+                frames.append({"name": t.split(None, 1)[1], "at": [], "rows": []})
+            elif frames and SPRITE_ROW_RE.fullmatch(t):
+                frames[-1]["at"].append(i)
+                frames[-1]["rows"].append(t)
+            else:
+                raise ApiError(500, f"assets/sprites.txt line {i + 1} is not something the editor understands: {t!r}")
+        return lines, frames
+
+    def sprites_api(self) -> dict:
+        text = self.sprites_path.read_text(encoding="utf-8")
+        _lines, frames = self.sprite_layout(text)
+        built = ba.parse_sprite_frames(self.sprites_path)
+        return {
+            "path": str(self.sprites_path.relative_to(self.root)),
+            "text": text,
+            "width": ba.SPRITE_W,
+            "height": ba.SPRITE_H,
+            "frames": [
+                {"name": f["name"], "rows": f["rows"], "body": body, "eyes": eyes}
+                for f, (_n, body, eyes) in zip(frames, built)
+            ],
+        }
+
+    def save_sprites(self, frames) -> dict:
+        """Write the pixel rows of `frames` into assets/sprites.txt, keeping its comments, frame names and order."""
+        text = self.sprites_path.read_text(encoding="utf-8")
+        lines, have = self.sprite_layout(text)
+        if not isinstance(frames, list) or not all(isinstance(f, dict) for f in frames):
+            raise ApiError(400, 'send {"frames": [{"name": "...", "rows": [...]}, ...]}')
+        if len(frames) != len(have):
+            raise ApiError(400, f"there are {len(frames)} frames but the game has {len(have)}: frames cannot be added or removed here")
+        for i, (new, old) in enumerate(zip(frames, have)):
+            name = new.get("name")
+            if not isinstance(name, str) or not SPRITE_NAME_RE.fullmatch(name):
+                raise ApiError(400, f"frame #{i} has no usable name")
+            if name != old["name"]:
+                raise ApiError(400, f"frame #{i} is called {name}, the game has {old['name']} there: frames cannot be renamed or reordered here")
+            rows = new.get("rows")
+            if not isinstance(rows, list) or len(rows) != ba.SPRITE_H:
+                raise ApiError(400, f"frame {name} has {len(rows) if isinstance(rows, list) else 0} rows, needs {ba.SPRITE_H}")
+            for y, row in enumerate(rows):
+                if not isinstance(row, str) or not SPRITE_ROW_RE.fullmatch(row):
+                    raise ApiError(400, f"frame {name} row {y}: needs {ba.SPRITE_W} characters of '#', 'e' and '.', got {row!r}")
+        for y, row in enumerate(frames[0]["rows"]):
+            if "#" not in row:
+                raise ApiError(400, f"the first frame ({frames[0]['name']}) needs a '#' in every row (the spawn animation reveals it a line at a time); row {y} has none")
+        for new, old in zip(frames, have):
+            for line, row in zip(old["at"], new["rows"]):
+                lines[line] = row
+        out = "\n".join(lines) + "\n"
+        with self._lock:
+            fd, tmp = tempfile.mkstemp(dir=self.sprites_path.parent, prefix=".editor-", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(out)
+                try:  # the asset tool has the last word
+                    ba.parse_sprite_frames(Path(tmp))
+                except ba.AssetError as e:
+                    raise ApiError(400, str(e).replace(tmp, "sprites.txt")) from None
+                os.chmod(tmp, self.sprites_path.stat().st_mode & 0o777)
+                os.replace(tmp, self.sprites_path)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+        return {"ok": True, "path": str(self.sprites_path.relative_to(self.root)), "frames": len(frames)}
 
     # -- levels --------------------------------------------------------------------------------
     def level_paths(self) -> list[Path]:
@@ -253,6 +337,10 @@ def make_handler(project: Project):
                 return self.send_json(200, project.tiles_api())
             if route == "levels" and method == "GET":
                 return self.send_json(200, project.levels())
+            if route == "sprites" and method == "GET":
+                return self.send_json(200, project.sprites_api())
+            if route == "sprites" and method == "PUT":
+                return self.send_json(200, project.save_sprites(self.read_json().get("frames")))
             if route.startswith("level/"):
                 name = route[len("level/"):]
                 if method == "GET":

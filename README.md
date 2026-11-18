@@ -32,7 +32,11 @@ ATTRACT: an AI plays for 30 s, then back to TITLE; fire starts a real game
 - **The player is Mr. Bubble**: a round pink bubble with eyes and a grin, 8x16 and drawn centred on the 4-wide physics
   box (so he overhangs a tile by about 2 pixels each side; only the 4 pixels in the middle collide). His eyes look the
   way he last moved (at you until he first moves), he leans while he walks, squashes to take off and on landing (4 frames),
-  stretches while he rises, and pops on death. 13 frames in all.
+  stretches while he rises, and pops on death. 13 frames in all. He is a bubble, so he **floats**: the picture is drawn
+  `PLAYER_FLOAT` (2) scan lines above the surface he stands on. That is purely visual: the physics box, the collisions and
+  the feet-only hazard rules are unchanged (`py` is still the top of a 16 line box whose bottom touches the floor). The
+  value lives in `src/main.s`, `web/spritemodel.js`, `tools/render_level.py` and `tools/headless.py`, and a test checks they agree.
+  If `py` is so far above the screen that the image would start above PM byte 0 (the death hop), he is hidden rather than wrapped.
 - **Death animation**: red flash, the player hops, tumbles off the bottom of the screen, a falling tone.
 - **Come to life animation**: at every start and respawn the player is drawn line by line from the top, then blinks, in
   cycling colours with a rising tone. You cannot move until it ends.
@@ -68,7 +72,7 @@ task run          # build build/atarigame.xex and start it in atari800
 task build        # just build
 task run-map -- 4   # run with games starting on map 4 (to try the factory parts without clearing 1-3)
 task check-levels # are all items on every map reachable? (a quick static check, see below)
-task editor       # the drag-and-drop level editor in your browser (see "Level editor" below)
+task editor       # the drag-and-drop level editor in your browser (see "Level editor" below); its Sprite editor page edits Mr. Bubble
 task test         # asset-tool tests + headless game tests (about 12 minutes)
 task --list
 ```
@@ -94,9 +98,9 @@ In the emulator: F5 warm reset, F9 quit.
 | `cfg/` | ld65 memory layouts (normal and TEST). |
 | `tools/levelcheck.py` | Static reachability check for maps (`task check-levels`). |
 | `tools/render_level.py` | Draws a compiled level (end caps and all) to a PNG: `python3 tools/render_level.py assets/levels/level4.txt out.png --scale 7`. |
-| `tools/editor_server.py` | The small local web server behind the level editor: serves `web/`, reads and writes `assets/levels/`. |
-| `web/` | The level editor (plain ES modules, no build step): `editor.js` (the page), `model.js` (level text and compiling), `engine.js` (the game's rules in JavaScript, for test play), `render.js`, `palette.js`. |
-| `tests/` | `test_assets.py` (asset validation, tile flags, end caps, pegs), `test_game.py` (plays the real 6502 code), `test_factory.py` (each factory part and its end caps), `test_levelcheck.py`, `test_editor_server.py`, `test_engine.py` (the editor's engine against the game in the emulator), `test_js.py` + `tests/js/` (node tests of the editor code). |
+| `tools/editor_server.py` | The small local web server behind the level and sprite editors: serves `web/`, reads and writes `assets/levels/` and `assets/sprites.txt`. |
+| `web/` | The level editor (plain ES modules, no build step): `editor.js` (the page), `model.js` (level text and compiling), `engine.js` (the game's rules in JavaScript, for test play), `render.js`, `palette.js`. The sprite editor is `sprites.html` + `sprites.js` (the page) and `spritemodel.js` (parsing, writing, undo, the preview cycles). |
+| `tests/` | `test_assets.py` (asset validation, tile flags, end caps, pegs), `test_game.py` (plays the real 6502 code), `test_factory.py` (each factory part and its end caps), `test_levelcheck.py`, `test_editor_server.py` (levels and sprites), `test_engine.py` (the editor's engine against the game in the emulator), `test_js.py` + `tests/js/` (node tests of the editor code). |
 
 ## Factory parts
 
@@ -207,6 +211,34 @@ from random standing places and from places on the pegs' blocks, and on randomly
 change a rule in `main.s`, change `engine.js` and let that test tell you if they have drifted. The editor compiles levels
 (end caps, dots, the door, pegs, item counts) the same way as `build_assets.py`, which `CompileParity` in the same file checks on every level.
 
+## Sprite editor
+
+`task editor`, then click **Sprite editor** in the level editor's top bar (or open `http://localhost:8765/sprites.html`).
+It edits `assets/sprites.txt`, Mr. Bubble's 13 frames of 8x16 pixels:
+
+- **Frames** on the left, each with a thumbnail and the name it has in `sprites.txt`; a dot marks frames that differ from
+  what is saved. The big grid edits the selected frame: left button paints with the selected tool (**Body** `B`/`1`: pink,
+  Player 0; **Eye** `E`/`2`: white, Player 3, which sits behind the body and shows only where the body has no pixel;
+  **Erase** `X`/`3`), the right button erases, and a fast drag fills every cell in between. Zoom, a grid, a 2:1 "TV shape"
+  for the pixels, and guides (the 4 pixel wide physics box he collides with, and the line `PLAYER_FLOAT` lines above his
+  feet) are options under the grid.
+- **In the game** shows the frame at 1x and 4x the way the screen does: pink body, white eyes, pupils and the grin as holes
+  over black, standing `PLAYER_FLOAT` pixels above a floor. **Animation** loops the real frame choices of `choose_frame`:
+  walk right and left (stand, lean), jump (squash, stretch, land, with the rise of the game's jump table), jump right and
+  left, look around and the death pop. Play/pause (`Space`), speed and size are options.
+- **Frame tools**: copy and paste a frame (`Cmd/Ctrl+C`/`V`), clear, revert to what is saved, flip (`H`), nudge the picture a
+  pixel (`Shift`+arrows), and **Mirror to the other side** (`M`), which overwrites the right/left counterpart of the
+  selected frame (`stand_right` <-> `stand_left`, `lean_*`, `squash_*`, `stretch_*`) with its mirror image. Undo/redo
+  (`Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z`) cover every stroke and every frame operation.
+- **Save to game** (`Cmd/Ctrl+S`) sends the frames to `PUT /api/sprites`, which writes the pixel rows into
+  `assets/sprites.txt` and leaves everything else in the file (the header comment, blank lines, the `frame` lines)
+  exactly as it was. The server refuses, with a message that says which frame and row, anything `tools/build_assets.py`
+  would refuse (rows of 8 characters of `#`, `.` and `e`; exactly 16 rows) and what the game relies on: the same number of
+  frames with the same names in the same order (`main.s` picks a frame by its place in the list), and a `#` on every row of
+  the first frame (the spawn animation reveals it a line at a time). Then `task build` / `task run`. The level editor
+  re-reads the frames whenever its page comes back to the front, so its test play and start marker show the saved ones.
+  Unsaved sprite work is kept in the browser like unsaved levels; **Download .txt** and **Reload from game** are there too.
+
 ## The attract AI
 
 `ai_input` in `src/main.s` produces the same joystick bits a person would. It picks the cheapest item (columns apart
@@ -231,7 +263,10 @@ editor's JavaScript engine; `task test-js` runs just the node tests, which need 
 ## What is not verified
 
 The level editor's page was exercised in Cursor's built-in browser (Chromium): loading, painting, dropping parts, undo,
-select and move, saving, and a test play with key presses. Other browsers, touch screens, and the feel of real-time
+select and move, saving, and a test play with key presses. The sprite editor's page was loaded there against a throwaway copy of
+the assets: painting, undo, mirroring, saving (the written file compared with the original), the frame list and the animated
+preview. Its model and the server endpoint have automated tests; dragging with a real mouse, the keyboard shortcuts and other
+browsers were not tried. Other browsers, touch screens, and the feel of real-time
 play with a physical keyboard have not been tried, and test play has no sound.
 
 The headless tests check game logic and what is written to screen and player memory, including the per-row colour
@@ -239,12 +274,12 @@ tables and that the display-list interrupt runs 23 times a frame. They do **not*
 whether the colour changes land cleanly at the start of each row (the interrupt waits for the end of the line with `WSYNC`
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
 `render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
-(`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield) were only reasoned about. The same goes for the
+(`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield, and the 2 line float above the surface) were only reasoned about. The same goes for the
 new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the chutes' turning thread (the art, its speed and how it reads on a real display, and the two directions), the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.
 Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 32 and 16 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,
 crosses roller, bomb and vanishing blocks) but does not know to jump pegs or ride belts to the end, and nobody has played them. Run `task run` and, if
-the player is a few pixels off from the floor, adjust `PM_YOFF`.
+the player is a few pixels off from the floor (he should hover 2 lines above it), adjust `PM_YOFF` and `PLAYER_FLOAT` (and `FLOAT` in `web/spritemodel.js`).
 
 ## Memory map
 

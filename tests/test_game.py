@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(ROOT / "tools"))
 import build_assets as _ba  # noqa: E402
-from tools.headless import PM_YOFF  # noqa: E402
+from tools.headless import PLAYER_FLOAT, PM_YOFF  # noqa: E402
 
 _TILES = _ba.parse_tiles(ROOT / "assets" / "tiles.txt")
 TILE = {t["name"]: t["byte"] for t in _TILES}
@@ -525,9 +525,34 @@ class GameLogic(Base):
         self.assertEqual(len(sprite), 16)
         self.assertEqual(sprite[1], 0x7E)  # the second row of the stand frame: .######.
 
+    def test_he_floats_above_the_floor_and_the_physics_box_stays_put(self) -> None:
+        g = self.g
+        self.assertEqual(g.py, SPAWN_Y, "his box is where it always was: standing on the floor")
+        for page in (g.mem(g.pm0, 256), g.mem(g.pm0 + 0x300, 256)):
+            first = PM_YOFF + g.py - PLAYER_FLOAT
+            self.assertEqual(page[:first], bytes(first), "nothing above the image")
+            self.assertEqual(page[first + 16 :], bytes(256 - first - 16), "and nothing below it")
+        body = g.sprite()
+        want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][1]
+        self.assertEqual(list(body), want)
+        # the lowest picture line is PLAYER_FLOAT scan lines above the bottom of his box (the surface)
+        feet = PM_YOFF + g.py + 16  # the first PM line of the surface
+        self.assertEqual(g.mem(g.pm0, 256)[feet - PLAYER_FLOAT : feet], bytes(PLAYER_FLOAT), "a gap below him")
+        self.assertTrue(g.mem(g.pm0, 256)[feet - PLAYER_FLOAT - 1], "and his last line right above the gap")
+
+    def test_float_is_the_same_in_the_game_the_editor_and_the_tools(self) -> None:
+        import re
+
+        asm = int(re.search(r"^PLAYER_FLOAT\s*=\s*(\d+)", (ROOT / "src" / "main.s").read_text(), re.M).group(1))
+        js = int(re.search(r"export const FLOAT = (\d+);", (ROOT / "web" / "spritemodel.js").read_text()).group(1))
+        render = int(re.search(r"^PLAYER_FLOAT = (\d+)", (ROOT / "tools" / "render_level.py").read_text(), re.M).group(1))
+        self.assertEqual((asm, js, render), (PLAYER_FLOAT,) * 3)
+        self.assertIn(PLAYER_FLOAT, (1, 2), "a pixel or two")
+
     def test_his_eyes_are_player_3(self) -> None:
         g = self.g
-        eyes = g.mem(g.pm0 + 0x300, 512)[PM_YOFF + g.py : PM_YOFF + g.py + 16]
+        top = PM_YOFF + g.py - PLAYER_FLOAT
+        eyes = g.mem(g.pm0 + 0x300, 512)[top : top + 16]
         want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[0][2]
         self.assertEqual(list(eyes), want)
         self.assertTrue(any(want), "the stand frame has eyes")
@@ -541,7 +566,7 @@ class GameLogic(Base):
         want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][1]
         self.assertEqual(list(g.sprite()), want, "the body of the frame he is on")
         raw = g.mem(g.pm0, 256)
-        self.assertEqual(raw[32 + SPAWN_Y + 15], 0, "no stale image left at the old position")
+        self.assertEqual(raw[PM_YOFF + SPAWN_Y - PLAYER_FLOAT + 15], 0, "no stale image left at the old position")
 
 
 # ---------------------------------------------------------------------------
@@ -559,6 +584,24 @@ class DeathAndLives(Base):
             g.step(RIGHT)
             if g.mode == DYING:
                 break
+
+    def test_the_image_never_leaves_its_player_page_wherever_the_death_hop_puts_him(self) -> None:
+        g = self.g
+        self.die_on_spikes()
+        self.assertEqual(g.mode, DYING)
+        pegs = g.mem(g.pm0 + 0x100, 256)
+        for py in (0, 1, 2, 3, 40, 198, 199, 200, 201, 202, 230, 253, 254, 255):
+            g.poke("py", py)
+            g.idle()
+            top = g.py - PLAYER_FLOAT  # where the image starts: a wrapped value is off the screen
+            for page in (g.mem(g.pm0, 256), g.mem(g.pm0 + 0x300, 256)):
+                lit = [i for i, b in enumerate(page) if b]
+                if 0 <= top < 200:
+                    self.assertTrue(all(PM_YOFF + top <= i < PM_YOFF + top + 16 for i in lit), (py, g.py, lit))
+                else:
+                    self.assertEqual(lit, [], f"py {py} -> {g.py}: hidden")
+            self.assertEqual(g.mem(g.pm0 + 0x100, 256), pegs, "the pegs' player is not scribbled on")
+            self.assertEqual(g.mem(g.pm0 + 0x200, 256), bytes(256))
 
     def test_touching_spikes_starts_the_death_animation(self) -> None:
         g = self.g

@@ -4,6 +4,9 @@
 // of 8*zoom CSS pixels, and the 160x192 playfield is 40x24 square cells.
 
 import { COLS, ROWS } from './model.js';
+import { FLOAT } from './spritemodel.js';
+
+export { FLOAT };
 
 export const COLORS = {
   bg: '#000000',
@@ -203,10 +206,11 @@ export function drawSprite(ctx, rows, px, py, cell, colour, lines = 16, bit = 4)
 }
 
 /** Mr. Bubble: his eyes (hardware Player 3, which sits behind the body) and then the pink body (Player 0). The frames
- * are 8 pixels wide on a 4 pixel wide physics box, so he is drawn 2 pixels to the left of (px, py). */
-export function drawPlayer(ctx, frame, px, py, cell, colour = COLORS.player, lines = 16, eyeColour = COLORS.eye) {
-  drawSprite(ctx, frame.eyes, px - 2, py, cell, eyeColour, lines, 8);
-  drawSprite(ctx, frame.rows, px - 2, py, cell, colour, lines, 8);
+ * are 8 pixels wide on a 4 pixel wide physics box, so he is drawn 2 pixels to the left of (px, py). He is a bubble: he
+ * floats FLOAT lines above his box (py is the top of the physics box, so its bottom, where he stands, is py + 16). */
+export function drawPlayer(ctx, frame, px, py, cell, colour = COLORS.player, lines = 16, eyeColour = COLORS.eye, float = FLOAT) {
+  drawSprite(ctx, frame.eyes, px - 2, py - float, cell, eyeColour, lines, 8);
+  drawSprite(ctx, frame.rows, px - 2, py - float, cell, colour, lines, 8);
 }
 
 export const PEG_SHAPE = [0x60, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0x90];

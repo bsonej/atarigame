@@ -408,7 +408,7 @@ function iconFor(item, size) {
   }
   if (item.kind === 'start') {
     const sc = sceneCanvas([[0, 2, 'BRICK'], [1, 2, 'BRICK'], [2, 2, 'BRICK'], [3, 2, 'BRICK']], SCENE_W, SCENE_H, cell, baseRow);
-    drawPlayer(sc.getContext('2d'), sprites[0], 6, 0, cell);
+    drawPlayer(sc.getContext('2d'), sprites[0], 6, 0, cell, COLORS.player, 16, COLORS.eye, 0); // the swatch is only an icon: no room above him for the float
     return sc;
   }
   if (item.kind === 'erase') {
@@ -1103,6 +1103,19 @@ function onKey(e) {
 }
 
 // ------------------------------------------------------------------------------------------------
+// Mr. Bubble's frames: the sprite editor (sprites.html) may have saved new ones, so look again whenever this page is
+// brought back to the front. The play test and the start marker then show them without a reload.
+
+async function refreshSprites() {
+  try {
+    const res = await call('sprites');
+    sprites = res.frames.map((f) => ({ rows: f.body, eyes: f.eyes }));
+  } catch {
+    // keep the frames we have
+  }
+}
+
+// ------------------------------------------------------------------------------------------------
 // start up
 
 async function boot() {
@@ -1130,6 +1143,8 @@ async function boot() {
   sizeCanvas();
   buildPalette();
   wire();
+  window.addEventListener('focus', refreshSprites);
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && refreshSprites());
   S.name = nextName();
   setGridFromRows(blankRows());
   S.compiled = compileLevel(text(), tables);

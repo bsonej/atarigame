@@ -31,6 +31,7 @@ GROUND, AIR, CLIMB = 0, 1, 2
 TITLE, PLAY, DYING, SPAWN, CLEAR, OVER = range(6)  # the game's modes
 COLS, ROWS = 40, 24
 PM_YOFF = 32
+PLAYER_FLOAT = 2  # he is drawn this many lines above the top of his physics box (src/main.s)
 SPAWN_FRAMES, DIE_FRAMES, CLEAR_FRAMES = 48, 80, 60
 
 
@@ -202,9 +203,10 @@ class Game:
         return self.mem(self.screen_addr + row * COLS, 256)[col]
 
     def sprite(self) -> bytes:
-        """The 16 bytes of Player 0 around the player's current line."""
+        """The 16 bytes of Player 0 where the player is drawn (PLAYER_FLOAT lines above the top of his box)."""
         raw = self.mem(self.pm0, 512)
-        return raw[PM_YOFF + self.py : PM_YOFF + self.py + 16]
+        top = PM_YOFF + self.py - PLAYER_FLOAT
+        return raw[top : top + 16]
 
     def __getattr__(self, name: str):
         labels = self.__dict__.get("labels", {})
