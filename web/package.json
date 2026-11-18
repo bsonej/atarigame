@@ -1,0 +1,6 @@
+{
+  "name": "factory-level-editor",
+  "private": true,
+  "type": "module",
+  "description": "Drag-and-drop level editor and test player for the Atari factory game. Plain ES modules, no build step."
+}

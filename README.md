@@ -41,6 +41,7 @@ task run          # build build/atarigame.xex and start it in atari800
 task build        # just build
 task run-map -- 4   # run with games starting on map 4 (to try the factory parts without clearing 1-3)
 task check-levels # are all items on every map reachable? (a quick static check, see below)
+task editor       # the drag-and-drop level editor in your browser (see "Level editor" below)
 task test         # asset-tool tests + headless game tests (about 12 minutes)
 task --list
 ```
@@ -64,7 +65,10 @@ In the emulator: F5 warm reset, F9 quit.
 | `tools/headless.py` | Runs the game in atari800's monitor with no window, frame by frame, for tests. |
 | `cfg/` | ld65 memory layouts (normal and TEST). |
 | `tools/levelcheck.py` | Static reachability check for maps (`task check-levels`). |
-| `tests/` | `test_assets.py` (asset validation, tile flags, pegs), `test_game.py` (plays the real 6502 code), `test_factory.py` (each factory part), `test_levelcheck.py`. |
+| `tools/render_level.py` | Draws a compiled level (end caps and all) to a PNG: `python3 tools/render_level.py assets/levels/level4.txt out.png --scale 7`. |
+| `tools/editor_server.py` | The small local web server behind the level editor: serves `web/`, reads and writes `assets/levels/`. |
+| `web/` | The level editor (plain ES modules, no build step): `editor.js` (the page), `model.js` (level text and compiling), `engine.js` (the game's rules in JavaScript, for test play), `render.js`, `palette.js`. |
+| `tests/` | `test_assets.py` (asset validation, tile flags, end caps, pegs), `test_game.py` (plays the real 6502 code), `test_factory.py` (each factory part and its end caps), `test_levelcheck.py`, `test_editor_server.py`, `test_engine.py` (the editor's engine against the game in the emulator), `test_js.py` + `tests/js/` (node tests of the editor code). |
 
 ## Factory parts
 
@@ -85,6 +89,17 @@ jump through it and can stand on it.
 | `X` | bomb block | step on it and it flashes for about 0.9 seconds, then explodes. The blast kills you if you are within one tile either side or two above, and sets off bomb blocks next to it. The block is gone afterwards |
 | `v` | vanishing block | step on it and it flickers for about 0.6 seconds, then goes (you fall); it comes back after about 3.6 seconds, waiting until you are out of the way |
 | `p` | peg | not a tile: marks where a peg starts. It sits on the platform under it and sweeps along the solid blocks there, pausing at each end, at half a pixel a frame. It pushes you along ahead of it (off the edge if you let it); jump over it. At most 2 per map, each needs a platform at least 2 tiles wide |
+
+### End caps
+
+Every platform type has a left end, a right end and a both-ends look (`cap` lines in `assets/tiles.txt`). You never
+write them in a map: where a tile's left or right neighbour is a different tile (the screen edge counts as the same)
+`tools/build_assets.py` swaps in the cap, so `##########` gives a brick run with rounded ends and `>>>>>` a belt with
+bevelled ones. The game treats a cap as the plain tile (`tile_canon` in `src/gen/tileflags.inc`), so rules, the AI and
+`levelcheck` never see the difference; belt caps animate with their belt, and a bomb or vanishing block puts back the
+exact byte it had. Caps are art only. To change one, edit its rows in `tiles.txt` (or delete the rows to have the tool
+round off the plain tile again). One limitation: while a vanishing or bomb block is gone, its neighbours keep the end cap
+they were built with, so the gap's edges look unchanged until it returns.
 
 Notes for map builders:
 
@@ -112,6 +127,40 @@ spikes a few tiles away from ladders, items and the edges of gaps. Maps from 4 o
 so the attract mode only plays the first `DEMO_LEVELS` (3) maps; the others are checked by `task check-levels` and the
 component tests.
 
+## Level editor
+
+```sh
+task editor        # starts tools/editor_server.py and opens http://localhost:8765/
+```
+
+Build a level by dragging parts from the palette onto the board (or click a part, then click or drag on the board):
+
+- **Palette**: platforms, belts (left and right, four speeds), ice, rollers, ladders, stairs, chutes, spikes, bomb and
+  vanishing blocks, pegs, items and the player start, plus ready-made **stamps** (a belt run, a flight of stairs, a block
+  with a peg already on it). `Shift`+drag fills a rectangle, the right mouse button erases, `V` is a select tool (drag a
+  selection to move it, `Alt`+drag or `Cmd/Ctrl+C` to copy, `Delete` to clear). `Cmd/Ctrl+Z` undoes. Row 0 belongs to the
+  score display.
+- **Test play**: `P` plays the level in the page with the game's own rules (arrows or WASD move, `Space` or `Z` jumps,
+  `R` restarts, `Esc` returns to editing). `Shift+P` starts you at the cell under the mouse, to try the far end of a big
+  map. Pegs, belts, ice, bombs, vanishing blocks, spikes, lives, death, spawn and clearing all work.
+- **Checks** on the right update as you edit: the problems that would stop the game accepting the level (no start, no
+  items, a peg with nothing under it) and the `levelcheck` reachability warnings. Click one to find it on the board.
+- **Save to game** writes `assets/levels/<name>.txt` (only if the game's own asset tool accepts it). The level number is its
+  place in name order, so a new `levelN` joins the end. Then `task build` or `task run`, or press **Run in emulator**,
+  which saves, builds and opens the game on that map. Your unsaved work is also kept in the browser, so a closed tab does
+  not lose it. **Download** and **Import** move level files by hand.
+
+Security: the server listens on 127.0.0.1 only, answers only requests for `localhost`, refuses to save unless the request
+carries the editor's own header (so another web page cannot save through your browser), accepts level names that are
+lowercase letters, digits and underscores, and writes only inside `assets/levels/`.
+
+The test play is a **port** of the game's rules to JavaScript (`web/engine.js`), not the 6502 code. To keep the two
+honest, `tests/test_engine.py` plays the same scripted joystick input on the real game in the emulator and on the port,
+and compares the player, the screen map and the pegs after every stretch of input: on all five shipped maps from the start,
+from random standing places and from places on the pegs' blocks, and on randomly generated maps that mix every part. If you
+change a rule in `main.s`, change `engine.js` and let that test tell you if they have drifted. The editor compiles levels
+(end caps, pegs, item counts) the same way as `build_assets.py`, which `CompileParity` in the same file checks on every level.
+
 ## The attract AI
 
 `ai_input` in `src/main.s` produces the same joystick bits a person would. It picks the cheapest item (columns apart
@@ -129,9 +178,14 @@ hi-score, the score row, the 30-second attract run, and the AI clearing maps 1-3
 by poking tiles into screen RAM and checks each part (platform jump-through, stair climb and ceiling, belt speeds and
 direction, acceleration and reset, ice and roller glide, chutes, vanishing and bomb timing and chain reaction, peg
 start/sweep/push/jump-over) and that maps 4 and 5 load. They are skipped if
-atari800 or the test build is missing.
+atari800 or the test build is missing. `test_engine.py` (see "Level editor") replays scripted input on both the game and the
+editor's JavaScript engine; `task test-js` runs just the node tests, which need no emulator.
 
 ## What is not verified
+
+The level editor's page was exercised in Cursor's built-in browser (Chromium): loading, painting, dropping parts, undo,
+select and move, saving, and a test play with key presses. Other browsers, touch screens, and the feel of real-time
+play with a physical keyboard have not been tried, and test play has no sound.
 
 The headless tests check game logic and what is written to screen and player memory. They do **not** check what
 ANTIC/GTIA actually draws: the colours, how the font and animations look, and the vertical offset of the player sprite

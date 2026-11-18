@@ -159,7 +159,12 @@ class Level:
 
 
 def check(path: Path) -> list[str]:
-    lv = Level(load(path))
+    return check_rows(load(path))
+
+
+def check_rows(rows: list[str]) -> list[str]:
+    """The problems found in a level given as its map rows (comment lines already removed)."""
+    lv = Level(rows + ["." * COLS] * (ROWS - len(rows)))
     problems = []
     if lv.start is None:
         return ["no player start (@)"]

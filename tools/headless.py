@@ -175,8 +175,8 @@ class Game:
     def poke_bytes(self, addr: int, data) -> None:
         """Write several bytes at once (the monitor's C command takes a list)."""
         data = bytes(data)
-        for i in range(0, len(data), 64):
-            chunk = data[i : i + 64]
+        for i in range(0, len(data), 32):
+            chunk = data[i : i + 32]
             self._send(f"C {addr + i:X} " + " ".join(f"{b:02X}" for b in chunk) + "\n")
             self._wait(r"Changed \d+ bytes")
         self._refresh()

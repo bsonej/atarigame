@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Factory level editor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="fatal" class="fatal" hidden></div>
+
+  <header id="bar">
+    <h1>Factory level editor</h1>
+    <label class="field">Level
+      <select id="level-select"></select>
+    </label>
+    <button id="new" title="Start a new, empty level">New</button>
+    <button id="duplicate" title="Keep editing this level under a new name">Duplicate</button>
+    <span class="sep"></span>
+    <button id="undo" title="Undo (Cmd/Ctrl+Z)">Undo</button>
+    <button id="redo" title="Redo (Shift+Cmd/Ctrl+Z)">Redo</button>
+    <span class="sep"></span>
+    <button id="tool-brush" class="tool on" title="Paint with the selected part (B). Shift+drag: fill a rectangle. Right button: erase">Paint</button>
+    <button id="tool-select" class="tool" title="Select, move (drag), copy (Alt+drag, or Cmd/Ctrl+C), delete (V)">Select</button>
+    <span class="sep"></span>
+    <button id="play" class="primary" title="Play this level here. P: from the start. Shift+P: from the cell under the mouse">Play test (P)</button>
+    <span class="grow"></span>
+    <label class="check"><input id="grid" type="checkbox" checked> Grid</label>
+    <label class="field">Zoom
+      <select id="zoom"><option value="2">2x</option><option value="3">3x</option><option value="4">4x</option></select>
+    </label>
+  </header>
+
+  <main>
+    <aside id="palette-box">
+      <div id="palette"></div>
+      <p class="help">Drag a part onto the board, or click it and then click or drag on the board.
+        <b>Shift+drag</b> fills a rectangle, the <b>right button</b> erases. Row 0 is the score display.</p>
+    </aside>
+
+    <section id="stage">
+      <canvas id="board" tabindex="0" width="960" height="576"></canvas>
+      <div id="status"></div>
+    </section>
+
+    <aside id="side">
+      <h2>Save to the game</h2>
+      <label class="field wide">File name
+        <input id="name" type="text" maxlength="40" spellcheck="false" placeholder="level6">
+      </label>
+      <label class="field wide">Title
+        <input id="title" type="text" maxlength="40" placeholder="Assembly Line">
+      </label>
+      <div class="row">
+        <button id="save" class="primary" title="Write assets/levels/&lt;name&gt;.txt (Cmd/Ctrl+S)">Save to game</button>
+        <button id="run" title="Save, build the game and open it in the emulator on this level">Run in emulator</button>
+      </div>
+      <div class="row">
+        <button id="download">Download .txt</button>
+        <label class="button" title="Load a level file from disk">Import<input id="import" type="file" accept=".txt" hidden></label>
+        <span id="dirty" hidden title="Changes not saved to the game yet">unsaved</span>
+      </div>
+
+      <h2>Checks</h2>
+      <p id="summary"></p>
+      <p id="verdict"></p>
+      <ul id="issues"></ul>
+
+      <h2>Keys</h2>
+      <p class="keys">
+        <b>P</b> play test, <b>Shift+P</b> play from the mouse<br>
+        <b>B</b> paint, <b>V</b> select, <b>E</b> eraser, <b>G</b> grid<br>
+        <b>Cmd/Ctrl+Z</b> undo, <b>+S</b> save, <b>+C</b> copy<br>
+        While playing: arrows or WASD, <b>Space</b>/<b>Z</b> jump, <b>R</b> restart, <b>Esc</b> stop
+      </p>
+    </aside>
+  </main>
+
+  <div id="toast"></div>
+  <script type="module" src="editor.js"></script>
+</body>
+</html>

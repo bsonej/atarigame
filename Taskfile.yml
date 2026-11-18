@@ -79,6 +79,16 @@ tasks:
         0x2000={{.BUILD_DIR}}/code.bin 0x6000={{.BUILD_DIR}}/charset.bin 0x6400={{.BUILD_DIR}}/dlist.bin
       - atari800 -xl -nobasic -run {{.BUILD_DIR}}/{{.NAME}}-map.xex
 
+  editor:
+    desc: "Open the drag-and-drop level editor in your browser (http://localhost:8765/); Save writes assets/levels/"
+    cmds:
+      - python3 tools/editor_server.py --open
+
+  test-js:
+    desc: Run the editor's JavaScript tests (node, no emulator needed)
+    cmds:
+      - node --test tests/js/*.test.mjs
+
   test:
     desc: Run the tool tests
     cmds:
