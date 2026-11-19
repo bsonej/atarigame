@@ -5,25 +5,22 @@
 
 import { COLS, ROWS } from './model.js';
 import { FLOAT, bobFloat } from './spritemodel.js';
+import { ATARI_NTSC } from './atari-ntsc.js';
 
 export { FLOAT, bobFloat };
 
 export const COLORS = {
   bg: '#000000',
-  player: 'hsl(350 70% 86.1%)', // Atari $4E: the pink bubble
+  player: '#ffbcc4', // Atari $4E until the palette file is read
   eye: '#ffffff',
-  third: 'hsl(215 70% 55%)', // Atari $8A: the ice blue, which the missiles (his pupils and grin) share with the ice tiles
+  third: '#4941ae', // Atari $86: the ice blue, shared with his pupils and grin
   peg: '#ff5a4a',
   hud: '#f4f4f4',
 };
 
-// Atari colour bytes (hue in the high nibble, luminance in the low one) as CSS colours. An approximation: a
-// real TV or emulator differs a little. tools/render_level.py uses the same table, so the PNGs match.
-const HUE_DEG = [0, 45, 28, 12, 350, 325, 295, 265, 235, 215, 192, 170, 135, 95, 70, 45];
+/** An Atari colour byte as a CSS colour: the same RGB atari800 uses for it (web/atari-ntsc.js). */
 export function atariColour(byte) {
-  const hue = byte >> 4;
-  const light = 0.04 + (0.88 * (byte & 15)) / 15;
-  return hue === 0 ? `hsl(0 0% ${(light * 100).toFixed(1)}%)` : `hsl(${HUE_DEG[hue]} 70% ${(light * 100).toFixed(1)}%)`;
+  return ATARI_NTSC[byte & 255];
 }
 
 /** Which of the 9 colour sets a screen row uses: the score row (0) has its own, the rest step round the 8 hues. */

@@ -128,8 +128,8 @@ navy, and white for the eyes and bubble outlines), so there is no dithering: eve
 
 Regenerate with `python3 tools/make_splash.py assets/splash-source.webp --preview /tmp/splash.png --compare /tmp/side.png`
 (`pip install pillow` first; it overwrites `assets/splash.txt`, so keep hand edits elsewhere). Draw a preview of any
-`splash.txt` with `python3 tools/make_splash.py --show assets/splash.txt /tmp/splash.png` (palette colours from `assets/palette.txt` through the approximate
-`atari_rgb`, 3 x 2 upscale = the pixel shape on a TV). Dropped in the conversion: the (R) mark, the period after EST, and the finest grain.
+`splash.txt` with `python3 tools/make_splash.py --show assets/splash.txt /tmp/splash.png` (the colours are atari800's NTSC palette,
+from `tools/atari_palette.py`, 3 x 2 upscale = the pixel shape on a TV). Dropped in the conversion: the (R) mark, the period after EST, and the finest grain.
 `tools/build_assets.py` checks `splash.txt` (176 rows of 160 characters `0`-`3`) and packs it, four pixels to a byte (leftmost in the top bits).
 
 ## Tools
@@ -474,9 +474,9 @@ play with a physical keyboard have not been tried, and test play has no sound.
 
 The headless tests check game logic and what is written to screen and player memory, including the per-row colour
 tables and that the display-list interrupt runs 23 times a frame. They do **not** check what ANTIC/GTIA actually draws:
-what the title picture looks like on a real Atari or in the emulator (the display list, the load-memory-scans, the colours, the preview's pixel shape and the text-row colour change under the picture were checked in memory and in a PNG made with the approximate palette, never on a display), whether the colour changes land cleanly at the start of each row (the interrupt waits for the end of the line with `WSYNC`
+what the title picture looks like on a real Atari or in the emulator (the display list, the load-memory-scans, the colours, the preview's pixel shape and the text-row colour change under the picture were checked in memory and in a PNG, never on a display), whether the colour changes land cleanly at the start of each row (the interrupt waits for the end of the line with `WSYNC`
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
-`render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
+`render_level.py` use atari800's default NTSC palette, so they match that emulator; a real TV can still differ), how the font and animations look, and the vertical offset of the player sprite
 (`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield, and the 2 line float above the surface, with its 1-3 line bob: how smooth and how light it looks) were only reasoned about. The same goes for the
 new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the chutes' turning thread and the ride (the art, its speed and how it reads on a real display, the two directions, and how the ride and the hop out of an up chute feel), the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) and the third colour (the four missiles as a fifth sprite with `GPRIOR` bit 4: that the missiles line up with the player, the colour of `COLPF3` and the priority behind the body were checked only in memory, not on a real display or screenshot) have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.

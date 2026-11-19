@@ -3,7 +3,7 @@
 
     python3 tools/render_level.py assets/levels/level4.txt out.png [--scale 6]
 
-The colours are a rough stand-in for the Atari palette (an approximation: a real TV or emulator differs). Each row
+The colours are the ones atari800 shows for an NTSC Atari (tools/atari_palette.py), the same table the editor uses. Each row
 of tiles has its own hue, as in the game (assets/palette.txt, and the display-list interrupt in src/main.s).
 """
 
@@ -19,24 +19,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_assets as ba  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-# degrees of hue on a colour wheel for Atari hue numbers 1-15 (0 is grey); the web editor uses the same table
-HUE_DEG = [0, 45, 28, 12, 350, 325, 295, 265, 235, 215, 192, 170, 135, 95, 70, 45]
+from atari_palette import atari_rgb  # noqa: E402  the emulator's NTSC palette, shared with the editor
 # Mr. Bubble's colours come from assets/palette.txt: player (body), eyes, and ice (his third colour, the missiles)
-PEG = (0xE0, 0x30, 0x30)
+PEG = atari_rgb(0x44)  # the red a peg flashes; close to the old hand-picked red
 PLAYER_FLOAT = 2  # he is a bubble: drawn this many lines above the surface (PLAYER_FLOAT in src/main.s)
-
-
-def atari_rgb(byte: int) -> tuple[int, int, int]:
-    """An approximate RGB for an Atari colour byte (hue in the high nibble, luminance in the low one)."""
-    import colorsys
-
-    hue, lum = byte >> 4, byte & 0x0F
-    light = 0.04 + 0.88 * lum / 15
-    if hue == 0:
-        r = g = b = light
-    else:
-        r, g, b = colorsys.hls_to_rgb(HUE_DEG[hue] / 360.0, light, 0.7)
-    return round(r * 255), round(g * 255), round(b * 255)
 
 
 def row_colours(pal: dict, level_index: int, row: int) -> dict[int, tuple[int, int, int]]:
