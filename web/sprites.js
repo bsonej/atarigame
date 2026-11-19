@@ -36,15 +36,28 @@ let names = [];
 const canvas = $('grid');
 const g = canvas.getContext('2d');
 
+// Same fallback as the level editor: the published copy has no server, so reads come from data/.
 async function call(path, method = 'GET', body = null) {
-  const res = await fetch(`/api/${path}`, {
-    method,
-    headers: { 'X-Editor': '1', 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
-  return data;
+  let res = null;
+  try {
+    res = await fetch(`/api/${path}`, {
+      method,
+      headers: { 'X-Editor': '1', 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    res = null;
+  }
+  if (res && res.ok) return res.json();
+  if (method === 'GET') {
+    const file = await fetch(new URL(`data/${path}.json`, import.meta.url)).catch(() => null);
+    if (file && file.ok) return file.json();
+  }
+  if (method !== 'GET') {
+    throw new Error('This is the published copy. Saving only works in the local editor (task editor).');
+  }
+  const data = res ? await res.json().catch(() => ({})) : {};
+  throw new Error(data.error || (res ? `${res.status} ${res.statusText}` : 'the editor server is not running'));
 }
 
 function toast(msg, level = 'info') {

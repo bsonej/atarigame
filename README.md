@@ -132,6 +132,10 @@ Regenerate with `python3 tools/make_splash.py assets/splash-source.webp --previe
 from `tools/atari_palette.py`, 3 x 2 upscale = the pixel shape on a TV). Dropped in the conversion: the (R) mark, the period after EST, and the finest grain.
 `tools/build_assets.py` checks `splash.txt` (176 rows of 160 characters `0`-`3`) and packs it, four pixels to a byte (leftmost in the top bits).
 
+## Play it in the browser
+
+The level editor and the sprite editor are published at <https://bsonej.github.io/atarigame/>. That copy can be looked at and play-tested. Saving, the reachability checks and "Run in emulator" need the local server (`task editor`).
+
 ## Tools
 
 ```sh

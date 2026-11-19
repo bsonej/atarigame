@@ -45,15 +45,34 @@ const S = {
 // ------------------------------------------------------------------------------------------------
 // server
 
+// The live editor talks to the Python server. The published copy (GitHub Pages) has no server, so a failed
+// request falls back to the snapshot in data/, which export_pages.py writes. Writes have nothing to fall back to.
+let staticCopy = false;
+
 async function call(path, method = 'GET', body = null) {
-  const res = await fetch(`/api/${path}`, {
-    method,
-    headers: { 'X-Editor': '1', 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
-  return data;
+  let res = null;
+  try {
+    res = await fetch(`/api/${path}`, {
+      method,
+      headers: { 'X-Editor': '1', 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    res = null; // the server is not there
+  }
+  if (res && res.ok) return res.json();
+  if (method === 'GET') {
+    const file = await fetch(new URL(`data/${path}.json`, import.meta.url)).catch(() => null);
+    if (file && file.ok) {
+      staticCopy = true;
+      return file.json();
+    }
+  }
+  if (method !== 'GET') {
+    throw new Error('This is the published copy. Saving, checks and the emulator only work in the local editor (task editor).');
+  }
+  const data = res ? await res.json().catch(() => ({})) : {};
+  throw new Error(data.error || (res ? `${res.status} ${res.statusText}` : 'the editor server is not running'));
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1128,6 +1147,7 @@ async function boot() {
     $('fatal').textContent = `Cannot reach the editor server (${e.message}). Start it with:  task editor`;
     return;
   }
+  S.server = !staticCopy;
   tables = makeTables(api);
   atlas = new Atlas(api);
   sprites = api.sprites.map((s) => ({ rows: s.rows, eyes: s.eyes, thirdPx: s.thirdPx }));
@@ -1168,6 +1188,7 @@ async function boot() {
       changed(false);
     }
   } else changed(false);
+  if (!S.server) toast('Published copy: you can look and play-test. Saving and the emulator need the local editor.');
   syncForm();
   window.editor = { S, tables, atlas, text, startPlay, stopPlay, save, loadLevel, undo, redo, selectBrush, ITEMS, held };
   requestAnimationFrame(frame);
