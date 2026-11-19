@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mr. Bubble sprite editor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="sprites-page">
+  <div id="fatal" class="fatal" hidden></div>
+
+  <header id="bar">
+    <h1>Mr. Bubble sprite editor</h1>
+    <a class="button" href="index.html" title="Back to the level editor">Level editor</a>
+    <span class="sep"></span>
+    <button id="undo" title="Undo (Cmd/Ctrl+Z)">Undo</button>
+    <button id="redo" title="Redo (Shift+Cmd/Ctrl+Z or Ctrl+Y)">Redo</button>
+    <span class="sep"></span>
+    <button id="tool-body" class="tool on" title="Paint body pixels, pink (B or 1)">Body</button>
+    <button id="tool-eye" class="tool" title="Paint eye pixels, white (E or 2). Eyes sit behind the body: they only show where the body has no pixel">Eye</button>
+    <button id="tool-third" class="tool" title="Paint the third colour, two pixels at a time (O or 3): the pupils and the grin. It is a fifth sprite behind the body and the eyes, so it only shows where they have no pixel. Its colour is the ice colour">Third</button>
+    <button id="tool-erase" class="tool" title="Erase (X or 4, or the right mouse button)">Erase</button>
+    <span class="grow"></span>
+    <span id="dirty" hidden title="Changes not saved to the game yet">unsaved</span>
+    <button id="save" class="primary" title="Write assets/sprites.txt (Cmd/Ctrl+S)">Save to game</button>
+  </header>
+
+  <main>
+    <aside id="frame-box">
+      <h2>Frames</h2>
+      <ul id="frames"></ul>
+    </aside>
+
+    <section id="stage">
+      <canvas id="grid" tabindex="0" title="Click or drag to paint, right button erases"></canvas>
+      <div id="status"></div>
+      <div class="row opts">
+        <label class="field">Zoom
+          <select id="zoom"><option value="16">16</option><option value="24">24</option><option value="32">32</option><option value="40" selected>40</option><option value="48">48</option><option value="56">56</option></select>
+        </label>
+        <label class="check"><input id="grid-on" type="checkbox" checked> Grid (G)</label>
+        <label class="check" title="Draw the pixels twice as wide as tall, the way the TV shows them"><input id="wide" type="checkbox"> TV shape (2:1)</label>
+        <label class="check" title="Mark the 4 pixel wide physics box he stands in, and the pixels at the bottom that float above the surface"><input id="guides" type="checkbox" checked> Guides</label>
+      </div>
+    </section>
+
+    <aside id="side">
+      <h2>Frame <span id="frame-name"></span></h2>
+      <div class="row">
+        <button id="copy" title="Copy this frame (Cmd/Ctrl+C)">Copy</button>
+        <button id="paste" title="Paste over this frame (Cmd/Ctrl+V)">Paste</button>
+        <button id="clear" title="Make this frame empty">Clear</button>
+        <button id="revert" title="Put this frame back to what is saved in the game">Revert</button>
+      </div>
+      <div class="row">
+        <button id="mirror" title="Overwrite the right/left counterpart of this frame with the mirror image of it (M)">Mirror to other side</button>
+        <button id="flip" title="Flip this frame left to right (H)">Flip</button>
+      </div>
+      <div class="row">
+        <button id="shift-left" title="Move the picture one pixel left (Shift+Left). All three colours move together">&larr;</button>
+        <button id="shift-up" title="Move the picture one pixel up (Shift+Up)">&uarr;</button>
+        <button id="shift-down" title="Move the picture one pixel down (Shift+Down)">&darr;</button>
+        <button id="shift-right" title="Move the picture one pixel right (Shift+Right)">&rarr;</button>
+      </div>
+
+      <h2>Colours</h2>
+      <p class="help tight">His three colours (assets/palette.txt). The third is the missiles' colour, which the hardware shares with the playfield's colour 3: the <b>ice</b> colour, so the ice tiles and the exit door change with it.</p>
+      <div class="colour-slots">
+        <label class="slot"><button id="col-player" class="swatch big" title="Body (palette entry: player): click, then pick below"></button> Body <code id="col-player-hex"></code></label>
+        <label class="slot"><button id="col-eyes" class="swatch big" title="Eyes (palette entry: eyes): click, then pick below"></button> Eyes <code id="col-eyes-hex"></code></label>
+        <label class="slot"><button id="col-ice" class="swatch big" title="Third colour = ice (palette entry: ice): click, then pick below"></button> Third (ice) <code id="col-ice-hex"></code></label>
+      </div>
+      <div id="colour-slot" class="status-line"></div>
+      <div id="colour-grid" class="colour-grid" title="The Atari palette: 16 hues across, 8 luminances down"></div>
+      <div class="row">
+        <button id="save-colours" title="Write the three colours to assets/palette.txt (Save to game does this too)">Save colours</button>
+        <button id="revert-colours" title="Put the colours back to what is saved">Revert</button>
+      </div>
+
+      <h2>In the game</h2>
+      <p class="help tight">Black playfield, body, eyes and the third colour (pupils, grin) in the colours above. He floats <span id="float-px"></span> pixels above the surface.</p>
+      <div class="previews">
+        <figure><canvas id="pv1"></canvas><figcaption>1x</figcaption></figure>
+        <figure><canvas id="pv4"></canvas><figcaption>4x</figcaption></figure>
+      </div>
+
+      <h2>Animation</h2>
+      <label class="field wide">Cycle
+        <select id="anim"></select>
+      </label>
+      <div class="row">
+        <button id="play" title="Play or pause (Space)">Pause</button>
+        <label class="field">Speed
+          <select id="speed"><option value="1">normal</option><option value="2" selected>1/2</option><option value="4">1/4</option></select>
+        </label>
+        <label class="field">Size
+          <select id="pv-scale"><option value="1">1x</option><option value="2">2x</option><option value="3" selected>3x</option><option value="4">4x</option></select>
+        </label>
+      </div>
+      <canvas id="anim-canvas"></canvas>
+      <div id="anim-frame" class="status-line"></div>
+
+      <h2>Save</h2>
+      <p id="problems"></p>
+      <div class="row">
+        <button id="download">Download .txt</button>
+        <button id="reload" title="Throw away unsaved changes and read assets/sprites.txt again">Reload from game</button>
+      </div>
+
+      <h2>Keys</h2>
+      <p class="keys">
+        <b>B</b>/<b>1</b> body, <b>E</b>/<b>2</b> eye, <b>O</b>/<b>3</b> third colour, <b>X</b>/<b>4</b> erase, <b>right button</b> erase<br>
+        <b>[</b> <b>]</b> or <b>Up</b>/<b>Down</b>: previous / next frame<br>
+        <b>Cmd/Ctrl+Z</b> undo, <b>+S</b> save, <b>+C</b> / <b>+V</b> copy / paste frame<br>
+        <b>M</b> mirror to the other side, <b>H</b> flip, <b>Shift+arrows</b> nudge<br>
+        <b>Space</b> play / pause, <b>G</b> grid
+      </p>
+    </aside>
+  </main>
+
+  <div id="toast"></div>
+  <script type="module" src="sprites.js"></script>
+</body>
+</html>

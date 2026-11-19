@@ -6,6 +6,7 @@ Saving, the reachability check and "Run in emulator" still need the local server
 """
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -30,6 +31,12 @@ def main() -> None:
     for name, obj in files.items():
         (out / name).write_text(json.dumps(obj), encoding="utf-8")
         print(name)
+    # GitHub Pages serves /docs, and this account's token cannot push a workflow, so the site is a copy of web/.
+    docs = ROOT / "docs"
+    if docs.exists():
+        shutil.rmtree(docs)
+    shutil.copytree(ROOT / "web", docs)
+    print("docs/")
 
 
 if __name__ == "__main__":
