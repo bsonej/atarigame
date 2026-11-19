@@ -194,7 +194,7 @@ through it and can stand on it (a jump still rises through it: see "Jumping").
 | `[` `]` | accelerating belt, left / right | starts slow, gains speed every few frames up to fast, resets when you step off |
 | `~` | ice | solid; you speed up slowly, turn round slowly and slide a long way after letting go |
 | `o` | roller | solid; the same idea as ice with quicker grip, so you stop sooner. The longer the run of rollers under your feet, the harder it grips: it speeds you up by as many 1/16 pixels a frame as it is tiles long, up to 8 (a 1-tile roller is slower to get going than ice, an 8-tile one is almost instant) |
-| `T` | trampoline | solid, like a platform, with no dots: walking over it or standing on it does nothing. Land on it from the air (after a jump or a fall, any height) and it bounces you straight back up, no button needed, just high enough to land on the next surface above you (see "Trampolines"). Nothing above you in range: no bounce, an ordinary landing |
+| `T` | trampoline | solid, like a platform, with no dots: walking over it or standing on it does nothing. Land on it from a JUMP (not from walking or falling off an edge) and it bounces you straight back up, no button needed, just high enough to land on the next surface above you (see "Trampolines"). Nothing above you in range, or no jump: no bounce, an ordinary landing |
 | `Z` | teleport | solid, no dots. Tiles of it that touch (sides or above and below) are **one** teleporter. Stand on it (feet on the top of any of its tiles, walking along it counts) for 1 second and you are pixelated away and rebuilt at the next teleporter (see "Teleports") |
 | `z` | one-use teleport | the same, but once you have gone from it, all of it turns into a plain platform for good. Still a destination while unused |
 | `X` | bomb block | step on it and it flashes for about 0.9 seconds, then explodes. The blast kills you if your feet are within one tile either side and between two tiles above the block and its bottom edge (so a bomb going off over your head, or beside your knees, does nothing), and sets off bomb blocks next to it. The block is gone afterwards |
@@ -251,8 +251,8 @@ changing the art in `tiles.txt` is all it takes); `web/render.js` (`chuteFrame(h
 ### Trampolines
 
 A trampoline (`T`, `TRAMPOLINE`) is a solid platform whose middle tiles are just the mat (a two line thick rubber band at the top of the tile, nothing below) and whose end caps are the posts it is anchored to, with the spring legs (ids 26-29: the tile and its three end caps; no dot version, so no dots). Walking, standing and jumping off it are as on any platform. The
-bounce happens on the air-to-ground transition (`try_bounce` in `src/main.s`, `tryBounce` in `web/engine.js`): when
-`air_fall` lands him and the tile under the middle of his feet, else under either foot (the belt probe order), is a
+bounce happens on the air-to-ground transition (`try_bounce` in `src/main.s`, `tryBounce` in `web/engine.js`), but only after a *jump*: the zero-page flag `jumped` is set when fire starts a jump on the ground (and a bounce keeps it, so bounces chain) and cleared by every landing, by walking or being pushed (peg, belt) off an edge, by grabbing a ladder or entering a chute, and on level start, so the hop out of an up chute does not count. A landing without it is an ordinary landing on a platform: no bounce, no animation, the usual fall-death rule. When
+`air_fall` lands him after a jump and the tile under the middle of his feet, else under either foot (the belt probe order), is a
 trampoline, it looks up from that tile row by row, at most `BOUNCE_ROWS` (14) rows and never above pixel line 24 (tile
 row 3: a surface higher could not be landed on, because the score row is the ceiling). In each row it tries `px+2`,
 `px` and `px+3` with `tile_standable`, so the target is the first thing he could land on: a solid tile of any kind
@@ -282,7 +282,7 @@ the bounce, `levelcheck` and the AI see `TRAMPOLINE` throughout, and gameplay is
 same again) puts the old one back first; `timed_reset` (every level start and respawn) clears it, and the map is copied
 afresh anyway. The state is zero-page `tr_t` (0 = idle), `tr_row`, `tr_l`, `tr_r`, `tr_c`. The editor's test play shows it
 (it draws the engine's map); `tools/render_level.py` draws the plain art.
-`tools/levelcheck.py` treats a landing cell on a trampoline as reaching the first surface above it (cells on that row
+`tools/levelcheck.py` treats a landing cell on a trampoline (standing on it he can always jump up and land again, which bounces) as reaching the first surface above it (cells on that row
 within the bounce's air time), and does not claim anything more. The attract AI knows nothing of trampolines (it
 ignores them); no shipped map has one yet.
 

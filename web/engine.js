@@ -119,6 +119,7 @@ export class Game {
     this.state = STATE.GROUND;
     this.jt = 0xff;
     this.bn = 0; // trampoline bounce: frames of full-speed rise still to go
+    this.jumped = 0; // 1 = this airborne phase began with a jump (a bounce keeps it): a trampoline only bounces then
     this.tr = { t: 0, row: 0, l: 0, r: 0, c: 0 }; // the trampoline's rubber-band animation (t 0 = none), see trampStart
     this.hop = 0; // frames of forced sideways drift left (the hop out of an up chute)
     this.hdir = 0; // which way that drift goes (the way he faced when the ride ended): 2 = left, else right
@@ -152,7 +153,7 @@ export class Game {
   snapshot() {
     return {
       mode: this.mode, px: this.px, py: this.py, state: this.state, left: this.left, lives: this.lives,
-      score: this.score, jt: this.jt, bn: this.bn, fall: this.fall, vx: this.vx, vfrac: this.vfrac, under: this.under,
+      score: this.score, jt: this.jt, bn: this.bn, jumped: this.jumped, fall: this.fall, vx: this.vx, vfrac: this.vfrac, under: this.under,
       cacc: this.cacc, mtimer: this.mtimer, frame: this.frame, face: this.face, hop: this.hop,
       doorOpen: this.doorOpen, doorDir: u8(this.doorDir), doorPhase: this.doorPhase,
       tpT: this.tpT, tpLock: this.tpLock, tpS4: this.tpS4,
@@ -232,6 +233,7 @@ export class Game {
     this.vx = 0;
     this.vfrac = 0;
     this.hop = 0;
+    this.jumped = 0;
     return true;
   }
 
@@ -536,6 +538,7 @@ export class Game {
     if (this.chuteCatch()) return; // walked into a chute: it carries him
     if (!this.groundBelow()) {
       this.state = STATE.AIR; // walked off an edge
+      this.jumped = 0; // (walking or being pushed off: a trampoline is only a floor)
       this.fall = 0;
       this.vx = 0;
       this.vfrac = 0;
@@ -551,6 +554,7 @@ export class Game {
       this.vx = 0;
       this.vfrac = 0;
       this.hop = 0;
+      this.jumped = 1;
       this.state = STATE.AIR;
       return this.doHoriz();
     }
@@ -569,6 +573,7 @@ export class Game {
     this.fall = 0;
     this.hop = 0;
     this.bn = 0;
+    this.jumped = 0;
   }
 
   upAir() {
@@ -708,10 +713,11 @@ export class Game {
     const speed = f >= FALL_FAST ? 2 : f < FALL_SLOW ? 1 : f & 2 ? 1 : 2;
     for (let i = 0; i < speed; i++) {
       if (this.groundBelow() && this.feetClear()) {
-        if (this.tryBounce()) return; // a trampoline catches him, however far he fell
+        if (this.jumped && this.tryBounce()) return; // a trampoline catches him (if he jumped), however far he fell
         if (this.fall > MAX_FALL) return this.die();
         this.state = STATE.GROUND;
         this.fall = 0;
+        this.jumped = 0;
         return;
       }
       this.py = u8(this.py + 1);

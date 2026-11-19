@@ -8,7 +8,7 @@ cell the player can walk, climb ladders (steps are jumped up onto), ride chutes 
 carries him to its bottom, into an up chute to its top, where he hops out to the platform beside it), fall off
 edges (at most 8 tiles) and jump (up 3 tiles, over gaps up to 7 tiles wide; nothing above him stops a jump, and he
 floats down slower than he rises, which is where the reach comes from: see fall_frames).
-Landing on a trampoline (`T`) from a jump or a fall bounces him up to land on the first surface above it in his
+Landing on a trampoline (`T`) after a jump (not after walking or falling off an edge) bounces him up to land on the first surface above it in his
 column or the neighbouring ones (up to 14 tiles, nothing above row 3), a longer reach than a jump; where there is
 nothing above him it is an ordinary landing (see the BOUNCE_* constants and try_bounce in main.s).
 Bomb blocks and vanishing blocks count as solid, belts and ice do not change where you can go, and pegs and spikes
@@ -200,7 +200,7 @@ class Level:
             for dc in range(-reach, reach + 1):
                 if dc and self.valid(c + dc, r - dy):
                     out.append((c + dc, r - dy))
-        if self.t(c, r) == TRAMPOLINE:  # he can always jump up and land on it again
+        if self.t(c, r) == TRAMPOLINE:  # standing on it he can always jump up and land on it again (a jump: so it bounces)
             out.extend(self.bounces(c, r))
         if (c, r) in self.tele:  # a second on a teleporter
             out.append(self.tele[(c, r)])

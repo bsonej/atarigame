@@ -58,6 +58,7 @@ class Arena(Base):
         g.poke("py", py)
         g.poke("state", GROUND)
         g.poke("fall", 0)
+        g.poke("jumped", 0)
         g.poke("vx", 0)
         g.poke("vfrac", 0)
 
@@ -566,7 +567,8 @@ class SlowFall(Arena):
 
 @needs_emulator
 class Trampolines(Arena):
-    """A trampoline is a platform to walk on; landing on it from the air bounces him up to the next surface above him."""
+    """A trampoline is a platform to walk on; landing on it after a JUMP bounces him up to the next surface above him
+    (walking or falling onto it does not)."""
 
     def build(self, ledge_row: int | None = None, tile: str = "BRICK") -> None:
         self.arena()
@@ -627,8 +629,64 @@ class Trampolines(Arena):
         self.stand(44, 100)  # 68 pixels above the floor: more than MAX_FALL
         g.poke("state", AIR)
         g.poke("jt", 0xFF)
+        g.poke("jumped", 1)  # (the end of a jump that went high)
         g.run(200)
         self.assertEqual((g.py, g.state, g.deaths), (12 * 8 - 16, GROUND, 0))
+
+    def test_the_same_fall_without_a_jump_is_an_ordinary_landing_and_kills(self) -> None:
+        g = self.g
+        self.build(12)
+        self.stand(44, 100)
+        g.poke("state", AIR)
+        g.poke("jt", 0xFF)
+        g.run_until(lambda g: g.mode == DYING, limit=200, every=1)
+        self.assertEqual((g.deaths, g.tr_t), (1, 0), "the fall-death rule as usual: no bounce, no animation")
+
+    def walk_off(self, row: int, key: int = RIGHT) -> None:
+        """Stand on a ledge (its top row `row`, columns 4-9) and walk off its right end onto the trampoline below; something
+        a bounce could go to hangs high above (a one-way platform), so a bounce would show."""
+        g = self.g
+        self.build(None)
+        g.put_tiles(9, 12, [T["PLATFORM"]] * 8)
+        g.put_tiles(4, row, [T["BRICK"]] * 6)
+        self.stand(32, row * 8 - 16)
+        top = g.py
+        g.run_until(lambda g: g.state == AIR, limit=40, buttons=key, every=1)
+        self.assertEqual((g.jumped, g.jt), (0, 0xFF), "walked off: not a jump")
+        g.run(4, key)
+        for _ in range(60):
+            g.step()
+            top = min(top, g.py)
+            self.assertEqual((g.tr_t, g.jumped), (0, 0))
+        self.assertEqual((g.py, g.state, g.jt, g.bn, g.deaths), (FLOOR_Y, GROUND, 0xFF, 0, 0), "stayed on the trampoline")
+        self.assertGreaterEqual(top, row * 8 - 16, "never thrown up")
+        self.assertEqual(g.tile(11, 23), T["TRAMPOLINE"])
+
+    def test_walking_off_a_ledge_onto_it_does_not_bounce_however_far_down(self) -> None:
+        for row in (22, 21, 20, 17, 16):  # 1 to 7 tiles lower (the last is 56 pixels: still survivable)
+            with self.subTest(ledge_row=row):
+                self.walk_off(row, RIGHT)
+
+    def test_walking_back_and_forth_over_a_row_of_them_does_nothing(self) -> None:
+        g = self.g
+        self.build(18)
+        g.put_tiles(14, 23, [T["TRAMPOLINE"], T["TRAMPOLINE"], T["TRAMPOLINE_R"]])
+        for start, key in ((20, RIGHT), (80, LEFT)):
+            self.stand(start)
+            for _ in range(60):
+                g.step(key)
+                self.assertEqual((g.py, g.state, g.tr_t, g.jumped), (FLOOR_Y, GROUND, 0, 0))
+        self.assertLess(g.px, 30)
+        self.assertEqual(g.tile(11, 23), T["TRAMPOLINE"])
+
+    def test_a_jump_sets_the_flag_and_any_landing_clears_it(self) -> None:
+        g = self.g
+        self.build(None)
+        self.stand(44)
+        g.step(FIRE)
+        self.assertEqual((g.state, g.jumped), (AIR, 1))
+        g.run_until(lambda g: g.state == GROUND, limit=100, every=1)
+        self.assertEqual(g.jumped, 0)
 
     def test_the_whole_run_sags_like_a_rubber_band_and_ends_restored(self) -> None:
         g = self.g
@@ -686,8 +744,15 @@ class Trampolines(Arena):
         g.put_tiles(8, 18, [T["TRAMPOLINE"]] * 8)
         self.stand(44)
         g.step(FIRE)
-        g.run(250)
-        self.assertEqual((g.py, g.state), (12 * 8 - 16, GROUND), "first to the upper trampoline, then on to the ledge above it")
+        bounces, last = 0, 0
+        for _ in range(250):
+            g.step()
+            if g.state == AIR:
+                self.assertEqual(g.jumped, 1, "a bounce is still a jump")
+            bounces += g.bn > last  # (a bounce loads the extra full-speed frames)
+            last = g.bn
+        self.assertEqual((g.py, g.state, g.jumped), (12 * 8 - 16, GROUND, 0), "first to the upper trampoline, then on to the ledge above it")
+        self.assertEqual(bounces, 2, "two bounces, one off each trampoline")
 
 
 @needs_emulator

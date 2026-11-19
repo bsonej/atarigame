@@ -18,7 +18,7 @@
         .export frame_end                       ; breakpoint target for tools/headless.py
         .exportzp tr_t, tr_l, tr_r, tr_row, tr_c
         .exportzp fps, tp_t, tp_lock, tp_k, tp_c, tp_r, tp_dc, tp_dr, tp_s4
-        .exportzp px, py, state, jt, bn, hop, hdir, rkind, fall, score, hiscore, left, lives, level, lvlidx
+        .exportzp px, py, state, jt, bn, jumped, hop, hdir, rkind, fall, score, hiscore, left, lives, level, lvlidx
         .exportzp mode, demo, demo_n, timer, mtimer, frame, drawn, deaths, joy, anim, moved, flash
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
         .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir, pfloat
@@ -191,6 +191,7 @@ pfloat:   .res 1        ; lines he floated above his box the last time he was dr
 state:    .res 1
 jt:       .res 1        ; index into jump_dy, $FF = not rising
 bn:       .res 1        ; a trampoline bounce: frames of full-speed rise (3 pixels) still to go before the usual slowing tail
+jumped:   .res 1        ; 1 = this airborne phase began with a jump (fire on the ground; a bounce keeps it): a trampoline only bounces then
 cx:       .res 1        ; the pixel column of the edge he is on while stepping (see step_to)
 hop:      .res 1        ; frames of forced sideways drift left (the hop out of the top of an up chute)
 hdir:     .res 1        ; which way that drift goes (the way he faced when the ride ended): 2 = left, else right
@@ -725,6 +726,7 @@ update_player:
         lda #S_AIR              ; walked off an edge
         sta state
         lda #0
+        sta jumped              ; (walking or being pushed off: a trampoline is only a floor)
         sta fall
         sta vx
         sta vfrac
@@ -758,6 +760,7 @@ update_player:
         sta vx
         sta vfrac
         sta hop
+        inc jumped              ; (0 on the ground)
         lda #S_AIR
         sta state
         jmp do_horiz
@@ -835,6 +838,7 @@ chute_catch:
         sta vx
         sta vfrac
         sta hop
+        sta jumped
         sec
         rts
 
@@ -1205,6 +1209,7 @@ start_climb:
         sta fall
         sta hop
         sta bn
+        sta jumped
         rts
 
 ; ---- airborne ---------------------------------------------------------------
@@ -1281,9 +1286,11 @@ air_fall:
         dec tmp2
         bne @step
         rts
-@land:  jsr try_bounce          ; a trampoline under his feet catches him, however far he fell
+@land:  lda jumped
+        beq @plain              ; he did not jump: a trampoline is an ordinary floor
+        jsr try_bounce          ; a trampoline under his feet catches him, however far he fell
         bcs @bounced
-        lda fall
+@plain: lda fall
         cmp #MAX_FALL+1
         bcc @safe
         jmp die
@@ -1291,10 +1298,12 @@ air_fall:
         sta state
         lda #0
         sta fall
+        sta jumped
 @bounced:
         rts
 
-; Landing on a trampoline (the tile under the middle of his feet, else under either foot, like belts): if there is
+; Landing on a trampoline after a JUMP (air_fall only calls this when `jumped` is set; walking off an edge is an ordinary
+; landing; the tile under the middle of his feet, else under either foot, like belts): if there is
 ; anything he could land on in his column above it, he is thrown straight up, joystick free, and falls onto it.
 ; Looking up from the trampoline tile by tile (BOUNCE_ROWS of them at most, never above BOUNCE_TOP), the first row
 ; where the middle (px+2) or either foot column (px, px+3) has a surface (tile_standable: a solid tile of any kind,
@@ -2243,6 +2252,7 @@ begin_level:
         sta fall
         sta hop
         sta bn
+        sta jumped
         sta hdir
         sta rkind
         sta anim

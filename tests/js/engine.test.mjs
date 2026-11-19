@@ -603,8 +603,9 @@ test('pushed over a spike he still dies of it (the push does not make him immune
 });
 
 // ---- trampolines -------------------------------------------------------------------------------------------------
-// A trampoline is a solid platform. Landing on it from the air throws him straight up, just high enough to land on the
-// next surface above him in his column (up to 14 tiles), see tryBounce in web/engine.js and try_bounce in main.s.
+// A trampoline is a solid platform. Landing on it after a JUMP (fire pressed on the ground, or a bounce itself) throws him
+// straight up, just high enough to land on the next surface above him in his column (up to 14 tiles), see tryBounce in
+// web/engine.js and try_bounce in main.s. Walking or falling onto it (the `jumped` flag is 0) is an ordinary landing.
 
 /** Jump on the spot (at pixel column px) and report the highest point (smallest py) and where he ends up. */
 function jumpOn(g, frames = 150) {
@@ -645,6 +646,7 @@ test('a bounce is automatic: a long fall onto a trampoline does not hurt and bou
   g.py = 100; // (a fall of 68 pixels, more than MAX_FALL: fatal on any other floor); the ledge's top is above his feet
   g.state = STATE.AIR;
   g.jt = 0xff;
+  g.jumped = 1; // (the end of a jump that went high)
   run(g, 200);
   assert.equal(g.deaths, 0);
   assert.deepEqual([g.py, g.state], [12 * 8 - 16, STATE.GROUND]);
@@ -655,6 +657,64 @@ test('a bounce is automatic: a long fall onto a trampoline does not hurt and bou
   hard.jt = 0xff;
   run(hard, 60);
   assert.equal(hard.mode, MODE.DYING, 'the same fall onto a plain floor kills');
+});
+
+test('the same fall without a jump is an ordinary landing: no bounce, and the usual fall death', () => {
+  const g = play(room({ '23,10': 'TTTT', '12,8': '#######' }));
+  g.px = 11 * 4;
+  g.py = 100;
+  g.state = STATE.AIR;
+  g.jt = 0xff;
+  run(g, 100);
+  assert.equal(g.mode, MODE.DYING);
+  assert.equal(g.tr.t, 0, 'no animation');
+});
+
+test('walking off a ledge onto a trampoline, one or several tiles lower, does not bounce him', () => {
+  for (const row of [22, 21, 20, 17, 16]) {
+    const g = play(room({ '23,10': 'TTTT', '12,9': '========', [`${row},4`]: '######' })); // something to bounce to hangs above
+    g.px = 32;
+    g.py = row * 8 - 16;
+    let top = g.py;
+    for (let i = 0; i < 30 && g.state !== STATE.AIR; i++) g.step(JOY.RIGHT);
+    assert.deepEqual([g.state, g.jumped, g.jt], [STATE.AIR, 0, 0xff], `row ${row}: walked off`);
+    for (let i = 0; i < 4; i++) g.step(JOY.RIGHT);
+    for (let i = 0; i < 60; i++) {
+      g.step(0);
+      top = Math.min(top, g.py);
+      assert.deepEqual([g.tr.t, g.jumped], [0, 0], `row ${row}: no animation`);
+    }
+    assert.deepEqual([g.py, g.state, g.jt, g.bn, g.deaths], [FLOOR_Y, STATE.GROUND, 0xff, 0, 0], `row ${row}: stays on it`);
+    assert.ok(top >= row * 8 - 16, `row ${row}: never thrown up`);
+  }
+});
+
+test('walking along a row of trampolines does nothing, either way', () => {
+  const g = play(room({ '23,10': 'TTTT', '23,14': 'TTT', '18,8': '#######' }));
+  for (const [px, key] of [[20, JOY.RIGHT], [80, JOY.LEFT]]) {
+    g.px = px;
+    for (let i = 0; i < 60; i++) {
+      g.step(key);
+      assert.deepEqual([g.py, g.state, g.tr.t, g.jumped], [FLOOR_Y, STATE.GROUND, 0, 0]);
+    }
+  }
+});
+
+test('a jump sets the flag and any landing clears it; a bounce keeps it until the final landing', () => {
+  const g = play(room({ '23,10': 'TTTT', '18,8': 'TTTTTTT', '12,8': '#######' }));
+  g.px = 11 * 4;
+  g.step(JOY.FIRE);
+  assert.deepEqual([g.state, g.jumped], [STATE.AIR, 1]);
+  let bounces = 0;
+  let last = 0;
+  for (let i = 0; i < 300; i++) {
+    g.step(0);
+    if (g.state === STATE.AIR) assert.equal(g.jumped, 1, 'a bounce is still a jump');
+    if (g.bn > last) bounces++;
+    last = g.bn;
+  }
+  assert.equal(bounces, 2, 'one bounce off each trampoline');
+  assert.deepEqual([g.py, g.state, g.jumped], [12 * 8 - 16, STATE.GROUND, 0]);
 });
 
 test('nothing above him means no bounce', () => {
@@ -683,6 +743,7 @@ test('every height from 2 to 14 tiles lands on the surface (one-way, too) and cl
     g.py = FLOOR_Y - 10; // dropped onto the trampoline from just above it
     g.state = STATE.AIR;
     g.jt = 0xff;
+    g.jumped = 1;
     let top = g.py;
     for (let i = 0; i < 200; i++) {
       g.step(0);

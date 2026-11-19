@@ -200,7 +200,7 @@ class CompileParity(unittest.TestCase):
                 self.assertIn("error", node_trace({"text": text, "segments": []}))
 
 
-FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "bn", "fall", "vx", "vfrac", "frame", "hop"]
+FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "bn", "jumped", "fall", "vx", "vfrac", "frame", "hop"]
 DOOR_FIELDS = {"doorOpen": "door_open", "doorDir": "door_dir", "doorPhase": "door_phase", "face": "face"}  # engine name -> game variable
 TELE_FIELDS = {"tpT": "tp_t", "tpLock": "tp_lock", "tpS4": "tp_s4"}  # (in zero page)
 
@@ -281,7 +281,7 @@ class EngineMatchesGame(Arena):
         lv = compile_level(Path("x.txt"), text)
         g.poke_bytes(g.screen_addr + 40, lv["data"][40:960])
         for name, value in dict(
-            px=lv["spawn"][0] * 4, py=lv["spawn"][1] * 8, state=0, jt=0xFF, bn=0, hop=0, fall=0, vx=0, vfrac=0, cfrac=0, fcount=0,
+            px=lv["spawn"][0] * 4, py=lv["spawn"][1] * 8, state=0, jt=0xFF, bn=0, jumped=0, hop=0, fall=0, vx=0, vfrac=0, cfrac=0, fcount=0,
             gtick=0, cacc_t=0, cacc=4, anim=0, moved=0, joy=0, joyprev=0, left=lv["items"], lives=1, pg_n=0,
             tp_t=0, tp_lock=0, tp_s4=0,
         ).items():
