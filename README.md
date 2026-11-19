@@ -1,8 +1,8 @@
 # atarigame
 
 A single-screen platformer / puzzle game for the **Atari 8-bit (XL/XE, 64 KB)** in 6502 assembly, in the spirit of
-*Miner 2049er* and *Mr. Robot and His Robot Factory*. The title, "MINE RUNNER", is a placeholder
-(`assets/screens/title.txt`).
+*Miner 2049er* and *Mr. Robot and His Robot Factory*. The title screen is a picture of Mr. Bubble (see
+"The title screen" below); the game's own name is still undecided.
 
 ## Game flow
 
@@ -15,7 +15,7 @@ TITLE --fire--> new game --> come to life --> PLAY --> eat every dot, take every
 ATTRACT: an AI plays for 30 s, then back to TITLE; fire starts a real game
 ```
 
-- **Title screen** with the hi-score and a blinking PRESS FIRE.
+- **Title screen**: the Mr. Bubble splash picture, the hi-score and a blinking PRESS FIRE TO START (see "The title screen").
 - **Attract mode**: after 10 s idle on the title an AI plays one level for 30 s (each run uses the next map), with a
   blinking DEMO marker where the lives are. Fire starts a real game. The 30 s are counted in frames and adapt to PAL
   (50 Hz) or NTSC (60 Hz).
@@ -76,6 +76,62 @@ Dying restores the level (all items and dots back, the door shut) but keeps your
   art is six `alt` tiles (ids 117-122 in `assets/tiles.txt`); the fade rewrites their six glyphs in the character set
   each frame from a 16-step table (`src/gen/fade.inc`, built by `tools/build_assets.py`, also sent to the editor).
 
+## The title screen
+
+The title is a picture of Mr. Bubble with two text rows under it. It has its own display list, `dlist_title` (next to the
+game's `dlist` at `$6400`):
+
+```
+24 blank lines                       the same top as the game's display list
+176 lines of ANTIC mode E            the picture: 160 x 176, 4 colours, 40 bytes a line (22 text rows' worth)
+  LMS $8000  lines 0-101             one load-memory-scan per 4 KB block: ANTIC's address counter cannot cross a 4 KB
+  LMS $9000  lines 102-175           boundary inside a line (102 lines are 4080 bytes; the packer pads up to $9000)
+  DLI on line 175                    sets the text rows' colours
+2 lines of mode 4 text               rows 22 (PRESS FIRE TO START, blinking) and 23 (HI-SCORE) of the screen RAM at $6500
+```
+
+- **Pixels and colours.** Mode E pixel values 0-3 are the background `COLBK` and `COLPF0-2`; they come from the shadow
+  registers `COLOR4` and `COLOR0-2`, set from four entries of `assets/palette.txt`: `splash_bg` (pink, also the border
+  and the text rows' background), `splash_light` (face, nose, "EST. 1961"), `splash_navy` (lettering, pupils, grin) and
+  `splash_white` (eyes, bubble outlines). The text rows use navy letters: the interrupt on the picture's last line
+  (`dli_title`) copies row 22 of the `pal0-3` tables into `COLPF0-3` for them (the title is not banded: every row of the
+  tables holds the same colours). Edit the entries to retint the picture; the lowest bit of a luminance is not used.
+- **Rows 0-21 of the screen RAM are not shown on the title** (the picture replaces them), so `assets/screens/title.txt` only
+  has the HI-SCORE label in row 23; the game writes PRESS FIRE TO START in row 22 and the digits in row 23, column 22.
+  The game over screen is unchanged (the normal display list with its colour bands).
+- **Switching display lists** is done at the vertical blank, so it cannot tear: a mode change writes `SDLSTL` (the OS
+  copies it at the next blank, together with the colour shadows), and a deferred vertical-blank routine (`vbi_hook`,
+  installed with `SETVBV`) picks the display-list interrupt routine (`dli_title` or `dli`) that matches the display list the
+  OS has just made current and resets the game's row counter, all inside the blank where no interrupt can happen.
+  Going to the title first sets the picture's colours and the display list, waits one frame (`vwait`) and only then fills in
+  the screen RAM and the pal tables, so the picture never shows the game's colours. Going from the title into a game
+  fills everything first and switches at the next blank (the text rows may show a frame of the game's last two rows).
+  Players and missiles are hidden on the title.
+- **Colours of the background** are held by `update_fx` each frame (`COLOR4`): the picture's pink on the title, black elsewhere.
+
+### The picture and how it was made
+
+`assets/splash-source.webp` (700 x 538, the Mr. Bubble ad) was converted by `tools/make_splash.py` into
+`assets/splash.txt`. The picture really has four flat colours (background pink, light pink face/nose/lettering,
+navy, and white for the eyes and bubble outlines), so there is no dithering: everything is a solid fill or a one or two pixel line.
+
+1. A window of the source is cut out so that it keeps its proportions on the TV: a mode E pixel is about 1.5 times as wide as a
+   line is tall (`PIXEL_ASPECT`), so 160 x 176 pixels correspond to a 700 x 513 window of the source (6 rows cut from
+   the top, 19 from the bottom; `--top`, `--pixel-aspect`).
+2. Every source pixel gets the nearest of four reference colours (CIE Lab distance): background, light, white, navy.
+3. The print's grain is removed as small connected patches (fewer than 40 pixels) of the wrong class; the pale shapes
+   (light pink and white together) are cleaned first so that the broken outlines of the bubbles stay in one piece.
+4. Small pale shapes (the lettering "EST. 1961" and the little bubbles) are made one source pixel wider on each side so that their
+   thin strokes survive; then the shapes are shrunk onto 160 x 176 by counting what share of each target pixel is covered by each class,
+   with a bonus for the pale lines; a pale pixel is white if most of the pale pixels in it are white, else light pink.
+5. A last pass on the bitmap removes isolated pixels (patches of fewer than 3).
+
+Regenerate with `python3 tools/make_splash.py assets/splash-source.webp --preview /tmp/splash.png --compare /tmp/side.png`
+(`pip install pillow` first; it overwrites `assets/splash.txt`, so keep hand edits elsewhere). Draw a preview of any
+`splash.txt` with `python3 tools/make_splash.py --show assets/splash.txt /tmp/splash.png` (palette colours from `assets/palette.txt` through the approximate
+`atari_rgb`, 3 x 2 upscale = the pixel shape on a TV). Dropped in the conversion: the (R) mark, the period after EST, and the finest grain.
+`tools/build_assets.py` checks `splash.txt` (176 rows of 160 characters `0`-`3`) and packs it, four pixels to a byte (leftmost in the top bits).
+
 ## Tools
 
 ```sh
@@ -108,6 +164,8 @@ In the emulator: F5 warm reset, F9 quit.
 | `assets/font.txt` | 3x5 text font (A-Z, 0-9, `- ! ? :`). Ids: digits 16-25, letters 32-57, others from 58. |
 | `assets/sprites.txt` | Mr. Bubble's 13 frames (8x16): stand (front, looking right, looking left), lean right and left, squash (front, right, left), stretch (front, right, left) and two pop frames. `#` is body (Player 0, pink), `e` is an eye (Player 3, white, shown only where the body has no pixel), `o` is the third colour (the four missiles as a fifth sprite, behind both, so it shows through their holes; any single pixel: the pupils and the grin). `.` is nothing. |
 | `assets/levels/*.txt` | 40x24 maps, played in name order. `#` platform, `W` wall, `H` ladder, `*` item, `^` spike, `D` exit door, `@` start, `p` peg, plus the factory parts below. Row 0 is the score row. |
+| `assets/splash.txt` | The title picture: 160x176 pixels, one character `0`-`3` per pixel (ANTIC mode E, four colours), editable by hand. Generates `src/gen/splash.inc`. `assets/splash-source.webp` is the picture it was made from. |
+| `tools/make_splash.py` | One-off converter (needs Pillow, not part of the build) from a picture to `assets/splash.txt`, plus `--show` to draw a preview PNG of a `splash.txt` (no Pillow). |
 | `assets/screens/*.txt` | Full-screen text maps (`title`, `gameover`). Letters/digits come from the font; a lowercase letter is the same glyph in the second text colour; `#` `*` `^` are tiles. Comments start with `#!`. |
 | `tools/build_assets.py` | Validates the assets and generates `src/gen/*.inc` (charset with the font merged in, `.charmap` so `.byte "TEXT"` works, the tile flags table, the chutes' thread, sprites, levels with their pegs and level tables, screens). |
 | `tools/mkxex.py` | Packs the linker output into an Atari `.xex` with a RUNAD. |
@@ -416,7 +474,7 @@ play with a physical keyboard have not been tried, and test play has no sound.
 
 The headless tests check game logic and what is written to screen and player memory, including the per-row colour
 tables and that the display-list interrupt runs 23 times a frame. They do **not** check what ANTIC/GTIA actually draws:
-whether the colour changes land cleanly at the start of each row (the interrupt waits for the end of the line with `WSYNC`
+what the title picture looks like on a real Atari or in the emulator (the display list, the load-memory-scans, the colours, the preview's pixel shape and the text-row colour change under the picture were checked in memory and in a PNG made with the approximate palette, never on a display), whether the colour changes land cleanly at the start of each row (the interrupt waits for the end of the line with `WSYNC`
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
 `render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
 (`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield, and the 2 line float above the surface, with its 1-3 line bob: how smooth and how light it looks) were only reasoned about. The same goes for the
@@ -429,4 +487,4 @@ the player is a few pixels off from the floor (he should hover 2 lines above it)
 ## Memory map
 
 `$2000-$5FFF` code and data (levels, screens, sprites) · `$6000` character set (1 KB aligned) · `$6400` display list ·
-`$6500` screen (40x24) · `$7000` player/missile area (2 KB aligned; the missiles, Mr. Bubble's third colour, at `$7300`; player 0 at `$7400`, the pegs are players 1 and 2 and Mr. Bubble's eyes player 3) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).
+`$6500` screen (40x24) · `$8000-$9B8F` the title picture (mode E bitmap, in its own load segment; `$8000-$BFFF` is free otherwise) · `$7000` player/missile area (2 KB aligned; the missiles, Mr. Bubble's third colour, at `$7300`; player 0 at `$7400`, the pegs are players 1 and 2 and Mr. Bubble's eyes player 3) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).

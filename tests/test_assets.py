@@ -161,6 +161,93 @@ class Screens(unittest.TestCase):
                 self.assertIn(message, str(cm.exception))
 
 
+class Splash(unittest.TestCase):
+    """assets/splash.txt: the title picture, 160 x 176 pixels of 0-3, packed four to a byte for ANTIC mode E."""
+
+    def setUp(self) -> None:
+        self.p = Project()
+        self.addCleanup(self.p.cleanup)
+
+    def write(self, rows: list[str], header: str = "# a comment\n\n") -> None:
+        self.p.write("assets/splash.txt", header + "\n".join(rows) + "\n")
+
+    def good(self) -> list[str]:
+        return ["0123" * 40 for _ in range(ba.SPLASH_H)]
+
+    def test_a_good_picture_is_packed_four_pixels_to_a_byte(self) -> None:
+        rows = self.good()
+        rows[0] = "3" + "0" * 159
+        rows[1] = "0123" * 39 + "3210"
+        self.write(rows)
+        text = self.p.build().joinpath("splash.inc").read_text()
+        data = bytes(int(v, 16) for v in re.findall(r"\$([0-9A-F]{2})", text))
+        self.assertEqual(data[0], 0b11000000, "the leftmost pixel is in the top bits")
+        self.assertEqual(data[ba.SPLASH_LINE : ba.SPLASH_LINE + 2], bytes([0b00011011, 0b00011011]))
+        self.assertEqual(data[2 * ba.SPLASH_LINE - 1], 0b11100100)
+        self.assertIn(f"SPLASH_LINES = {ba.SPLASH_H}", text)
+        self.assertIn(f"SPLASH_SPLIT = {ba.SPLASH_SPLIT}", text)
+
+    def test_no_line_crosses_a_4k_boundary(self) -> None:
+        data = ba.pack_splash(self._parsed())
+        self.assertEqual(ba.SPLASH_SPLIT * ba.SPLASH_LINE, 4080)
+        self.assertEqual(len(data), 4096 + (ba.SPLASH_H - ba.SPLASH_SPLIT) * ba.SPLASH_LINE)
+        self.assertEqual(data[4080:4096], bytes(16), "padding up to the boundary")
+        # the line after the padding is line SPLASH_SPLIT, starting exactly at the boundary
+        rows = self.good()
+        rows[ba.SPLASH_SPLIT] = "3" * 160
+        self.write(rows)
+        data = ba.pack_splash(ba.parse_splash(self.p.dir / "assets" / "splash.txt"))
+        self.assertEqual(data[4096 : 4096 + 40], bytes([0xFF] * 40))
+        for line in range(ba.SPLASH_H):
+            start = line * ba.SPLASH_LINE + (16 if line >= ba.SPLASH_SPLIT else 0)
+            self.assertEqual(start // 4096, (start + ba.SPLASH_LINE - 1) // 4096, f"line {line}")
+
+    def _parsed(self) -> list[list[int]]:
+        self.write(self.good())
+        return ba.parse_splash(self.p.dir / "assets" / "splash.txt")
+
+    def test_bad_pictures_are_rejected(self) -> None:
+        bad = {
+            "needs exactly 176": self.good()[:-1],
+            "is 159 pixels wide": [r[:-1] if i == 5 else r for i, r in enumerate(self.good())],
+            "is 161 pixels wide": [r + "0" if i == 7 else r for i, r in enumerate(self.good())],
+            "unknown pixel '4' at row 2, column 3": [r[:3] + "4" + r[4:] if i == 2 else r for i, r in enumerate(self.good())],
+            "unknown pixel '.'": [r[:9] + "." + r[10:] if i == 175 else r for i, r in enumerate(self.good())],
+        }
+        for message, rows in bad.items():
+            with self.subTest(message):
+                self.write(rows)
+                with self.assertRaises(ba.AssetError) as cm:
+                    self.p.build()
+                self.assertIn(message, str(cm.exception))
+
+    def test_comments_and_blank_lines_are_ignored(self) -> None:
+        self.write(self.good(), header="# one\n#! two\n\n   \n# three\n")
+        self.assertTrue(self.p.build().joinpath("splash.inc").exists())
+
+    def test_a_project_without_a_picture_still_builds(self) -> None:
+        self.assertFalse(self.p.build().joinpath("splash.inc").exists())
+
+    def test_the_picture_colours_are_palette_entries_with_defaults(self) -> None:
+        good = "hues 1E 2C 4C 5C 7C 9C AC CC\ngrey 0A\nwhite 0E\nice AC\nhud 2A\nbackground 00\n"
+        self.p.write("assets/palette.txt", good)
+        text = self.p.build().joinpath("palette.inc").read_text()
+        self.assertIn("PAL_SPLASH_BG    = $4C", text)
+        self.p.write("assets/palette.txt", good + "splash_bg 48\nsplash_light 4E\nsplash_navy 84\nsplash_white 0E\n")
+        text = self.p.build().joinpath("palette.inc").read_text()
+        self.assertIn("PAL_SPLASH_BG    = $48", text)
+        self.assertIn("PAL_SPLASH_NAVY  = $84", text)
+        self.p.write("assets/palette.txt", good + "splash_bg 48 4A\n")
+        with self.assertRaises(ba.AssetError):
+            self.p.build()
+
+    def test_the_shipped_picture_is_valid_and_uses_all_four_colours(self) -> None:
+        bitmap = ba.parse_splash(ROOT / "assets" / "splash.txt")
+        self.assertEqual((len(bitmap), len(bitmap[0])), (ba.SPLASH_H, ba.SPLASH_W))
+        self.assertEqual({v for row in bitmap for v in row}, {0, 1, 2, 3})
+        self.assertTrue((ROOT / "assets" / "splash-source.webp").exists(), "the picture it was made from")
+
+
 class LevelTables(unittest.TestCase):
     def setUp(self) -> None:
         self.p = Project()
@@ -938,7 +1025,7 @@ class RealAssets(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ba.build(ROOT, Path(tmp))
             names = {p.name for p in Path(tmp).iterdir()}
-            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "helix.inc", "charset.inc", "font.inc", "palette.inc", "fade.inc", "dissolve.inc", "sprites.inc", "levels.inc", "screens.inc"})
+            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "helix.inc", "charset.inc", "font.inc", "palette.inc", "fade.inc", "dissolve.inc", "sprites.inc", "levels.inc", "screens.inc", "splash.inc"})
             self.assertIn("T_BRICK", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("T_DIGIT0       = 16", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("level1_spawn", (Path(tmp) / "levels.inc").read_text())

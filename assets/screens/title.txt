@@ -1,26 +1,27 @@
-#! Title screen. 40x24. Spaces are empty; letters and digits use assets/font.txt (lowercase = second colour);
-#! # brick  * item  ^ spikes. The game writes PRESS FIRE (row 15) and the hi-score digits (row 18, column 22).
+#! Title screen. 40x24 (only rows 22 and 23 are shown: the picture, assets/splash.txt, takes the rows above). Spaces are
+#! empty; letters and digits use assets/font.txt. The game writes PRESS FIRE TO START (row 22) and the hi-score digits
+#! (row 23, column 22).
 
-########################################
-#                                      #
-#                                      #
-#             mine runner              #
-#                                      #
-#      A SINGLE SCREEN PLATFORMER      #
-#                                      #
-#                                      #
-#       COLLECT ALL *   AVOID ^        #
-#                                      #
-#      CLIMB LADDERS   JUMP GAPS       #
-#                                      #
-#                                      #
-#                                      #
-#                                      #
-#                                      #
-#                                      #
-#            HI-SCORE                  #
-#                                      #
-#                                      #
-#       *    ^        *    ^  *        #
-#                                      #
-########################################
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+             HI-SCORE

@@ -29,12 +29,16 @@
         .include "gen/tiles.inc"
         .include "gen/font.inc"                 ; .charmap: .byte "TEXT" gives glyph ids
         .include "gen/palette.inc"              ; PAL_* colours and pal_hues
+        .export dlist, dlist_title, splash, splash_b, dli, dli_title
 
 ; ---- OS and hardware registers --------------------------------------------
 RTCLOK  = $12           ; frame counter, low byte at RTCLOK+2
 ATRACT  = $4D           ; OS attract-mode timer (reset every frame so the OS never dims the colours)
 SDMCTL  = $022F
 SDLSTL  = $0230
+VVBLKD  = $0224         ; deferred vertical-blank vector (the OS has copied its shadow registers when it runs)
+SETVBV  = $E45C         ; OS: A = 6 immediate / 7 deferred vector, X = high, Y = low byte of the routine
+XITVBV  = $E462         ; OS: the deferred routine ends with a jump here
 GPRIOR  = $026F
 .ifdef TEST
 ; Test build: tools/headless.py writes the joystick here instead of the hardware.
@@ -76,6 +80,7 @@ PMBASE  = $D407
 ; ---- memory layout (must match cfg/atari-xex.cfg) --------------------------
 CHARSET_ADDR = $6000
 SCREEN  = $6500         ; 24 rows x 40 columns (1 KB reserved)
+SPLASH_TEXT = 22        ; the title's two text rows (22 and 23) are rows of the screen RAM, under the picture
 PMAREA  = $7000         ; 2 KB aligned, single-line resolution
 PM0     = PMAREA + $0400
 PM_YOFF = 32            ; PM byte index of the first playfield scan line
@@ -413,6 +418,10 @@ start:
         sta VDSLST+1
         lda #1
         sta dli_row
+        ldy #<vbi_hook          ; every vertical blank: the display-list interrupt that goes with the display list
+        ldx #>vbi_hook
+        lda #7
+        jsr SETVBV
         lda #>CHARSET_ADDR
         sta CHBAS
         lda #$11
@@ -2031,9 +2040,9 @@ mode_title:
         lda RTCLOK+2
         and #$20
         beq @off
-        PUTSTR str_press, 15, 10
+        PUTSTR str_press, SPLASH_TEXT, 10
         jmp @chk
-@off:   PUTSTR str_blank19, 15, 10
+@off:   PUTSTR str_blank19, SPLASH_TEXT, 10
 @chk:   jsr fire_edge
         bcc @t
         jmp new_game
@@ -2082,17 +2091,23 @@ enter_title:
         sta flash
         sta snd
         jsr hide_player
+        ; The picture's colours (shadow registers) and the title's display list are both taken over by the next vertical
+        ; blank, together, and so is the display-list interrupt that goes with it (vbi_hook): the swap is clean. The text
+        ; rows are written after it (they show the old screen for a moment, under the new picture).
+        jsr splash_shadow
+        jsr set_dl_title
+        jsr vwait
+        jsr splash_text_colors
         lda #<screen_title
         sta ptr
         lda #>screen_title
         sta ptr+1
         jsr copy_map
-        jsr title_colors
         lda hiscore
         sta dn
         lda hiscore+1
         sta dn+1
-        SETDST SCREEN + 18 * 40 + 22
+        SETDST SCREEN + (SPLASH_TEXT + 1) * 40 + 22
         ldx #5
         jsr put_dec
         lda #TITLE_IDLE_SECS
@@ -2253,6 +2268,7 @@ begin_level:
         lda #M_SPAWN
         sta mode
         jsr draw_hud            ; the numbers are right from the first frame
+        jsr set_dl_play         ; (from the title this is the change of display list: it happens at the next vertical blank)
         jmp game_colors
 
 ; Copy 1 KB from ptr to the screen.
@@ -2339,6 +2355,101 @@ pal_uniform:
         dex
         bpl @l
         rts
+
+; ---- the title's picture -------------------------------------------------------------------------------------------
+; The title uses its own display list (dlist_title): SPLASH_LINES single-line rows of mode E for the picture
+; (the pixel values 0-3 are COLBK, COLPF0, COLPF1, COLPF2) and then the two text rows of mode 4. The picture takes its
+; colours from the shadow registers; one display-list interrupt on the last line of the picture gives the text rows their
+; own colours (pal0-3, row SPLASH_TEXT: navy letters over the picture's pink).
+
+; The picture's colours go into the shadow registers (they reach the hardware at the next vertical blank).
+splash_shadow:
+        lda #PAL_SPLASH_LIGHT
+        sta COLOR0
+        lda #PAL_SPLASH_NAVY
+        sta COLOR1
+        lda #PAL_SPLASH_WHITE
+        sta COLOR2
+        lda #PAL_SPLASH_NAVY
+        sta COLOR3
+        lda #PAL_SPLASH_BG
+        sta COLOR4
+        rts
+
+; The text rows' colours: every row of pal0-3 holds the same set (the title is not banded).
+splash_text_colors:
+        ldx #23
+@l:     lda #PAL_SPLASH_LIGHT
+        sta pal0,x
+        lda #PAL_SPLASH_NAVY
+        sta pal1,x
+        sta pal2,x
+        lda #PAL_SPLASH_WHITE
+        sta pal3,x
+        dex
+        bpl @l
+        rts
+
+; Which display list the screen uses from the next vertical blank on (the OS copies SDLSTL then, and vbi_hook picks the
+; matching interrupt routine in the same blank). Both lists are in the one page of the DLIST segment.
+set_dl_title:
+        lda #>dlist_title
+        sta SDLSTL+1
+        lda #<dlist_title
+        sta SDLSTL
+        rts
+
+set_dl_play:
+        lda #>dlist
+        sta SDLSTL+1
+        lda #<dlist
+        sta SDLSTL
+        rts
+
+; Deferred vertical-blank routine: the display-list interrupt routine and its row counter must match the display list
+; that the OS has just made current (no interrupt can happen in the blank, so the change is atomic).
+vbi_hook:
+        lda SDLSTL
+        cmp #<dlist_title
+        beq @title
+        lda #<dli
+        sta VDSLST
+        lda #>dli
+        sta VDSLST+1
+        lda #1
+        sta dli_row             ; the game's interrupts start at row 1 every frame
+        jmp XITVBV
+@title: lda #<dli_title
+        sta VDSLST
+        lda #>dli_title
+        sta VDSLST+1
+        jmp XITVBV
+
+; The title's only display-list interrupt, on the last line of the picture: the text rows' colours.
+dli_title:
+        pha
+        txa
+        pha
+        tya
+        pha
+.ifdef TEST
+        inc dli_n
+.endif
+        lda pal0 + SPLASH_TEXT
+        ldx pal1 + SPLASH_TEXT
+        ldy pal2 + SPLASH_TEXT
+        sta WSYNC
+        sta COLPF0
+        stx COLPF1
+        sty COLPF2
+        lda pal3 + SPLASH_TEXT
+        sta COLPF3
+        pla
+        tay
+        pla
+        tax
+        pla
+        rti
 
 ; Display-list interrupt: runs at the last line of a row; sets the colours of the next one.
 dli:
@@ -2702,7 +2813,10 @@ update_fx:
         sta COLOR4
         jmp @snd
 @bg:    lda #$00
-        sta COLOR4
+        ldx mode
+        bne @setbg
+        lda #PAL_SPLASH_BG      ; the title: the picture's pink (COLBK also colours the text rows and the border)
+@setbg: sta COLOR4
 @snd:   lda snd
         beq @off
         dec snd
@@ -4297,6 +4411,11 @@ str_blank10: BLANK 10
 str_blank19: BLANK 19
 
 ; ---------------------------------------------------------------------------
+; The picture (assets/splash.txt, ANTIC mode E): its own load segment of the .xex at $8000 (nothing else uses $8000-$BFFF).
+        .segment "SPLASH"
+        .include "gen/splash.inc"
+splash_b = splash + $1000
+
         .segment "DLIST"
 dlist:
         .byte $70,$70,$70               ; 24 blank scan lines
@@ -4308,5 +4427,27 @@ dlist:
         .byte $04
         .byte $41                       ; jump and wait for vertical blank
         .word dlist
+
+; The title: the picture (SPLASH_LINES lines of mode E, 40 bytes each, in two blocks because ANTIC cannot cross a
+; 4 KB boundary within a line: the second block is at the next boundary), then the title's two text rows, which are
+; the last two rows of the screen RAM. The interrupt on the picture's last line switches to the text colours.
+dlist_title:
+        .byte $70,$70,$70               ; 24 blank scan lines (the same top as the game's display list)
+        .byte $4E                       ; mode E + load memory scan
+        .word splash
+        .repeat SPLASH_SPLIT - 1
+        .byte $0E
+        .endrepeat
+        .byte $4E                       ; the next block, at the next 4 KB boundary
+        .word splash_b
+        .repeat SPLASH_LINES - SPLASH_SPLIT - 2
+        .byte $0E
+        .endrepeat
+        .byte $8E                       ; the last line of the picture + interrupt
+        .byte $44                       ; mode 4 text + load memory scan
+        .word SCREEN + SPLASH_TEXT * 40
+        .byte $04
+        .byte $41
+        .word dlist_title
 
         .include "gen/charset.inc"

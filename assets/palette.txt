@@ -18,6 +18,17 @@
 # The third ('o': the pupils and the grin) is drawn with the four missiles as a fifth sprite, and the hardware gives
 # the missiles the colour of playfield colour 3. So his THIRD COLOUR IS THE "ice" ENTRY BELOW: change ice and the ice
 # tiles, the exit door's blue and his pupils/grin all change together. (There is no separate entry for it.)
+#
+# The title screen shows a picture (assets/splash.txt, 160 x 176 pixels in ANTIC mode E) in four colours of its own, the
+# pixel values 0-3 of that file; the two text rows under it use splash_navy for their letters over the splash_bg:
+#
+#   splash_bg     pixel 0, the background pink (COLBK, so also the border and the text rows' background)
+#   splash_light  pixel 1, light pink (the bubble's face and nose, "EST. 1961")
+#   splash_navy   pixel 2, navy (the title lettering, pupils, grin) and the colour of the title's text
+#   splash_white  pixel 3, white (the eyes, the outlines of the bubbles)
+#
+# Matched with tools/render_level.py's atari_rgb to the picture's own RGB colours (230,140,161), (250,208,218), (6,48,87)
+# and (253,248,246); the lowest bit of a luminance is not used by the hardware, so these are even.
 
 hues       1E 2C 4C 5C 7C 9C AC CC
 grey       0A
@@ -27,3 +38,7 @@ hud        2A
 background 00
 player     5A
 eyes       0E
+splash_bg    4C
+splash_light 4E
+splash_navy  92
+splash_white 0E

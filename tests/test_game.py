@@ -117,6 +117,17 @@ class Base(unittest.TestCase):
         """A row's text between the box borders."""
         return self.row(r)[1:-1].strip()
 
+    def os_word(self, addr: int) -> int:
+        raw = self.g.mem(addr & ~0xFF, 256)
+        return raw[addr & 0xFF] | raw[(addr & 0xFF) + 1] << 8
+
+    def assert_display(self, dlist: str, dli: str) -> None:
+        """The OS's shadow of the display list pointer ($0230) and the display-list interrupt vector ($0200) are those of
+        the title (dlist_title, dli_title) or of the game (dlist, dli)."""
+        labels = self.g.labels
+        self.assertEqual(self.os_word(0x0230), labels[dlist], "display list")
+        self.assertEqual(self.os_word(0x0200), labels[dli], "display-list interrupt routine")
+
     def start(self) -> Game:
         self.g.start_game()
         return self.g
@@ -163,16 +174,73 @@ class TitleScreen(Base):
     def test_boots_to_the_title_screen(self) -> None:
         g = self.g
         self.assertEqual((g.mode, g.demo), (TITLE, 0))
-        self.assertIn("mine runner", self.row(4))
-        self.assertIn("A SINGLE SCREEN PLATFORMER", self.row(6))
-        self.assertIn("HI-SCORE 00000", self.row(18))
-        self.assertEqual(self.row(1), "#" * 40)
+        self.assertIn("HI-SCORE 00000", self.row(23), "the picture takes rows 0-21; the text is under it")
+        self.assertEqual(self.row(21), " " * 40)
+
+    def test_the_title_shows_the_splash_picture(self) -> None:
+        g = self.g
+        L = g.labels
+        self.assert_display("dlist_title", "dli_title")
+        dl = g.mem(L["dlist_title"] & ~0xFF, 256)[L["dlist_title"] & 0xFF :]
+        self.assertEqual(dl[:3], bytes([0x70] * 3))
+        # the picture: mode E lines, two load-memory-scans (one per 4 KB block: a line may not straddle the boundary) ...
+        i, lms, lines = 3, [], 0
+        while dl[i] & 0x0F == 0x0E:
+            if dl[i] & 0x40:
+                lms.append((lines, dl[i + 1] | dl[i + 2] << 8))
+                i += 3
+            else:
+                i += 1
+            lines += 1
+        self.assertEqual(lines, _ba.SPLASH_H)
+        self.assertEqual(lms, [(0, L["splash"]), (_ba.SPLASH_SPLIT, L["splash_b"])])
+        self.assertEqual(L["splash"] % 0x1000, 0)
+        self.assertEqual(L["splash_b"], L["splash"] + 0x1000)
+        self.assertEqual(dl[i - 1] & 0x80, 0x80, "the last line of the picture has the interrupt that sets the text colours")
+        # ... then the two text rows (the last two rows of the screen RAM) and the jump back to the top
+        self.assertEqual(dl[i : i + 7], bytes([0x44, (self.g.screen_addr + 22 * COLS) & 0xFF, (self.g.screen_addr + 22 * COLS) >> 8, 0x04, 0x41, L["dlist_title"] & 0xFF, L["dlist_title"] >> 8]))
+        # the picture is in memory the way assets/splash.txt packs it
+        packed = _ba.pack_splash(_ba.parse_splash(ROOT / "assets" / "splash.txt"))
+        loaded = g.mem(L["splash"], 7168)
+        self.assertEqual(loaded[: len(packed)], packed)
+        self.assertEqual(loaded[:8], packed[:8])
+        # its colours: pixel 0 is the background, 1-3 are COLPF0-2 (shadow registers $02C4-$02C8)
+        pal = _ba.parse_palette(ROOT / "assets" / "palette.txt")
+        shadow = g.mem(0x0200, 256)[0xC4:0xC9]
+        self.assertEqual(list(shadow), [pal["splash_light"], pal["splash_navy"], pal["splash_white"], pal["splash_navy"], pal["splash_bg"]])
+
+    def test_the_title_text_is_navy_on_the_picture_pink_by_an_interrupt_under_the_picture(self) -> None:
+        g = self.g
+        pal = _ba.parse_palette(ROOT / "assets" / "palette.txt")
+        self.assertEqual(g.bss("pal1", 24)[22:24], bytes([pal["splash_navy"]] * 2))
+        before = g.bss("dli_n")[0]
+        g.idle(25)
+        self.assertEqual((g.bss("dli_n")[0] - before) % 256, 25, "one interrupt a frame, at the end of the picture")
+
+    def test_the_display_changes_with_the_mode(self) -> None:
+        g = self.g
+        self.assert_display("dlist_title", "dli_title")
+        g.start_game()
+        self.assert_display("dlist", "dli")
+        self.assertEqual(g.bss("dli_row")[0], 1)
+        g.poke("lives", 1)
+        self.kill()
+        g.run(DIE_FRAMES)
+        self.assertEqual(g.mode, OVER)
+        self.assert_display("dlist", "dli")
+        g.run(70)
+        g.step(FIRE)
+        g.idle(3)
+        self.assertEqual(g.mode, TITLE)
+        self.assert_display("dlist_title", "dli_title")
+        self.assertEqual(self.row(0), " " * 40, "the rows under the picture are blank")
+        self.assertIn("HI-SCORE 00000", self.row(23))
 
     def test_press_fire_blinks(self) -> None:
         seen = set()
         for _ in range(36):
             self.g.idle(2)
-            seen.add(self.inner(15))
+            seen.add(self.row(22).strip())
         self.assertEqual(seen, {"", "PRESS FIRE TO START"})
 
     def test_the_player_is_not_shown_on_the_title(self) -> None:
@@ -780,7 +848,7 @@ class DeathAndLives(Base):
         g.poke(g.labels["timer"] + 1, 0)
         g.idle(3)
         self.assertEqual(g.mode, TITLE)
-        self.assertIn("HI-SCORE 01000", self.row(18))
+        self.assertIn("HI-SCORE 01000", self.row(23))
 
     def test_game_over_waits_a_second_then_fire_returns_to_the_title(self) -> None:
         g = self.g
@@ -1045,7 +1113,7 @@ class AttractMode(Base):
         g.run_until(lambda g: g.mode == TITLE, limit=total, every=5)
         self.assertEqual(g.demo, 0)
         self.assertEqual(g.mem(g.pm0, 256), bytes(256), "the player is gone from the title")
-        self.assertIn("mine runner", self.row(4))
+        self.assert_display("dlist_title", "dli_title")
 
     def test_the_demo_plays_and_never_dies_on_the_first_level(self) -> None:
         g = self.g

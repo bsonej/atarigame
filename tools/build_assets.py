@@ -10,6 +10,9 @@
     assets/sprites.txt       -> gen/sprites.inc  (player frames)
     assets/levels/*.txt      -> gen/levels.inc   (tile maps, start positions, item counts, pegs, level tables)
     assets/screens/*.txt     -> gen/screens.inc  (full-screen maps such as the title: screen_<name>)
+    assets/splash.txt        -> gen/splash.inc   (the title picture, 160x176 pixels of ANTIC mode E, packed 4 pixels
+                                to a byte, laid out so that no scan line crosses a 4 KB boundary; made from a picture
+                                by tools/make_splash.py, which is not part of the build)
 
 Usage: build_assets.py [--out src/gen]   (run from the project root)
 """
@@ -33,6 +36,9 @@ GLYPHS = 128  # ANTIC mode 4 uses a 128-glyph, 1 KB character set
 F_SOLID, F_ONEWAY, F_DOT = 1, 2, 4
 MAX_PEGS = 2
 MAX_COLLECT = 250  # items + dots: the game counts them in one byte
+SPLASH_W, SPLASH_H = 160, 176  # the title picture: ANTIC mode E, 2 bits a pixel, 40 bytes a line, 22 text rows tall
+SPLASH_LINE = SPLASH_W // 4
+SPLASH_SPLIT = 4096 // SPLASH_LINE  # lines that fit before the 4 KB boundary (ANTIC's address counter cannot cross it)
 
 
 class AssetError(Exception):
@@ -914,7 +920,9 @@ def render_fade() -> str:
 # -------------------------------------------------------------- palette
 
 
-PALETTE_DEFAULTS = {"player": 0x4E, "eyes": 0x0E}  # the player's own colours: optional in the file
+SPLASH_COLOURS = ("splash_bg", "splash_light", "splash_navy", "splash_white")  # pixel values 0-3 of the title picture
+# the player's own colours and the title picture's: optional in the file
+PALETTE_DEFAULTS = {"player": 0x4E, "eyes": 0x0E, "splash_bg": 0x4C, "splash_light": 0x4E, "splash_navy": 0x92, "splash_white": 0x0E}
 
 
 def parse_palette(path: Path) -> dict:
@@ -937,7 +945,7 @@ def parse_palette(path: Path) -> dict:
             if len(nums) != 8:
                 raise AssetError(f"{path}:{n}: 'hues' needs 8 colours (one per row of the cycle), got {len(nums)}")
             out[key] = nums
-        elif key in ("grey", "white", "ice", "hud", "background", "player", "eyes"):
+        elif key in ("grey", "white", "ice", "hud", "background", "player", "eyes") + SPLASH_COLOURS:
             if len(nums) != 1:
                 raise AssetError(f"{path}:{n}: {key!r} takes one colour")
             out[key] = nums[0]
@@ -959,6 +967,10 @@ def render_palette(pal: dict) -> str:
         f"PAL_PLAYER = ${pal['player']:02X}          ; Mr. Bubble: body (Player 0)\n"
         f"PAL_EYES   = ${pal['eyes']:02X}          ; his eyes (Player 3)\n"
         "PAL_THIRD  = PAL_ICE          ; his third colour (the missiles) is the playfield's colour 3\n"
+        f"PAL_SPLASH_BG    = ${pal['splash_bg']:02X}          ; the title picture: pixel value 0 (COLBK) ...\n"
+        f"PAL_SPLASH_LIGHT = ${pal['splash_light']:02X}          ; ... 1 (COLPF0)\n"
+        f"PAL_SPLASH_NAVY  = ${pal['splash_navy']:02X}          ; ... 2 (COLPF1), which is also the colour of the title's text\n"
+        f"PAL_SPLASH_WHITE = ${pal['splash_white']:02X}          ; ... 3 (COLPF2)\n"
         "pal_hues:\n" + _bytes_block(pal["hues"], 8) + "\n"
     )
 
@@ -998,6 +1010,52 @@ def render_screens(screens: list[tuple[str, list[int]]]) -> str:
     return "\n".join(out) + "\n"
 
 
+# --------------------------------------------------------------- splash
+
+
+def parse_splash(path: Path) -> list[list[int]]:
+    """assets/splash.txt: SPLASH_H rows of SPLASH_W characters '0'-'3' (pixel values of ANTIC mode E). Lines that
+    start with '#' and blank lines are comments."""
+    rows = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
+    rows = [r for r in rows if r and not r.startswith("#")]
+    if len(rows) != SPLASH_H:
+        raise AssetError(f"{path}: has {len(rows)} pixel rows, needs exactly {SPLASH_H}")
+    out = []
+    for y, row in enumerate(rows):
+        if len(row) != SPLASH_W:
+            raise AssetError(f"{path}: row {y} is {len(row)} pixels wide, needs exactly {SPLASH_W}")
+        for x, ch in enumerate(row):
+            if ch not in "0123":
+                raise AssetError(f"{path}: unknown pixel {ch!r} at row {y}, column {x} (only 0, 1, 2 and 3)")
+        out.append([int(ch) for ch in row])
+    return out
+
+
+def pack_splash(bitmap: list[list[int]]) -> bytes:
+    """ANTIC mode E bytes: four pixels each, the leftmost in bits 7-6, SPLASH_LINE bytes a line, with the lines from
+    SPLASH_SPLIT on moved up to the next 4 KB boundary (zero padding between): the display list points its second
+    load-memory-scan at it, because one mode line cannot straddle the boundary."""
+    data = bytearray()
+    for y, row in enumerate(bitmap):
+        if y == SPLASH_SPLIT:
+            data += bytes(4096 - len(data))
+        for x in range(0, SPLASH_W, 4):
+            a, b, c, d = row[x : x + 4]
+            data.append(a << 6 | b << 4 | c << 2 | d)
+    return bytes(data)
+
+
+def render_splash(bitmap: list[list[int]]) -> str:
+    return (
+        "; Generated by tools/build_assets.py - do not edit.\n"
+        f"SPLASH_LINES = {SPLASH_H}          ; mode E lines of the picture (22 text rows' worth)\n"
+        f"SPLASH_SPLIT = {SPLASH_SPLIT}          ; the first block holds this many lines, the second starts on the next 4 KB boundary\n"
+        "splash:\n"
+        + _bytes_block(list(pack_splash(bitmap)), 20)
+        + "\n"
+    )
+
+
 # ----------------------------------------------------------------- main
 
 
@@ -1033,6 +1091,8 @@ def build(root: Path, out: Path) -> None:
     (out / "sprites.inc").write_text(render_sprites(frames))
     (out / "levels.inc").write_text(render_levels(levels))
     (out / "screens.inc").write_text(render_screens(screens))
+    if (assets / "splash.txt").exists():
+        (out / "splash.inc").write_text(render_splash(parse_splash(assets / "splash.txt")))
 
 
 def main(argv: list[str] | None = None) -> int:
