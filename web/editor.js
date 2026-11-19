@@ -3,7 +3,7 @@
 
 import { COLS, ROWS, makeTables, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows, applyCaps, applyDots, applyTwins } from './model.js';
 import { Game, MODE, JOY, STATE } from './engine.js';
-import { Atlas, COLORS, cellSize, drawMap, drawTile, drawSprite, drawPlayer, drawHud, PEG_SHAPE } from './render.js';
+import { Atlas, COLORS, applyPlayerColours, cellSize, drawMap, drawTile, drawSprite, drawPlayer, drawHud, PEG_SHAPE } from './render.js';
 import { GROUPS, STAMPS, DOOR_NAMES, DOOR_CELLS, SCENE_W, SCENE_H, sceneFor } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -408,7 +408,7 @@ function iconFor(item, size) {
   }
   if (item.kind === 'start') {
     const sc = sceneCanvas([[0, 2, 'BRICK'], [1, 2, 'BRICK'], [2, 2, 'BRICK'], [3, 2, 'BRICK']], SCENE_W, SCENE_H, cell, baseRow);
-    drawPlayer(sc.getContext('2d'), sprites[0], 6, 0, cell, COLORS.player, 16, COLORS.eye, 0); // the swatch is only an icon: no room above him for the float
+    drawPlayer(sc.getContext('2d'), sprites[0], 6, 0, cell, COLORS.player, 16, COLORS.eye, 0, COLORS.third); // the swatch is only an icon: no room above him for the float
     return sc;
   }
   if (item.kind === 'erase') {
@@ -675,7 +675,7 @@ function drawGhost(cell) {
   const put = (cc, rr, name) => {
     if (!inside(cc, rr)) return;
     if (name === 'PEG') drawSprite(ctx, PEG_SHAPE, cc * 4, rr * 8, cell, 'rgba(255,90,74,0.7)', 8);
-    else if (name === 'START') drawPlayer(ctx, sprites[0], cc * 4, rr * 8, cell, 'rgba(255,170,200,0.75)', 16, 'rgba(255,255,255,0.75)');
+    else if (name === 'START') drawPlayer(ctx, sprites[0], cc * 4, rr * 8, cell, 'rgba(255,170,200,0.75)', 16, 'rgba(255,255,255,0.75)', undefined, 'rgba(90,150,255,0.75)');
     else if (name === 'ERASE') {
       ctx.fillStyle = 'rgba(255,255,255,0.2)';
       ctx.fillRect(cc * cell, rr * cell, cell, cell);
@@ -1109,7 +1109,8 @@ function onKey(e) {
 async function refreshSprites() {
   try {
     const res = await call('sprites');
-    sprites = res.frames.map((f) => ({ rows: f.body, eyes: f.eyes }));
+    sprites = res.frames.map((f) => ({ rows: f.body, eyes: f.eyes, thirdPx: f.thirdPx }));
+    applyPlayerColours((await call('palette')).palette); // he may have new colours too (the ice tiles take them on a reload)
   } catch {
     // keep the frames we have
   }
@@ -1129,7 +1130,7 @@ async function boot() {
   }
   tables = makeTables(api);
   atlas = new Atlas(api);
-  sprites = api.sprites.map((s) => ({ rows: s.rows, eyes: s.eyes }));
+  sprites = api.sprites.map((s) => ({ rows: s.rows, eyes: s.eyes, thirdPx: s.thirdPx }));
   ctx = canvas.getContext('2d');
   try {
     S.levels = await call('levels');

@@ -1,13 +1,15 @@
 // The sprite editor: Mr. Bubble's 13 frames as 8x16 pixel grids. Save writes assets/sprites.txt through the editor
 // server (PUT /api/sprites); the game picks the change up on its next build, the level editor on its next focus.
 
-import { COLORS, atariColour } from './render.js';
-import { ANIMATIONS, BODY, EYE, FLOAT, H, NONE, SpriteDoc, W, checkFrames, maxLift, parseSprites, serializeSprites } from './spritemodel.js';
+import { COLORS, applyPlayerColours, atariColour } from './render.js';
+import { ANIMATIONS, BODY, EYE, FLOAT, H, NONE, SpriteDoc, THIRD, W, checkFrames, maxLift, parseSprites, serializeSprites } from './spritemodel.js';
 
 const $ = (id) => document.getElementById(id);
 const DRAFT_KEY = 'spriteEditor.draft';
 const FLOOR = atariColour(0x9c); // something to stand on in the previews
-const TOOLS = { body: BODY, eye: EYE, erase: NONE };
+const TOOLS = { body: BODY, eye: EYE, third: THIRD, erase: NONE };
+const COLOUR_KEYS = ['player', 'eyes', 'ice']; // body, eyes, third (= ice: the missiles take the playfield's colour 3)
+const COLOUR_LABELS = { player: 'Body', eyes: 'Eyes', ice: 'Third' };
 
 const S = {
   sel: 0,
@@ -24,6 +26,9 @@ const S = {
   tick: 0,
   template: '', // the text of sprites.txt as loaded: the header and comments the file keeps
   path: 'assets/sprites.txt',
+  colours: { player: 0x4e, eyes: 0x0e, ice: 0x8a }, // as edited (palette.txt colour bytes)
+  savedColours: { player: 0x4e, eyes: 0x0e, ice: 0x8a }, // as on disk
+  slot: 'player', // which of the three the colour grid is picking
 };
 
 let doc = null;
@@ -53,9 +58,10 @@ function toast(msg, level = 'info') {
 // ------------------------------------------------------------------------------------------------
 // drawing
 
-/** Draw a frame as the game does: black, eyes (Player 3) first, body (Player 0) over them. (x, y) is the top left, in game pixels. */
+/** Draw a frame as the game does: black, the third colour (the missiles, a fifth sprite) first, the eyes (Player 3) over
+ * it, the body (Player 0) over those. (x, y) is the top left, in game pixels. */
 function drawFrame(ctx, rows, x, y, pw, ph) {
-  for (const [ch, colour] of [[EYE, COLORS.eye], [BODY, COLORS.player]]) {
+  for (const [ch, colour] of [[THIRD, COLORS.third], [EYE, COLORS.eye], [BODY, COLORS.player]]) {
     ctx.fillStyle = colour;
     rows.forEach((row, ry) => {
       for (let rx = 0; rx < W; rx++) if (row[rx] === ch) ctx.fillRect((x + rx) * pw, (y + ry) * ph, pw, ph);
@@ -112,7 +118,9 @@ function drawGrid() {
   if (S.hover) {
     g.strokeStyle = '#fff';
     g.lineWidth = 2;
-    g.strokeRect(S.hover[0] * cw + 1, S.hover[1] * ch + 1, cw - 2, ch - 2);
+    const pair = S.tool === 'third' && !stroke?.erase; // the third colour is painted two pixels at a time
+    const x0 = pair ? S.hover[0] & ~1 : S.hover[0];
+    g.strokeRect(x0 * cw + 1, S.hover[1] * ch + 1, (pair ? 2 : 1) * cw - 2, ch - 2);
   }
 }
 
@@ -227,13 +235,14 @@ function refresh() {
   const other = doc.counterpart(S.sel);
   $('mirror').textContent = other >= 0 ? `Mirror to ${doc.frames[other].name}` : 'Mirror to other side';
   $('revert').disabled = !doc.dirty(S.sel);
-  const dirty = doc.dirty();
+  const dirty = doc.dirty() || coloursDirty();
   $('dirty').hidden = !dirty;
   $('save').disabled = false;
   const problems = checkFrames(doc.frames, names);
   const p = $('problems');
   p.textContent = problems.length ? problems[0] : dirty ? 'Ready to save.' : 'Nothing to save.';
   p.className = problems.length ? 'bad' : dirty ? 'meh' : 'good';
+  showColours();
   for (const name of Object.keys(TOOLS)) $(`tool-${name}`).classList.toggle('on', S.tool === name);
   saveDraft();
   drawAnim();
@@ -279,7 +288,7 @@ canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   const ch = e.button === 2 ? NONE : TOOLS[S.tool];
   const at = pixelAt(e);
-  stroke = { ch, last: at };
+  stroke = { ch, last: at, erase: ch === NONE };
   doc.beginStroke();
   doc.setPixel(S.sel, at[0], at[1], ch);
   S.hover = at;
@@ -310,7 +319,7 @@ canvas.addEventListener('pointerleave', () => {
   drawGrid();
 });
 
-const describe = (ch) => (ch === BODY ? 'body' : ch === EYE ? 'eye' : 'empty');
+const describe = (ch) => (ch === BODY ? 'body' : ch === EYE ? 'eye' : ch === THIRD ? 'third colour (a pair of pixels)' : 'empty');
 
 // ------------------------------------------------------------------------------------------------
 // actions
@@ -333,10 +342,79 @@ async function save() {
   try {
     const res = await call('sprites', 'PUT', { frames: doc.frames });
     doc.markSaved();
-    toast(`Saved ${res.frames} frames to ${res.path}. Rebuild the game (task build) to play with them.`);
+    const colours = coloursDirty() ? await saveColours() : '';
+    toast(`Saved ${res.frames} frames to ${res.path}${colours}. Rebuild the game (task build) to play with them.`);
   } catch (e) {
     toast(`Not saved: ${e.message}`, 'error');
   }
+}
+
+// ------------------------------------------------------------------------------------------------
+// his three colours: assets/palette.txt entries player (body), eyes and ice (the third: the missiles have the colour
+// of playfield colour 3, which is the ice colour, so the ice tiles and the exit door share it)
+
+const hex2 = (v) => v.toString(16).toUpperCase().padStart(2, '0');
+const coloursDirty = () => COLOUR_KEYS.some((k) => S.colours[k] !== S.savedColours[k]);
+
+function showColours() {
+  applyPlayerColours(S.colours);
+  for (const k of COLOUR_KEYS) {
+    const sw = $(`col-${k}`);
+    sw.style.background = atariColour(S.colours[k]);
+    sw.classList.toggle('on', S.slot === k);
+    $(`col-${k}-hex`).textContent = `$${hex2(S.colours[k])}`;
+    $(`col-${k}`).parentElement.classList.toggle('changed', S.colours[k] !== S.savedColours[k]);
+  }
+  $('save-colours').disabled = !coloursDirty();
+  for (const b of $('colour-grid').children) b.classList.toggle('on', Number(b.dataset.v) === S.colours[S.slot]);
+  $('colour-slot').textContent = `${COLOUR_LABELS[S.slot]}: pick a colour`;
+}
+
+function buildColourGrid() {
+  const grid = $('colour-grid');
+  grid.textContent = '';
+  for (let lum = 0; lum < 16; lum += 2) {
+    for (let hue = 0; hue < 16; hue++) {
+      const v = hue * 16 + lum;
+      const b = document.createElement('button');
+      b.className = 'swatch';
+      b.dataset.v = String(v);
+      b.style.background = atariColour(v);
+      b.title = `$${hex2(v)} (hue ${hue}, luminance ${lum})`;
+      b.addEventListener('click', () => {
+        S.colours[S.slot] = v;
+        showColours();
+        refresh();
+      });
+      grid.append(b);
+    }
+  }
+  for (const k of COLOUR_KEYS)
+    $(`col-${k}`).addEventListener('click', () => {
+      S.slot = k;
+      showColours();
+    });
+  $('save-colours').onclick = async () => {
+    try {
+      toast(`Saved${await saveColours()}. Rebuild the game (task build) to play with them.`);
+    } catch (e) {
+      toast(`Not saved: ${e.message}`, 'error');
+    }
+  };
+  $('revert-colours').onclick = () => {
+    S.colours = { ...S.savedColours };
+    showColours();
+    refresh();
+  };
+}
+
+/** Write the three colours to assets/palette.txt (the server validates them). Returns a note for the toast. */
+async function saveColours() {
+  const res = await call('palette', 'PUT', { ...S.colours });
+  S.savedColours = { player: res.player, eyes: res.eyes, ice: res.third };
+  S.colours = { ...S.savedColours };
+  showColours();
+  return ` and the colours to ${res.path}`;
 }
 
 async function reload(force = false) {
@@ -345,6 +423,10 @@ async function reload(force = false) {
     const api = await call('sprites');
     S.template = api.text;
     doc.reset(parseSprites(api.text));
+    const pal = await call('palette');
+    S.savedColours = { player: pal.player, eyes: pal.eyes, ice: pal.third };
+    S.colours = { ...S.savedColours };
+    showColours();
     toast('Reloaded from the game.');
   } catch (e) {
     toast(`Could not reload: ${e.message}`, 'error');
@@ -419,7 +501,7 @@ function wire() {
   $('play').onclick = () => setPlaying(!S.playing);
   window.addEventListener('keydown', onKey);
   window.addEventListener('beforeunload', (e) => {
-    if (doc.dirty()) {
+    if (doc.dirty() || coloursDirty()) {
       e.preventDefault();
       e.returnValue = '';
     }
@@ -464,7 +546,8 @@ function onKey(e) {
   }
   if (k === 'b' || k === '1') return setTool('body');
   if (k === 'e' || k === '2') return setTool('eye');
-  if (k === 'x' || k === '3') return setTool('erase');
+  if (k === 'o' || k === '3') return setTool('third');
+  if (k === 'x' || k === '4') return setTool('erase');
   if (k === 'g') {
     S.gridOn = !S.gridOn;
     $('grid-on').checked = S.gridOn;
@@ -500,6 +583,15 @@ async function boot() {
   }
   S.template = api.text;
   S.path = api.path;
+  try {
+    const pal = await call('palette');
+    S.savedColours = { player: pal.player, eyes: pal.eyes, ice: pal.third };
+    S.colours = { ...S.savedColours };
+  } catch {
+    // keep the defaults
+  }
+  buildColourGrid();
+  showColours();
   const frames = parseSprites(api.text);
   names = frames.map((f) => f.name);
   doc = new SpriteDoc(frames, () => refresh());

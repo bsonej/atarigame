@@ -149,10 +149,20 @@ export function applyDots(plain, capped, dots, solid) {
   return out;
 }
 
-/** A peg's start (x, y, min x, max x, direction) or an error string. Mirrors peg_for in build_assets.py. */
-export function pegFor(data, c, r, solid) {
-  if (r + 1 >= ROWS || !solid.has(data[(r + 1) * COLS + c])) return { error: `peg at row ${r}, column ${c} needs a solid block under it` };
-  const free = (col) => col >= 0 && col < COLS && solid.has(data[(r + 1) * COLS + col]) && !solid.has(data[r * COLS + col]);
+/**
+ * The map bytes that count as part of a platform when a peg looks along the line under its feet: every tile you can put
+ * in a map except empty space, items and the exit door's pieces. Mirrors platform_bytes in build_assets.py.
+ */
+export function platformBytes(chars, solid, door) {
+  const skip = new Set([chars['.'] ?? 0, chars['*'] ?? -1, ...(door || [])]);
+  return new Set([...Object.values(chars), ...solid].filter((b) => !skip.has(b)));
+}
+
+/** A peg's start (x, y, min x, max x, direction) or an error string. Mirrors peg_for in build_assets.py: the peg sweeps the
+ *  whole run of platform tiles of any kind under it; only a solid tile in its own row ends the run. */
+export function pegFor(data, c, r, solid, platform = solid) {
+  if (r + 1 >= ROWS || !platform.has(data[(r + 1) * COLS + c])) return { error: `peg at row ${r}, column ${c} needs a platform tile under it` };
+  const free = (col) => col >= 0 && col < COLS && platform.has(data[(r + 1) * COLS + col]) && !solid.has(data[r * COLS + col]);
   let lo = c;
   let hi = c;
   while (free(lo - 1)) lo--;
@@ -215,8 +225,9 @@ export function compileLevel(rows, tables) {
     for (const [c, r] of doors) cells.forEach(([dc, dr], k) => { data[(r - dr) * COLS + c + dc] = tables.door[k]; });
   }
   const pegs = [];
+  const platform = platformBytes(tables.chars, tables.solid, tables.door);
   for (const [c, r] of pegMarks) {
-    const res = pegFor(data, c, r, tables.solid);
+    const res = pegFor(data, c, r, tables.solid, platform);
     if (res.error) errors.push({ msg: res.error, c, r });
     else pegs.push(res.peg);
   }

@@ -208,6 +208,20 @@ class Game:
         top = PM_YOFF + self.py - PLAYER_FLOAT
         return raw[top : top + 16]
 
+    def layer(self, page: int) -> bytes:
+        """16 bytes of the PM page at PM0 + page (0 Player 0, 0x300 Player 3, -0x100 the missiles = his third colour)."""
+        raw = self.mem(self.pm0 + page, 256)
+        top = PM_YOFF + self.py - PLAYER_FLOAT
+        return raw[top : top + 16]
+
+    def eyes(self) -> bytes:
+        """The 16 bytes of Player 3 (his eyes) where the player is drawn."""
+        return self.layer(0x300)
+
+    def third(self) -> bytes:
+        """The 16 bytes of the missile page (his third colour: 2 bits per missile, M0 in bits 1-0 ... M3 in bits 7-6)."""
+        return self.layer(-0x100)
+
     def __getattr__(self, name: str):
         labels = self.__dict__.get("labels", {})
         if name in labels and 0x80 <= labels[name] < 0x180:

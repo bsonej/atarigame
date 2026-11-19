@@ -62,8 +62,23 @@ test('compiling reports problems without throwing', () => {
   assert.ok(noItems.errors.some((e) => /no items/.test(e.msg)));
 });
 
+test('a peg sweeps the whole platform: tiles of every kind count, only a solid in its own row ends it', () => {
+  // brick, belts, a spike, a step, ice, a one-way platform, a ladder, a chute, then brick again: one platform
+  const run = room({ '10,5': 'p', '11,4': '#>(^S~=H\\#' });
+  const ok = compileLevel(run, tables);
+  assert.deepEqual(ok.errors, []);
+  assert.deepEqual(ok.pegs, [[16, 80, 16, 52, 1]], 'columns 4-13');
+  // the same, with the marker nearer the right end: it starts there going left
+  assert.deepEqual(compileLevel(room({ '10,12': 'p', '11,4': '#>(^S~=H\\#' }), tables).pegs, [[52, 80, 16, 52, 255]]);
+  // a solid in the peg's own row (a wall) ends the run; items, doors and gaps end it too
+  assert.deepEqual(compileLevel(room({ '10,5': 'p', '10,9': 'W', '11,4': '#>(^S~=H\\#' }), tables).pegs, [[16, 80, 16, 32, 1]]);
+  assert.deepEqual(compileLevel(room({ '10,5': 'p', '11,4': '##*#####' }), tables).pegs, [[20, 80, 16, 20, 255]]);
+  // things standing on the platform that are not solid (a step, a spike, a ladder) do not end it
+  assert.deepEqual(compileLevel(room({ '10,5': 'p', '10,7': 'S^H', '11,4': '########' }), tables).pegs, [[16, 80, 16, 44, 1]]);
+});
+
 test('a peg needs a block under it that is at least two wide', () => {
-  assert.ok(compileLevel(room({ '10,5': 'p' }), tables).errors.some((e) => /needs a solid block/.test(e.msg)));
+  assert.ok(compileLevel(room({ '10,5': 'p' }), tables).errors.some((e) => /needs a platform tile/.test(e.msg)));
   assert.ok(compileLevel(room({ '10,5': 'p', '11,5': '#' }), tables).errors.some((e) => /only one tile wide/.test(e.msg)));
   const ok = compileLevel(room({ '10,5': 'p', '11,4': '######' }), tables);
   assert.deepEqual(ok.errors, []);

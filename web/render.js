@@ -12,6 +12,7 @@ export const COLORS = {
   bg: '#000000',
   player: 'hsl(350 70% 86.1%)', // Atari $4E: the pink bubble
   eye: '#ffffff',
+  third: 'hsl(215 70% 55%)', // Atari $8A: the ice blue, which the missiles (his pupils and grin) share with the ice tiles
   peg: '#ff5a4a',
   hud: '#f4f4f4',
 };
@@ -33,6 +34,15 @@ export const rowHueByte = (palette, levelIndex, row) => {
   const v = rowVariant(levelIndex, row);
   return v === 8 ? palette.hud : palette.hues[v];
 };
+
+/** Mr. Bubble's three colours from assets/palette.txt: `player` (body, Player 0), `eyes` (Player 3) and `ice`, which is
+ * also his third colour (the missiles take the playfield's colour 3). Sets COLORS.player, .eye and .third. */
+export function applyPlayerColours(pal) {
+  if (!pal) return;
+  if (pal.player !== undefined) COLORS.player = atariColour(pal.player);
+  if (pal.eyes !== undefined) COLORS.eye = atariColour(pal.eyes);
+  if (pal.ice !== undefined) COLORS.third = atariColour(pal.ice);
+}
 
 const DEFAULT_PALETTE = { hues: [0x1e, 0x2c, 0x4c, 0x5c, 0x7c, 0x9c, 0xac, 0xcc], grey: 0x0a, white: 0x0e, ice: 0x8a, hud: 0x2a, background: 0 };
 
@@ -65,6 +75,7 @@ export class Atlas {
   constructor(api) {
     this.api = api;
     this.pal = api.palette || DEFAULT_PALETTE;
+    applyPlayerColours(this.pal);
     this.levelIndex = 0;
     this.variants = [];
     for (let i = 0; i < 9; i++) {
@@ -206,10 +217,12 @@ export function drawSprite(ctx, rows, px, py, cell, colour, lines = 16, bit = 4)
     for (let x = 0; x < bit; x++) if (rows[y] & (0x80 >> x)) ctx.fillRect((px + x) * w, (py + y) * h, w, h);
 }
 
-/** Mr. Bubble: his eyes (hardware Player 3, which sits behind the body) and then the pink body (Player 0). The frames
+/** Mr. Bubble: his third colour (the missiles, a fifth sprite behind the other two: `frame.thirdPx`, pairs of pixels),
+ * his eyes (hardware Player 3, which sits behind the body) and then the pink body (Player 0). The frames
  * are 8 pixels wide on a 4 pixel wide physics box, so he is drawn 2 pixels to the left of (px, py). He is a bubble: he
  * floats FLOAT lines above his box (py is the top of the physics box, so its bottom, where he stands, is py + 16). */
-export function drawPlayer(ctx, frame, px, py, cell, colour = COLORS.player, lines = 16, eyeColour = COLORS.eye, float = FLOAT) {
+export function drawPlayer(ctx, frame, px, py, cell, colour = COLORS.player, lines = 16, eyeColour = COLORS.eye, float = FLOAT, thirdColour = COLORS.third) {
+  if (frame.thirdPx) drawSprite(ctx, frame.thirdPx, px - 2, py - float, cell, thirdColour, lines, 8);
   drawSprite(ctx, frame.eyes, px - 2, py - float, cell, eyeColour, lines, 8);
   drawSprite(ctx, frame.rows, px - 2, py - float, cell, colour, lines, 8);
 }

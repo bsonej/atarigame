@@ -178,6 +178,7 @@ class TitleScreen(Base):
     def test_the_player_is_not_shown_on_the_title(self) -> None:
         g = self.g
         self.assertEqual(g.mem(g.pm0, 256), bytes(256))
+        self.assertEqual(g.mem(g.pm0 - 0x100, 256), bytes(256), "nor his third colour (the missiles)")
 
     def test_fire_starts_a_game(self) -> None:
         g = self.g
@@ -226,8 +227,10 @@ class Spawn(Base):
         lines = g.drawn
         self.assertTrue(0 < lines < 16)
         sprite = g.sprite()
-        self.assertTrue(all(sprite[:lines]), "the revealed lines are lit")
-        self.assertEqual(sprite[lines:], bytes(16 - lines), "the rest is still empty")
+        lit = [a | b | c for a, b, c in zip(sprite, g.eyes(), g.third())]
+        self.assertTrue(all(lit[:lines]), "the revealed lines are lit (body, eyes or the third colour)")
+        for layer in (sprite, g.eyes(), g.third()):
+            self.assertEqual(layer[lines:], bytes(16 - lines), "the rest is still empty, in every layer")
 
     def test_player_cannot_move_while_coming_to_life(self) -> None:
         g = self.g
@@ -243,8 +246,10 @@ class Spawn(Base):
             g.idle()
             colours.add(g.mem(0x0200, 256)[0xC0])
         self.assertGreater(len(colours), 4)
-        self.assertEqual(g.mem(0x0200, 256)[0xC0], 0x4E, "the pink bubble")
-        self.assertEqual(g.mem(0x0200, 256)[0xC3], 0x0E, "with white eyes")
+        pal = _ba.parse_palette(ROOT / "assets" / "palette.txt")
+        self.assertEqual(g.mem(0x0200, 256)[0xC0], pal["player"], "the body colour of assets/palette.txt (pink)")
+        self.assertEqual(g.mem(0x0200, 256)[0xC3], pal["eyes"], "the eyes colour of assets/palette.txt (white)")
+        self.assertEqual(g.mem(0x0200, 256)[0xC7], pal["ice"], "the third colour is playfield colour 3: the ice colour")
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +536,7 @@ class GameLogic(Base):
     def test_he_floats_above_the_floor_and_the_physics_box_stays_put(self) -> None:
         g = self.g
         self.assertEqual(g.py, SPAWN_Y, "his box is where it always was: standing on the floor")
-        for page in (g.mem(g.pm0, 256), g.mem(g.pm0 + 0x300, 256)):
+        for page in (g.mem(g.pm0, 256), g.mem(g.pm0 + 0x300, 256), g.mem(g.pm0 - 0x100, 256)):
             first = PM_YOFF + g.py - PLAYER_FLOAT
             self.assertEqual(page[:first], bytes(first), "nothing above the image")
             self.assertEqual(page[first + 16 :], bytes(256 - first - 16), "and nothing below it")
@@ -551,6 +556,25 @@ class GameLogic(Base):
         render = int(re.search(r"^PLAYER_FLOAT = (\d+)", (ROOT / "tools" / "render_level.py").read_text(), re.M).group(1))
         self.assertEqual((asm, js, render), (PLAYER_FLOAT,) * 3)
         self.assertIn(PLAYER_FLOAT, (1, 2), "a pixel or two")
+
+    def test_his_third_colour_is_the_missile_page_with_the_same_float_and_position(self) -> None:
+        g = self.g
+        top = PM_YOFF + g.py - PLAYER_FLOAT
+        page = g.mem(g.pm0 - 0x100, 256)  # the four missiles: PMBASE + $300 in single-line resolution
+        want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][3]
+        self.assertEqual(list(page[top : top + 16]), want)
+        self.assertTrue(any(want), "the face has pupils and a grin in the third colour")
+        self.assertEqual(page[:top], bytes(top), "nothing above the image")
+        self.assertEqual(page[top + 16 :], bytes(256 - top - 16), "nothing below it")
+        eyes, body = g.eyes(), g.sprite()
+        px_third = [_ba.third_pixels(b) for b in g.third()]
+        self.assertTrue(all(not (t & (e | b)) for t, e, b in zip(px_third, eyes, body)), "the third colour only where body and eyes have holes")
+
+    def test_the_missiles_are_enabled_and_form_a_fifth_player_behind_the_others(self) -> None:
+        g = self.g
+        shadow = g.mem(0x0200, 256)
+        self.assertEqual(shadow[0x6F], 0x11, "GPRIOR: players in front of the playfield, missiles as a fifth player (bit 4)")
+        self.assertEqual(shadow[0x2F] & 0x3E, 0x3E, "SDMCTL: display list, single line, missile and player DMA")
 
     def test_his_eyes_are_player_3(self) -> None:
         g = self.g
@@ -597,7 +621,7 @@ class DeathAndLives(Base):
             g.poke("py", py)
             g.idle()
             top = g.py - PLAYER_FLOAT  # where the image starts: a wrapped value is off the screen
-            for page in (g.mem(g.pm0, 256), g.mem(g.pm0 + 0x300, 256)):
+            for page in (g.mem(g.pm0, 256), g.mem(g.pm0 + 0x300, 256), g.mem(g.pm0 - 0x100, 256)):
                 lit = [i for i, b in enumerate(page) if b]
                 if 0 <= top < 200:
                     self.assertTrue(all(PM_YOFF + top <= i < PM_YOFF + top + 16 for i in lit), (py, g.py, lit))
@@ -665,6 +689,7 @@ class DeathAndLives(Base):
         self.assertIn("game over", self.row(7))
         self.assertIn("SCORE    00000", self.row(10))
         self.assertEqual(g.mem(g.pm0, 256), bytes(256), "no player on the game over screen")
+        self.assertEqual(g.mem(g.pm0 - 0x100, 256), bytes(256), "and no missiles")
 
     def test_game_over_shows_and_records_the_score_earned(self) -> None:
         g = self.g
@@ -829,6 +854,7 @@ class LevelClear(Base):
         self.walk_into_the_door()
         self.assertEqual(g.mode, CLEAR)
         self.assertEqual(g.mem(g.pm0, 256), bytes(256), "he is gone from the screen")
+        self.assertEqual(g.mem(g.pm0 - 0x100, 256), bytes(256), "and so are his missiles")
         phases = [self.door_phase()]
         for _ in range(40):
             g.step()

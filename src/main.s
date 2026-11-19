@@ -61,7 +61,9 @@ NMIEN   = $D40E
 HPOSP0  = $D000
 HPOSP1  = $D001         ; HPOSP2 follows: pegs are Player 1 and 2
 HPOSP3  = $D003         ; his eyes
+HPOSM0  = $D004         ; HPOSM1-3 follow: the four missiles are his third colour (a fifth 8 clock wide sprite)
 SIZEP0  = $D008
+SIZEM   = $D00C
 GRACTL  = $D01D
 PAL     = $D014         ; bits 1-3 are zero on a PAL machine
 AUDF1   = $D200
@@ -78,7 +80,9 @@ PM0Y    = PM0 + PM_YOFF
 PLAYER_FLOAT = 2        ; he is a bubble: drawn this many scan lines above the surface he stands on (purely visual;
                         ; the physics box is unchanged). Keep equal to FLOAT in web/spritemodel.js and tools/headless.py.
 PM3Y    = PM0Y + $300     ; Player 3: the eyes
-BUBBLE    = $4E             ; his colour (pink); his eyes are white
+MISSY   = PMAREA + $0300 + PM_YOFF      ; the missiles: 2 bits a line each, M0 in bits 1-0 ... M3 in bits 7-6
+; His colours come from assets/palette.txt (gen/palette.inc): PAL_PLAYER (the body, Player 0), PAL_EYES (Player 3) and
+; PAL_THIRD (= PAL_ICE: the missiles take the colour of playfield colour 3, which is COLPF3, the ice colour).
 
 ; ---- game constants --------------------------------------------------------
 S_GROUND = 0
@@ -227,6 +231,7 @@ fcount:   .res 1
 gtick:    .res 1        ; frames of play (pegs move every other one)
 pg_n:     .res 1        ; pegs in this level
 pg_i:     .res 1
+pg_k:     .res 1        ; pixels a peg may still shove him this frame
 tt_i:     .res 1        ; timed tile scratch
 tt_j:     .res 1
 tt_c:     .res 1
@@ -363,16 +368,18 @@ start:
         sta dli_row
         lda #>CHARSET_ADDR
         sta CHBAS
-        lda #1
-        sta GPRIOR              ; players in front of the playfield
+        lda #$11
+        sta GPRIOR              ; players in front of the playfield (priority 1); bit 4: the four missiles form a fifth
+                                ; player, coloured COLPF3, behind the players and the playfield colours 0-2
         lda #0
         sta SIZEP0
+        sta SIZEM               ; the missiles are normal width: 2 clocks each
         lda #>PMAREA
         sta PMBASE
         lda #3
         sta GRACTL              ; enable players and missiles
         jsr enter_title
-        lda #$3A                ; DL DMA + single-line PM + players + normal width
+        lda #$3E                ; DL DMA + single-line PM + missiles + players + normal width
         sta SDMCTL
         lda #$C0                ; vertical blank + display-list interrupts
         sta NMIEN
@@ -1685,7 +1692,7 @@ mode_dying:
         beq @c1
         lda #$44
         bne @c2
-@c1:    lda #BUBBLE
+@c1:    lda #PAL_PLAYER
 @c2:    sta PCOLR0
         lda mtimer              ; falling pitch
         cmp #44
@@ -1762,7 +1769,7 @@ mode_spawn:
         sta mode
         lda #16
         sta drawn
-        lda #BUBBLE
+        lda #PAL_PLAYER
         sta PCOLR0
 @rts:   rts
 
@@ -2073,9 +2080,9 @@ game_colors:
         inx
         cpx #24
         bne @row
-        lda #BUBBLE
+        lda #PAL_PLAYER
         sta PCOLR0              ; pink bubble
-        lda #$0E
+        lda #PAL_EYES
         sta PCOLR3              ; white eyes
         lda #$46
         sta PCOLR1              ; red pegs
@@ -2164,6 +2171,10 @@ hide_player:
         lda #0
         sta HPOSP0
         sta HPOSP3
+        sta HPOSM0
+        sta HPOSM0+1
+        sta HPOSM0+2
+        sta HPOSM0+3
         sta HPOSP1
         sta HPOSP1+1
         sta oldpy
@@ -2254,7 +2265,9 @@ choose_frame:
         sta frame
         rts
 
-; Draw the player sprite: erase the old image, copy the first `drawn` lines of `frame`, position it. The image starts
+; Draw the player sprite: erase the old image, copy the first `drawn` lines of `frame`, position it. He is three
+; layers: the body (Player 0), the eyes (Player 3) and the third colour (the four missiles, each 2 clocks wide, side by
+; side at HPOS, +2, +4 and +6; the missile page holds 2 bits per missile per line, see spr_third). The image starts
 ; PLAYER_FLOAT lines above the top of the physics box (py), i.e. at PM byte py - PLAYER_FLOAT + PM_YOFF. If py is
 ; less than PLAYER_FLOAT (he is above the screen, as in the death hop) the subtraction wraps to 254 or 255 and, like any
 ; value of 200 or more, hides him: nothing is drawn, nothing is written above or below the 256 bytes of a player.
@@ -2264,6 +2277,7 @@ draw_player:
         lda #0
 @erase: sta PM0Y,x
         sta PM3Y,x
+        sta MISSY,x
         inx
         dey
         bne @erase
@@ -2272,6 +2286,14 @@ draw_player:
         adc #46                 ; left edge of the playfield is colour clock 48; he is 8 wide on a 4 wide box
         sta HPOSP0
         sta HPOSP3
+        sta HPOSM0
+        clc
+        adc #2
+        sta HPOSM0+1
+        adc #2
+        sta HPOSM0+2
+        adc #2
+        sta HPOSM0+3
         lda py
         sec
         sbc #PLAYER_FLOAT       ; he floats above his box
@@ -2290,6 +2312,10 @@ draw_player:
         sta ptr2
         lda spr_ehi,x
         sta ptr2+1
+        lda spr_tlo,x
+        sta sptr
+        lda spr_thi,x
+        sta sptr+1
         ldx oldpy
         ldy #0
 @draw:  cpy drawn
@@ -2298,6 +2324,8 @@ draw_player:
         sta PM0Y,x
         lda (ptr2),y
         sta PM3Y,x
+        lda (sptr),y
+        sta MISSY,x
         inx
         iny
         cpy #SPR_H
@@ -2843,6 +2871,8 @@ update_pegs:
         bne @push
 @end:   lda #PEG_WAIT           ; at the end of the block: rest, then turn round
         sta pg_wait,x
+        jsr peg_push            ; (one last push the way it was going, so that whoever is ahead of it at the end of
+                                ; the platform is carried off the end and not left on its last pixel)
         lda pg_dir,x
         eor #$FE                ; 1 <-> $FF
         sta pg_dir,x
@@ -2856,7 +2886,12 @@ update_pegs:
         bcc @peg
 @rts:   rts
 
-; Push the player along if peg X is beside his feet and the player is ahead of the peg.
+; Push the player along if peg X is beside his feet and the player is ahead of the peg. The push carries him clear of
+; the peg in one go (up to 4 pixels, the peg is 4 wide), so a belt or ice dragging him back (up to 2 pixels a frame) never
+; wins, and whatever is in the platform - a step, a spike, a ladder, a chute, any kind of tile - does not slow it: only
+; a solid beside him (walking into it, as ever) stops him, and the peg's run ends at such a solid. So he is carried, a
+; peg's width ahead of it, to the end of the platform and off it. What is under his feet on the way still applies as
+; usual (a spike under him still kills): he is pushed over it, not made immune.
 peg_push:
         lda px                  ; overlap in x ...
         clc
@@ -2884,18 +2919,36 @@ peg_push:
         beq @hit
         bcs @no                 ; his feet are below the peg: a peg on the block above does not touch him
 @hit:   stx pg_i
+        lda #4
+        sta pg_k
         lda pg_dir,x
         bmi @left
-        lda px                  ; moving right: only if the player is not behind the peg
+@r:     lda px                  ; moving right: only while the player is not behind the peg ...
         cmp pg_x,x
         bcc @done
+        lda pg_x,x
+        clc
+        adc #3
+        cmp px
+        bcc @done               ; ... and still touches it
         jsr push_right
-        jmp @done
+        ldx pg_i
+        dec pg_k
+        bne @r
+        beq @done
 @left:  lda px
         cmp pg_x,x
         beq @pl
         bcs @done
-@pl:    jsr push_left
+@pl:    lda px
+        clc
+        adc #3
+        cmp pg_x,x
+        bcc @done               ; clear of the peg
+        jsr push_left
+        ldx pg_i
+        dec pg_k
+        bne @left
 @done:  ldx pg_i
 @no:    rts
 
@@ -3421,6 +3474,12 @@ spr_elo: .repeat SPR_COUNT, i
         .endrepeat
 spr_ehi: .repeat SPR_COUNT, i
         .byte >(spr_eyes + SPR_H * i)
+        .endrepeat
+spr_tlo: .repeat SPR_COUNT, i
+        .byte <(spr_third + SPR_H * i)
+        .endrepeat
+spr_thi: .repeat SPR_COUNT, i
+        .byte >(spr_third + SPR_H * i)
         .endrepeat
 spr_lo: .repeat SPR_COUNT, i
         .byte <(spr_frames + SPR_H * i)

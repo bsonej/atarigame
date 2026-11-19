@@ -3,7 +3,9 @@
 // jump cycles used by the animated preview. No DOM in here, so node can test it (tests/js/sprites.test.mjs).
 //
 // A frame is 16 strings of 8 characters:  '#' body (hardware Player 0, pink)   'e' eye (Player 3, white; it sits
-// behind the body)   '.' nothing (the playfield shows through: pupils and the grin are such holes).
+// behind the body)   'o' the third colour (the four missiles as a fifth sprite behind the other two: the pupils and the
+// grin; each missile is 2 pixels wide, so 'o' comes in aligned pairs: columns 0-1, 2-3, 4-5, 6-7)   '.' nothing (the
+// playfield shows through). A pixel is one character, so it is never two of these.
 
 export const W = 8;
 export const H = 16;
@@ -11,8 +13,9 @@ export const H = 16;
 export const FLOAT = 2;
 export const BODY = '#';
 export const EYE = 'e';
+export const THIRD = 'o';
 export const NONE = '.';
-const ROW_RE = new RegExp(`^[#.e]{${W}}$`);
+const ROW_RE = new RegExp(`^[#.eo]{${W}}$`);
 const NAME_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 /** The text of a comment line, as build_assets._is_comment sees it: '# ...', a lone '#', or '#!'. Pixel rows never have a space. */
@@ -36,7 +39,7 @@ function layout(text) {
       frames.push(cur);
       return;
     }
-    if (!ROW_RE.test(t)) throw new Error(`sprites.txt line ${i + 1}: sprite rows are ${W} characters of '#', 'e' and '.', got '${t}'`);
+    if (!ROW_RE.test(t)) throw new Error(`sprites.txt line ${i + 1}: sprite rows are ${W} characters of '#', 'e', 'o' and '.', got '${t}'`);
     if (!cur) throw new Error(`sprites.txt line ${i + 1}: sprite row before any 'frame' line`);
     cur.at.push(i);
     cur.rows.push(t);
@@ -57,6 +60,12 @@ export function parseSprites(text) {
  * `names` (the frame names of the file on disk) the count, names and order must match, because main.s picks a frame
  * by its place in the list.
  */
+/** A message if a row has an 'o' without its partner (the third colour comes in aligned pairs), else ''. */
+export function pairProblem(row) {
+  for (let k = 0; k < W; k += 2) if ((row[k] === THIRD) !== (row[k + 1] === THIRD)) return `the third colour 'o' comes in pairs of pixels (columns ${k}-${k + 1}), got '${row.slice(k, k + 2)}'`;
+  return '';
+}
+
 export function checkFrames(frames, names = null) {
   const errors = [];
   if (!Array.isArray(frames)) return ['frames must be a list'];
@@ -67,12 +76,13 @@ export function checkFrames(frames, names = null) {
     if (names && names.length === frames.length && names[i] !== f.name) errors.push(`frame #${i} is called ${f.name}, the game has ${names[i]} there: frames cannot be renamed or reordered here`);
     if (!Array.isArray(f.rows) || f.rows.length !== H) return errors.push(`frame ${label} has ${Array.isArray(f.rows) ? f.rows.length : 0} rows, needs ${H}`);
     f.rows.forEach((row, y) => {
-      if (typeof row !== 'string' || !ROW_RE.test(row)) errors.push(`frame ${label} row ${y}: needs ${W} characters of '#', 'e' and '.', got ${JSON.stringify(row)}`);
+      if (typeof row !== 'string' || !ROW_RE.test(row)) errors.push(`frame ${label} row ${y}: needs ${W} characters of '#', 'e', 'o' and '.', got ${JSON.stringify(row)}`);
+      else if (pairProblem(row)) errors.push(`frame ${label} row ${y}: ${pairProblem(row)}`);
     });
   });
   if (!errors.length && frames.length) {
-    const hole = frames[0].rows.findIndex((r) => !r.includes(BODY));
-    if (hole >= 0) errors.push(`the first frame (${frames[0].name}) needs a '#' in every row (the spawn animation reveals it a line at a time); row ${hole} has none`);
+    const hole = frames[0].rows.findIndex((r) => r === NONE.repeat(W));
+    if (hole >= 0) errors.push(`the first frame (${frames[0].name}) needs a pixel in every row (the spawn animation reveals it a line at a time); row ${hole} has none`);
   }
   return errors;
 }
@@ -90,10 +100,12 @@ export function serializeSprites(template, frames) {
   return lines.join('\n') + (lay.trailingNewline ? '\n' : '');
 }
 
-/** The bytes the asset tool makes of a frame: [body rows, eye rows], one byte per row, leftmost pixel in bit 7. */
+/** The bytes the asset tool makes of a frame: body rows and eye rows (one byte per row, leftmost pixel in bit 7) and the
+ * third layer as missile bytes (cell k, columns 2k and 2k+1, is bits 2k+1 and 2k: M0 bits 1-0 ... M3 bits 7-6). */
 export function toBytes(rows) {
   const bits = (ch) => rows.map((r) => [...r].reduce((b, c, i) => (c === ch ? b | (0x80 >> i) : b), 0));
-  return { body: bits(BODY), eyes: bits(EYE) };
+  const third = rows.map((r) => [0, 1, 2, 3].reduce((b, k) => (r[2 * k] === THIRD && r[2 * k + 1] === THIRD ? b | (3 << (2 * k)) : b), 0));
+  return { body: bits(BODY), eyes: bits(EYE), third };
 }
 
 export const blankRows = () => Array.from({ length: H }, () => NONE.repeat(W));
@@ -197,12 +209,22 @@ export class SpriteDoc {
 
   /** Paint pixel (x, y) of frame `i` with `ch`. Returns whether anything changed. */
   setPixel(i, x, y, ch) {
-    if (x < 0 || x >= W || y < 0 || y >= H || ch.length !== 1 || !'#.e'.includes(ch)) return false;
+    if (x < 0 || x >= W || y < 0 || y >= H || ch.length !== 1 || !'#.eo'.includes(ch)) return false;
     const row = this.frames[i].rows[y];
-    if (row[x] === ch) return false;
+    // The third colour is 2 pixels wide, in aligned pairs: painting it fills the pair; painting anything else on
+    // one of a pair clears the other one (a lone 'o' cannot be built).
+    const cell = x & ~1;
+    const chars = [...row];
+    if (ch === THIRD) chars[cell] = chars[cell + 1] = THIRD;
+    else {
+      if (row[x] === THIRD) chars[x ^ 1] = NONE;
+      chars[x] = ch;
+    }
+    const next = chars.join('');
+    if (next === row) return false;
     const autoStroke = !this.pending;
     if (autoStroke) this.beginStroke();
-    this.frames[i].rows[y] = row.slice(0, x) + ch + row.slice(x + 1);
+    this.frames[i].rows[y] = next;
     this.strokeChanged = true;
     if (autoStroke) this.endStroke();
     else this.onchange();
@@ -245,14 +267,27 @@ export class SpriteDoc {
     return this.edit((fr) => (fr[i].rows = flipRows(fr[i].rows)));
   }
 
-  /** Move the picture of frame `i` by (dx, dy) pixels; what falls off the edge is lost. */
+  /**
+   * Move the picture of frame `i` by (dx, dy) pixels; what falls off the edge is lost. The body and the eyes move by
+   * single pixels; the third colour (pairs of pixels) moves by whole pairs, so a one pixel nudge sideways leaves it
+   * where it is (up and down it moves with the rest). Where the body or an eye lands on half of a third colour pair, the
+   * other half goes too.
+   */
   shift(i, dx, dy) {
     return this.edit((fr) => {
       const old = fr[i].rows;
+      const dxThird = dx === 0 ? 0 : 2 * Math.trunc(dx / 2);
       fr[i].rows = old.map((_, y) => {
         const sy = y - dy;
         if (sy < 0 || sy >= H) return NONE.repeat(W);
-        return [...old[sy]].map((_c, x) => (x - dx >= 0 && x - dx < W ? old[sy][x - dx] : NONE)).join('');
+        const from = (x, d) => (x - d >= 0 && x - d < W ? old[sy][x - d] : NONE);
+        const out = [...old[sy]].map((_c, x) => {
+          const c = from(x, dx);
+          if (c === BODY || c === EYE) return c;
+          return from(x, dxThird) === THIRD ? THIRD : NONE;
+        });
+        for (let k = 0; k < W; k += 2) if (out[k] !== THIRD || out[k + 1] !== THIRD) for (const j of [k, k + 1]) if (out[j] === THIRD) out[j] = NONE;
+        return out.join('');
       });
     });
   }

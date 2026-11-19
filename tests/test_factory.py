@@ -734,7 +734,7 @@ class Pegs(Arena):
         self.goto(4)
         self.assertEqual(self.g.pg_n, 1)
         x, d, _ = self.peg()
-        self.assertEqual((x, d), (31 * 4, 255), "starts at the right end, heading left")
+        self.assertEqual((x, d), (32 * 4, 255), "starts at the right end (the chute head after the bricks), heading left")
         self.assertEqual(bytes(self.g.bss("pg_y", 1)), bytes([80]))
         page = self.g.mem(self.g.pm0 + 0x100, 256)  # Player 1
         self.assertEqual(page[32 + 80 : 32 + 88], bytes([0x60, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0x90]))
@@ -746,7 +746,9 @@ class Pegs(Arena):
         for _ in range(60):
             g.run(10)
             xs.append(self.peg())
-        lo, hi = 24 * 4, 31 * 4  # the stair at column 23 is a thin ledge, not part of the block it walks along
+        # the whole platform of row 11, whatever it is made of: the step at column 23 before the bricks (24-31) and the
+        # head of the down chute at column 32 after them are part of it
+        lo, hi = 23 * 4, 32 * 4
         self.assertTrue(all(lo <= x <= hi for x, _, _ in xs), [x for x, _, _ in xs])
         self.assertEqual((min(x for x, _, _ in xs), max(x for x, _, _ in xs)), (lo, hi))
         self.assertEqual({d for _, d, _ in xs}, {1, 255})
@@ -766,7 +768,42 @@ class Pegs(Arena):
         self.stand(100, 72)  # on the block
         g.run(150)
         self.assertEqual(g.mode, PLAY)
-        self.assertLess(g.px, 24 * 4, "pushed back to the end of the block, onto the ledge")
+        self.assertLess(g.px, 23 * 4, "pushed back to the end of the platform, past the step at its end, and off")
+
+    def test_the_peg_runs_the_whole_platform_and_carries_you_to_its_end_whatever_is_in_it(self) -> None:
+        self.goto(4)
+        g = self.g
+        self.assertEqual(g.bss("pg_min", 1)[0], 23 * 4)
+        self.assertEqual(g.bss("pg_max", 1)[0], 32 * 4)
+        # fast belts running against the push, a ladder and a step standing on the platform
+        g.put_tiles(25, 11, [T["CONV_L_FAST"]] * 3)
+        g.put_tiles(27, 10, [T["LADDER"]])
+        g.put_tiles(29, 10, [T["STAIR"]])
+        g.poke_bytes(g.labels["pg_x"], [96])
+        g.poke_bytes(g.labels["pg_dir"], [1])
+        g.poke_bytes(g.labels["pg_wait"], [0])
+        self.stand(104, 72)
+        far, states = 0, set()
+        for _ in range(400):
+            g.step()
+            far = max(far, g.px)
+            states.add(g.state)
+            if g.state == RIDE:
+                break
+        self.assertEqual(g.mode, PLAY)
+        self.assertGreaterEqual(far, 31 * 4, f"carried to the far end of the platform (got to {far})")
+        self.assertIn(RIDE, states, "and off it: onto the down chute that starts at its end")
+
+    def test_pushed_over_a_spike_he_still_dies_of_it(self) -> None:
+        self.goto(4)
+        g = self.g
+        g.put_tiles(28, 10, [T["SPIKE"]])
+        g.poke_bytes(g.labels["pg_x"], [96])
+        g.poke_bytes(g.labels["pg_dir"], [1])
+        g.poke_bytes(g.labels["pg_wait"], [0])
+        self.stand(104, 72)
+        g.run_until(lambda g: g.mode != PLAY, limit=300, every=1)
+        self.assertEqual(g.mode, DYING)
 
     def test_a_peg_only_pushes_a_player_whose_feet_are_beside_it(self) -> None:
         g = self.g
@@ -787,9 +824,10 @@ class Pegs(Arena):
     def test_the_peg_leaves_you_alone_when_you_are_behind_it(self) -> None:
         self.goto(4)
         g = self.g
-        self.stand(126, 72)
+        g.poke_bytes(g.labels["pg_x"], [100])  # the peg is to his left, heading left: he is behind it (not at column 31-32: the chute there would catch him)
+        self.stand(110, 72)
         g.run(PEG_WAIT - 5)
-        self.assertEqual((g.px, g.py), (126, 72))
+        self.assertEqual((g.px, g.py), (110, 72))
 
     def test_you_can_jump_over_a_peg(self) -> None:
         self.goto(4)

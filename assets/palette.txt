@@ -9,10 +9,21 @@
 #   pixel 3  white (ice blue in an alt tile)
 #
 # Row 0 (the score row), the title screen and the game over screen are not banded: they use "hud" for pixel 1.
+#
+# Mr. Bubble has three colours (assets/sprites.txt). The first two are entries of their own:
+#
+#   player  his body, hardware Player 0 ('#' in sprites.txt)
+#   eyes    his eyes, hardware Player 3 ('e')
+#
+# The third ('o': the pupils and the grin) is drawn with the four missiles as a fifth sprite, and the hardware gives
+# the missiles the colour of playfield colour 3. So his THIRD COLOUR IS THE "ice" ENTRY BELOW: change ice and the ice
+# tiles, the exit door's blue and his pupils/grin all change together. (There is no separate entry for it.)
 
 hues       1E 2C 4C 5C 7C 9C AC CC
 grey       0A
 white      0E
-ice        8A
+ice        8A        # also Mr. Bubble's third colour (see above)
 hud        2A
 background 00
+player     4E
+eyes       0E

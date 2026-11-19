@@ -280,6 +280,24 @@ class Components(unittest.TestCase):
         })
         self.assertIn(".byte 1,68,144,60,68,255", text)  # columns 15-17 only (pixels 60-68)
 
+    def test_a_peg_sweeps_the_whole_platform_whatever_its_tiles_are(self) -> None:
+        # brick, belt, spike, step, one-way platform, ladder, brick: columns 10-16 are one platform
+        self.tiles(flagged(5, "PLAT", "=", "oneway"), flagged(6, "STAIR", "S", "oneway"), flagged(4, "SPIKE", "^"),
+                   flagged(2, "LADDER", "H"), flagged(64, "BELT", ">", "solid"))
+        rows = good_rows()
+        rows[19] = "." * 10 + "#>^S=H#" + "." * 23
+        rows[18] = "." * 11 + "p" + "." * 28
+        self.p.write("assets/levels/level1.txt", level(rows))
+        text = self.p.build().joinpath("levels.inc").read_text()
+        self.assertIn("level1_pegs:\n        .byte 1,40,144,40,64,1", text)
+        # a solid thing in the peg's own row (a wall) ends the run; a ladder, step or spike standing on it does not
+        rows[18] = "." * 11 + "p" + "." * 2 + "#" + "." * 25
+        self.p.write("assets/levels/level1.txt", level(rows))
+        self.assertIn(".byte 1,40,144,40,52,1", self.p.build().joinpath("levels.inc").read_text())
+        rows[18] = "." * 11 + "p" + "." * 2 + "S^H" + "." * 23
+        self.p.write("assets/levels/level1.txt", level(rows))
+        self.assertIn(".byte 1,40,144,40,64,1", self.p.build().joinpath("levels.inc").read_text())
+
     def test_levels_without_pegs_have_an_empty_peg_list(self) -> None:
         self.tiles()
         text = self.p.build().joinpath("levels.inc").read_text()
@@ -288,7 +306,7 @@ class Components(unittest.TestCase):
 
     def test_bad_pegs_are_rejected(self) -> None:
         cases = (
-            ({18: "." * 11 + "p" + "." * 28}, "solid block under"),
+            ({18: "." * 11 + "p" + "." * 28}, "platform tile under"),
             ({19: "." * 10 + "#" + "." * 29, 18: "." * 10 + "p" + "." * 29}, "only one tile wide"),
             ({19: "#" * 40, 18: "p" + "." * 5 + "p" + "." * 5 + "p" + "." * 27}, "at most 2"),
         )
@@ -882,8 +900,44 @@ class Validation(unittest.TestCase):
 
     def test_sprite_eyes_are_a_second_player(self) -> None:
         self.p.write("assets/sprites.txt", "frame stand\n" + "\n".join(["#ee....#"] * 16) + "\n")
-        ((_name, body, eyes),) = ba.parse_sprite_frames(self.p.dir / "assets" / "sprites.txt")
-        self.assertEqual((body[0], eyes[0]), (0x81, 0x60))
+        ((_name, body, eyes, third),) = ba.parse_sprite_frames(self.p.dir / "assets" / "sprites.txt")
+        self.assertEqual((body[0], eyes[0], third[0]), (0x81, 0x60, 0))
+
+    def test_the_third_colour_is_the_missiles_in_aligned_pairs(self) -> None:
+        # cell k (columns 2k, 2k+1) is missile k: M0 bits 1-0, M1 bits 3-2, M2 bits 5-4, M3 bits 7-6
+        rows = ["oo......", "..oo....", "....oo..", "......oo", "oooooooo", "#eoo..e#"] + ["........"] * 10
+        self.p.write("assets/sprites.txt", "frame stand\n" + "\n".join(rows) + "\n")
+        ((_name, body, eyes, third),) = ba.parse_sprite_frames(self.p.dir / "assets" / "sprites.txt")
+        self.assertEqual(third[:6], [0x03, 0x0C, 0x30, 0xC0, 0xFF, 0x0C])
+        self.assertEqual((body[5], eyes[5]), (0x81, 0x42), "an 'o' is its own pixel: never body or eye as well")
+        self.assertEqual([ba.third_pixels(b) for b in third[:6]], [0xC0, 0x30, 0x0C, 0x03, 0xFF, 0x30])
+        out = self.p.build().joinpath("sprites.inc").read_text()
+        self.assertIn("spr_third:", out)
+        self.assertIn("$03,$0C,$30,$C0,$FF,$0C", out)
+
+    def test_a_lone_third_colour_pixel_is_refused(self) -> None:
+        for bad in ("o.......", ".o......", "..o.oo..", "#.oo.o.."):
+            with self.subTest(bad):
+                self.p.write("assets/sprites.txt", "frame stand\n" + "\n".join([bad] + ["#......#"] * 15) + "\n")
+                with self.assertRaises(ba.AssetError) as cm:
+                    ba.parse_sprite_frames(self.p.dir / "assets" / "sprites.txt")
+                self.assertIn("pairs of pixels", str(cm.exception))
+        self.rejects("assets/sprites.txt", "frame stand\n" + "\n".join(["x......."] + ["#......#"] * 15) + "\n", "'#', 'e', 'o' and '.'")
+
+    def test_the_players_colours_come_from_the_palette_file(self) -> None:
+        good = "hues 1E 2C 4C 5C 7C 9C AC CC\ngrey 0A\nwhite 0E\nice AC\nhud 2A\nbackground 00\n"
+        self.p.write("assets/palette.txt", good)
+        text = self.p.build().joinpath("palette.inc").read_text()
+        self.assertIn("PAL_PLAYER = $4E", text, "the defaults when the file does not say")
+        self.assertIn("PAL_EYES   = $0E", text)
+        self.p.write("assets/palette.txt", good + "player 36\neyes 1E\n")
+        text = self.p.build().joinpath("palette.inc").read_text()
+        self.assertIn("PAL_PLAYER = $36", text)
+        self.assertIn("PAL_EYES   = $1E", text)
+        self.assertIn("PAL_THIRD  = PAL_ICE", text, "the third colour is the ice colour")
+        self.p.write("assets/palette.txt", good + "player 1FF\n")
+        with self.assertRaises(ba.AssetError):
+            self.p.build()
 
 
 if __name__ == "__main__":

@@ -211,10 +211,12 @@ class Sprites(ServerCase):
         self.assertEqual(len(res["frames"]), len(built))
         self.assertEqual(res["frames"][0]["name"], "stand")
         self.assertEqual(res["frames"][11]["name"], "pop_a")
-        for f, (name, body, eyes) in zip(res["frames"], built):
-            self.assertEqual((f["name"], f["body"], f["eyes"]), (name, body, eyes))
+        for f, (name, body, eyes, third) in zip(res["frames"], built):
+            self.assertEqual((f["name"], f["body"], f["eyes"], f["third"]), (name, body, eyes, third))
+            self.assertEqual(f["thirdPx"], [ba.third_pixels(b) for b in third])
             self.assertEqual(len(f["rows"]), 16)
-            self.assertTrue(all(len(r) == 8 and set(r) <= set("#.e") for r in f["rows"]))
+            self.assertTrue(all(len(r) == 8 and set(r) <= set("#.eo") for r in f["rows"]))
+        self.assertTrue(any(f["third"] for f in res["frames"]), "the pupils and the grin are the third colour")
 
     def test_saving_what_was_read_changes_nothing(self) -> None:
         before = self.sprites_path().read_text()
@@ -300,12 +302,61 @@ class Sprites(ServerCase):
                 self.assertIn("cannot be renamed or reordered", res["error"])
         self.assertEqual(self.sprites_path().read_text(), before)
 
-    def test_the_first_frame_needs_a_body_pixel_on_every_row(self) -> None:
+    def test_the_first_frame_needs_a_pixel_on_every_row(self) -> None:
         frames = self.frames()
         frames[0]["rows"][7] = "........"
         status, res = self.put(frames)
         self.assertEqual(status, 400)
         self.assertIn("row 7", res["error"])
+        frames[0]["rows"][7] = "..oo...."  # the third colour lights the line too
+        self.assertEqual(self.put(frames)[0], 200)
+
+    def test_the_third_colour_is_saved_and_must_come_in_pairs(self) -> None:
+        import build_assets as ba
+
+        frames = self.frames()
+        frames[1]["rows"][0] = "oo.##.oo"
+        self.assertEqual(self.put(frames)[0], 200)
+        self.assertEqual(ba.parse_sprite_frames(self.sprites_path())[1][3][0], 0x03 | 0xC0)
+        before = self.sprites_path().read_text()
+        for bad in ("o.......", ".oo.....", "#.o.#.o."):
+            with self.subTest(bad):
+                frames[2]["rows"][0] = bad
+                status, res = self.put(frames)
+                self.assertEqual(status, 400, res)
+                self.assertIn("pairs of pixels", res["error"])
+                self.assertEqual(self.sprites_path().read_text(), before)
+
+    def test_the_players_colours_are_read_and_saved_keeping_the_comments(self) -> None:
+        import build_assets as ba
+
+        status, res = self.req("GET", "/api/palette")
+        self.assertEqual((status, res["player"], res["eyes"], res["third"]), (200, 0x4E, 0x0E, 0x8A))
+        path = self.tmp / "assets" / "palette.txt"
+        before = path.read_text().splitlines()
+        status, res = self.req("PUT", "/api/palette", {"player": 0x36, "eyes": 0x1E, "ice": 0xAC})
+        self.assertEqual((status, res["player"], res["eyes"], res["third"]), (200, 0x36, 0x1E, 0xAC))
+        pal = ba.parse_palette(path)
+        self.assertEqual((pal["player"], pal["eyes"], pal["ice"]), (0x36, 0x1E, 0xAC))
+        after = path.read_text().splitlines()
+        self.assertEqual(len(after), len(before))
+        self.assertEqual([i for i, (a, b) in enumerate(zip(before, after)) if a != b], [i for i, ln in enumerate(before) if ln.split("#")[0].split()[:1] in (["player"], ["eyes"], ["ice"])])
+        self.assertTrue(any(ln.startswith("ice") and "# also" in ln for ln in after), "the comment on the ice line stays")
+        self.assertEqual(ba.parse_palette(path)["hues"], ba.parse_palette(ROOT / "assets" / "palette.txt")["hues"])
+        status, res = self.req("PUT", "/api/palette", {"eyes": 0x20})  # one at a time is fine
+        self.assertEqual((status, ba.parse_palette(path)["eyes"], ba.parse_palette(path)["ice"]), (200, 0x20, 0xAC))
+
+    def test_bad_colours_are_refused_and_nothing_changes(self) -> None:
+        path = self.tmp / "assets" / "palette.txt"
+        before = path.read_text()
+        for body in ({"player": 256}, {"player": -2}, {"eyes": "4E"}, {"ice": 0x4F}, {"ice": 1.5}, {"player": True}, {"grey": 2}, {}):
+            with self.subTest(body):
+                status, res = self.req("PUT", "/api/palette", body)
+                self.assertEqual(status, 400, res)
+                self.assertEqual(path.read_text(), before)
+        self.assertEqual(self.req("PUT", "/api/palette", {"player": 0x36}, editor=False)[0], 403)
+        self.assertEqual(path.read_text(), before)
+        self.assertEqual((ROOT / "assets" / "palette.txt").read_text().count("player     4E"), 1, "the real file is not touched")
 
     def test_the_body_must_be_a_list_of_frames(self) -> None:
         for body in ({"frames": "no"}, {"frames": [1, 2]}, {}, {"frames": None}):

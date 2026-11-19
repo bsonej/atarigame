@@ -100,3 +100,16 @@ a.button { text-decoration: none; display: inline-block; }
 #problems.good { color: var(--good); }
 #problems.meh { color: var(--warn); }
 #problems.bad { color: var(--bad); }
+
+/* the sprite editor's colour panel: Mr. Bubble's three colours and the Atari palette to pick from */
+.sprites-page #side { width: 340px; }
+.colour-slots { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.colour-slots .slot { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 6px; border-radius: 6px; border: 1px solid transparent; }
+.colour-slots .slot.changed { border-color: var(--warn); }
+.colour-slots code { color: var(--dim); }
+.swatch { padding: 0; border: 1px solid #000; cursor: pointer; }
+.swatch.big { width: 26px; height: 26px; border-radius: 5px; border: 2px solid var(--line); }
+.swatch.big.on { border-color: #fff; }
+.colour-grid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 1px; margin-bottom: 8px; }
+.colour-grid .swatch { height: 17px; border-radius: 2px; }
+.colour-grid .swatch.on { outline: 2px solid #fff; outline-offset: -2px; z-index: 1; }

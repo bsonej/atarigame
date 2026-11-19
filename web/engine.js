@@ -831,6 +831,7 @@ export class Game {
         p.x = u8(p.x + p.dir);
         if (p.x === p.max || p.x === p.min) {
           p.wait = PEG_WAIT; // at the end of the block: rest, then turn round
+          this.pegPush(p); // (first one last push the way it was going: whoever is ahead of it is carried off the end)
           p.dir ^= 0xfe;
         }
       }
@@ -838,7 +839,13 @@ export class Game {
     }
   }
 
-  /** Push the player along if the peg overlaps it and the player is ahead of the peg. */
+  /**
+   * Push the player along if the peg overlaps it and the player is ahead of the peg. The push carries him clear of the
+   * peg in one go (up to 4 pixels, the peg is 4 wide), so a belt or ice dragging him back never wins, and nothing in the
+   * platform (a step, a spike, a ladder, a chute, any tile) slows it: only a solid beside him (walking into it, as ever)
+   * stops him, and the peg's run ends at such a solid. So he is carried, a peg's width ahead of it, to the end of the
+   * platform and off it. What is under his feet still applies as usual.
+   */
   pegPush(p) {
     if (
       u8(this.px + 3) < p.x ||
@@ -847,8 +854,14 @@ export class Game {
       u8(p.y + 7) < u8(this.py + 15) // only his feet touch it
     )
       return;
-    if (p.dir & 0x80) {
-      if (this.px <= p.x) this.pushLeft();
-    } else if (this.px >= p.x) this.pushRight();
+    for (let k = 0; k < 4; k++) {
+      if (p.dir & 0x80) {
+        if (this.px > p.x || u8(this.px + 3) < p.x) break; // behind it, or clear of it
+        this.pushLeft();
+      } else {
+        if (this.px < p.x || u8(p.x + 3) < this.px) break;
+        this.pushRight();
+      }
+    }
   }
 }

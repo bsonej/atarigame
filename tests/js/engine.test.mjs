@@ -425,7 +425,7 @@ test('a peg on the block above does not push him from below', () => {
   const level = { x: 40, y: 176, min: 20, max: 60, dir: 1, wait: 0 }; // beside his feet
   g.pegs = [level];
   g.pegPush(level);
-  assert.equal(g.px, 41);
+  assert.equal(g.px, 44, 'carried clear of the peg (it is 4 wide)');
 });
 
 test('he looks at you until he moves, then the way he last went, leaning while he walks', () => {
@@ -487,4 +487,38 @@ test('a peg pushes you along ahead of it', () => {
   const before = g.px;
   run(g, 100);
   assert.ok(g.px > before, 'was carried to the right');
+});
+
+// The peg's push carries him all the way along a platform whatever is in it: belts dragging him back, steps, ice, a ladder
+// standing on it. Peg row 18, the platform on row 19 (he stands at py 136 and falls 32 pixels when he is carried off its
+// end: not fatal).
+test('a peg carries him to the end of a platform with belts, steps, ice and a ladder in it, and off it', () => {
+  const rows = room({
+    '18,5': 'p',
+    '19,4': '((((((((S~=oS####', // fast belts against the push, then a step, ice, a one-way platform, a roller, a step, brick
+    '18,10': 'H', // a ladder standing on the platform
+    '18,14': 'S', // a step standing on the platform
+  });
+  const g = play(rows);
+  const { x, y, min: lo, max: hi } = g.pegs[0];
+  assert.deepEqual([x, y, lo, hi], [16, 144, 16, 80], 'the whole run, columns 4-20');
+  g.px = 28;
+  g.py = 136;
+  g.state = STATE.GROUND;
+  let far = 0;
+  for (let i = 0; i < 900 && g.mode === MODE.PLAY; i++) {
+    g.step(0);
+    far = Math.max(far, g.px);
+  }
+  assert.ok(far >= hi + 4, `he was carried to the end of the platform and off it (got to ${far}, the end is ${hi + 4})`);
+  assert.equal(g.mode, MODE.PLAY, 'and lived');
+});
+
+test('pushed over a spike he still dies of it (the push does not make him immune)', () => {
+  const g = play(room({ '18,5': 'p', '19,4': '########', '18,8': '^' }));
+  g.px = 28;
+  g.py = 136;
+  g.state = STATE.GROUND;
+  for (let i = 0; i < 400 && g.mode === MODE.PLAY; i++) g.step(0);
+  assert.equal(g.mode, MODE.DYING);
 });

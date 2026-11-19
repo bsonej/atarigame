@@ -37,6 +37,17 @@ ATTRACT: an AI plays for 30 s, then back to TITLE; fire starts a real game
   the feet-only hazard rules are unchanged (`py` is still the top of a 16 line box whose bottom touches the floor). The
   value lives in `src/main.s`, `web/spritemodel.js`, `tools/render_level.py` and `tools/headless.py`, and a test checks they agree.
   If `py` is so far above the screen that the image would start above PM byte 0 (the death hop), he is hidden rather than wrapped.
+- **He has three colours**, all set in `assets/palette.txt`: `player` (body, Player 0, pink `$4E`), `eyes` (Player 3, white
+  `$0E`) and a third (pupils and grin, `o` in `sprites.txt`) that is **the `ice` entry**. The third layer is drawn with the
+  four **missiles** used as a fifth 8-clock-wide sprite (`GPRIOR` = `$11`: PRIOR bit 4, `SDMCTL` = `$3E` for missile DMA,
+  `HPOSM0..3` = HPOS, +2, +4, +6, `SIZEM` = 0, so each missile is 2 clocks wide; the data is in the missile page `PMAREA+$300`,
+  2 bits per missile per line: M0 bits 1-0 ... M3 bits 7-6, copied and erased with the other layers, with the same
+  `PLAYER_FLOAT` and the same hide/wrap rule). Hardware makes a fifth player take the colour of playfield colour 3
+  (`COLPF3`), which is the ice colour (the ice tiles and the exit door's blue), hence the coupling: changing `ice` changes
+  his pupils too. Its priority is that of playfield colour 3, so it sits **behind the body and the eyes** (it shows through
+  their holes, which is what the pupils and the grin are) and in front of the background, but behind playfield colours 0-2
+  (so over a platform or a ladder pixel his pupils are hidden). Because a missile is 2 pixels wide, `o` comes in aligned
+  pairs (columns 0-1, 2-3, 4-5, 6-7); a pixel is one character, so there is no pixel that is body and third at once.
 - **Death animation**: red flash, the player hops, tumbles off the bottom of the screen, a falling tone.
 - **Come to life animation**: at every start and respawn the player is drawn line by line from the top, then blinks, in
   cycling colours with a rising tone. You cannot move until it ends.
@@ -87,9 +98,9 @@ In the emulator: F5 warm reset, F9 quit.
 | --- | --- |
 | `src/main.s` | The whole game (ca65): modes, physics, text, HUD, the attract AI. Zero-page variables are listed at the top. |
 | `assets/tiles.txt` | 4x8 tiles, four colours, with the character each one has in level maps and what it does (`solid`, `oneway`, `alt`). The header documents the format. |
-| `assets/palette.txt` | The row hues, grey, white, ice blue, score row and background colours as Atari colour bytes. Generates `src/gen/palette.inc`; the editor gets them through `/api/tiles`. |
+| `assets/palette.txt` | The row hues, grey, white, ice blue, score row and background colours as Atari colour bytes, and Mr. Bubble's `player` and `eyes` colours (his third colour is `ice`). Generates `src/gen/palette.inc` (`PAL_PLAYER`, `PAL_EYES`, `PAL_ICE`); the editor gets them through `/api/tiles`. |
 | `assets/font.txt` | 3x5 text font (A-Z, 0-9, `- ! ? :`). Ids: digits 16-25, letters 32-57, others from 58. |
-| `assets/sprites.txt` | Mr. Bubble's 13 frames (8x16): stand (front, looking right, looking left), lean right and left, squash (front, right, left), stretch (front, right, left) and two pop frames. `#` is body (Player 0, pink), `e` is an eye (Player 3, white, shown only where the body has no pixel). Pupils and the grin are holes in both. |
+| `assets/sprites.txt` | Mr. Bubble's 13 frames (8x16): stand (front, looking right, looking left), lean right and left, squash (front, right, left), stretch (front, right, left) and two pop frames. `#` is body (Player 0, pink), `e` is an eye (Player 3, white, shown only where the body has no pixel), `o` is the third colour (the four missiles as a fifth sprite, behind both, so it shows through their holes; 2 pixels wide, so in aligned pairs: the pupils and the grin). `.` is nothing. |
 | `assets/levels/*.txt` | 40x24 maps, played in name order. `#` platform, `W` wall, `H` ladder, `*` item, `^` spike, `D` exit door, `@` start, `p` peg, plus the factory parts below. Row 0 is the score row. |
 | `assets/screens/*.txt` | Full-screen text maps (`title`, `gameover`). Letters/digits come from the font; a lowercase letter is the same glyph in the second text colour; `#` `*` `^` are tiles. Comments start with `#!`. |
 | `tools/build_assets.py` | Validates the assets and generates `src/gen/*.inc` (charset with the font merged in, `.charmap` so `.byte "TEXT"` works, the tile flags table, the chutes' thread, sprites, levels with their pegs and level tables, screens). |
@@ -98,7 +109,7 @@ In the emulator: F5 warm reset, F9 quit.
 | `cfg/` | ld65 memory layouts (normal and TEST). |
 | `tools/levelcheck.py` | Static reachability check for maps (`task check-levels`). |
 | `tools/render_level.py` | Draws a compiled level (end caps and all) to a PNG: `python3 tools/render_level.py assets/levels/level4.txt out.png --scale 7`. |
-| `tools/editor_server.py` | The small local web server behind the level and sprite editors: serves `web/`, reads and writes `assets/levels/` and `assets/sprites.txt`. |
+| `tools/editor_server.py` | The small local web server behind the level and sprite editors: serves `web/`, reads and writes `assets/levels/`, `assets/sprites.txt` and Mr. Bubble's colours in `assets/palette.txt`. |
 | `web/` | The level editor (plain ES modules, no build step): `editor.js` (the page), `model.js` (level text and compiling), `engine.js` (the game's rules in JavaScript, for test play), `render.js`, `palette.js`. The sprite editor is `sprites.html` + `sprites.js` (the page) and `spritemodel.js` (parsing, writing, undo, the preview cycles). |
 | `tests/` | `test_assets.py` (asset validation, tile flags, end caps, pegs), `test_game.py` (plays the real 6502 code), `test_factory.py` (each factory part and its end caps), `test_levelcheck.py`, `test_editor_server.py` (levels and sprites), `test_engine.py` (the editor's engine against the game in the emulator), `test_js.py` + `tests/js/` (node tests of the editor code). |
 
@@ -121,7 +132,7 @@ through it and can stand on it (a jump still rises through it: see "Jumping").
 | `o` | roller | solid; the same idea as ice with quicker grip, so you stop sooner. The longer the run of rollers under your feet, the harder it grips: it speeds you up by as many 1/16 pixels a frame as it is tiles long, up to 8 (a 1-tile roller is slower to get going than ice, an 8-tile one is almost instant) |
 | `X` | bomb block | step on it and it flashes for about 0.9 seconds, then explodes. The blast kills you if your feet are within one tile either side and between two tiles above the block and its bottom edge (so a bomb going off over your head, or beside your knees, does nothing), and sets off bomb blocks next to it. The block is gone afterwards |
 | `v` | vanishing block | step on it and it flickers for about 0.6 seconds, then goes (you fall); it comes back after about 3.6 seconds, waiting until you are out of the way |
-| `p` | peg | not a tile: marks where a peg starts. It sits on the platform under it and sweeps along the solid blocks there, pausing at each end, at half a pixel a frame. It pushes you along ahead of it (off the edge if you let it) if it is beside your feet; jump over it. A peg on a block above you does not touch you. At most 2 per map, each needs a platform at least 2 tiles wide |
+| `p` | peg | not a tile: marks where a peg starts. It sits on the platform under it and sweeps the whole platform there (see below), pausing at each end, at half a pixel a frame. It pushes you along ahead of it, all the way to the end of the platform and off it, if it is beside your feet; jump over it. A peg on a block above you does not touch you. At most 2 per map, each needs a platform at least 2 tiles wide |
 
 ### End caps
 
@@ -184,8 +195,15 @@ Notes for map builders:
 
 - Bomb blocks and vanishing blocks in the bottom row leave a one-tile hole you can walk out of, not a pit: put them on
   upper floors.
-- A peg sweeps the whole run of solid blocks under its starting tile, so give it a block of its own (a floating block,
-  or a short ledge) rather than a full-width floor.
+- A peg sweeps the whole platform under its starting tile, so give it a block of its own (a floating block, or a short
+  ledge) rather than a full-width floor. The platform is the run of tiles of **any** kind on the line under the peg (bricks,
+  one-way platforms, steps, belts, ice, rollers, bomb and vanishing blocks, spikes, ladders, chutes, walls), from the gap
+  before to the gap after: empty space, an item or the exit door ends it, and so does a solid tile in the peg's own row
+  (a wall it would bump into); a step, spike or ladder standing on the platform does not. Its push is not stopped by what is
+  in the run: it carries him clear of the peg in one go (up to 4 pixels, so a fast belt dragging him back never wins), and
+  at the end of its run it gives one more push the way it was going before it turns round, so he ends up off the end and
+  not on its last pixel. A solid beside him (a wall) still stops him as it stops any walk, and what is under his feet still
+  applies (a spike at his feet still kills: pushed over, not made immune; a gap in the floor still drops him).
 - A spike needs three clear tiles above it to be jumpable. `task check-levels` flags spikes that have not.
 - Fuses and rests are counted in frames, so the times above are for 50 Hz PAL (what atari800 runs here) and are a sixth
   shorter on NTSC.
@@ -248,22 +266,27 @@ It edits `assets/sprites.txt`, Mr. Bubble's 13 frames of 8x16 pixels:
 - **Frames** on the left, each with a thumbnail and the name it has in `sprites.txt`; a dot marks frames that differ from
   what is saved. The big grid edits the selected frame: left button paints with the selected tool (**Body** `B`/`1`: pink,
   Player 0; **Eye** `E`/`2`: white, Player 3, which sits behind the body and shows only where the body has no pixel;
-  **Erase** `X`/`3`), the right button erases, and a fast drag fills every cell in between. Zoom, a grid, a 2:1 "TV shape"
+  **Third** `O`/`3`: the third colour (missiles, behind both), painted **two pixels at a time** (an aligned pair; painting
+  something else on half a pair clears the other half); **Erase** `X`/`4`), the right button erases, and a fast drag fills every cell in between. Zoom, a grid, a 2:1 "TV shape"
   for the pixels, and guides (the 4 pixel wide physics box he collides with, and the line `PLAYER_FLOAT` lines above his
   feet) are options under the grid.
-- **In the game** shows the frame at 1x and 4x the way the screen does: pink body, white eyes, pupils and the grin as holes
+- **Colours**: the three colours as swatches (body = `player`, eyes, third = `ice`, which the ice tiles and the exit door
+  share) and the Atari palette (16 hues x 8 luminances) to pick from; the previews follow at once. **Save colours** (and
+  **Save to game**, if they changed) sends them to `PUT /api/palette`, which validates them (a colour byte 0-255 with an even
+  luminance) and rewrites just those lines of `assets/palette.txt`, comments and all.
+- **In the game** shows the frame at 1x and 4x the way the screen does: pink body, white eyes, pupils and the grin in the third colour
   over black, standing `PLAYER_FLOAT` pixels above a floor. **Animation** loops the real frame choices of `choose_frame`:
   walk right and left (stand, lean), jump (squash, stretch, land, with the rise of the game's jump table), jump right and
   left, look around and the death pop. Play/pause (`Space`), speed and size are options.
 - **Frame tools**: copy and paste a frame (`Cmd/Ctrl+C`/`V`), clear, revert to what is saved, flip (`H`), nudge the picture a
-  pixel (`Shift`+arrows), and **Mirror to the other side** (`M`), which overwrites the right/left counterpart of the
+  pixel (`Shift`+arrows; the third colour moves in whole pairs, so it stays where it is for a sideways nudge), and **Mirror to the other side** (`M`), which overwrites the right/left counterpart of the
   selected frame (`stand_right` <-> `stand_left`, `lean_*`, `squash_*`, `stretch_*`) with its mirror image. Undo/redo
   (`Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z`) cover every stroke and every frame operation.
 - **Save to game** (`Cmd/Ctrl+S`) sends the frames to `PUT /api/sprites`, which writes the pixel rows into
   `assets/sprites.txt` and leaves everything else in the file (the header comment, blank lines, the `frame` lines)
   exactly as it was. The server refuses, with a message that says which frame and row, anything `tools/build_assets.py`
-  would refuse (rows of 8 characters of `#`, `.` and `e`; exactly 16 rows) and what the game relies on: the same number of
-  frames with the same names in the same order (`main.s` picks a frame by its place in the list), and a `#` on every row of
+  would refuse (rows of 8 characters of `#`, `.`, `e` and `o`, with `o` in aligned pairs; exactly 16 rows) and what the game relies on: the same number of
+  frames with the same names in the same order (`main.s` picks a frame by its place in the list), and a pixel (any of them) on every row of
   the first frame (the spawn animation reveals it a line at a time). Then `task build` / `task run`. The level editor
   re-reads the frames whenever its page comes back to the front, so its test play and start marker show the saved ones.
   Unsaved sprite work is kept in the browser like unsaved levels; **Download .txt** and **Reload from game** are there too.
@@ -304,7 +327,7 @@ whether the colour changes land cleanly at the start of each row (the interrupt 
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
 `render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
 (`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield, and the 2 line float above the surface) were only reasoned about. The same goes for the
-new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the chutes' turning thread and the ride (the art, its speed and how it reads on a real display, the two directions, and how the ride and the hop out of an up chute feel), the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) have never been
+new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the chutes' turning thread and the ride (the art, its speed and how it reads on a real display, the two directions, and how the ride and the hop out of an up chute feel), the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) and the third colour (the four missiles as a fifth sprite with `GPRIOR` bit 4: that the missiles line up with the player, the colour of `COLPF3` and the priority behind the body were checked only in memory, not on a real display or screenshot) have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.
 Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 32 and 16 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,
 crosses roller, bomb and vanishing blocks) but does not know to jump pegs or ride belts to the end, and nobody has played them. Run `task run` and, if
@@ -313,4 +336,4 @@ the player is a few pixels off from the floor (he should hover 2 lines above it)
 ## Memory map
 
 `$2000-$5FFF` code and data (levels, screens, sprites) · `$6000` character set (1 KB aligned) · `$6400` display list ·
-`$6500` screen (40x24) · `$7000` player/missile area (2 KB aligned; player 0 at `$7400`, the pegs are players 1 and 2 and Mr. Bubble's eyes player 3) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).
+`$6500` screen (40x24) · `$7000` player/missile area (2 KB aligned; the missiles, Mr. Bubble's third colour, at `$7300`; player 0 at `$7400`, the pegs are players 1 and 2 and Mr. Bubble's eyes player 3) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).

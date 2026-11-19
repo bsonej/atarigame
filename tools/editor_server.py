@@ -15,6 +15,9 @@ page cannot save levels through your browser). A level is only written once the 
     POST /api/run            build the game and open it in the emulator on a saved level   body {"name": "..."}
     GET  /api/sprites        Mr. Bubble's frames (assets/sprites.txt): the file's text and each frame's rows
     PUT  /api/sprites        save them (validated like build_assets does)   body {"frames": [{"name": "...", "rows": [...]}]}
+    GET  /api/palette        the colours of assets/palette.txt
+    PUT  /api/palette        change Mr. Bubble's three colours (validated)   body {"player": 78, "eyes": 14, "ice": 138}
+                             (Atari colour bytes: hue * 16 + luminance, luminance even; "ice" is his third colour too)
 """
 
 from __future__ import annotations
@@ -42,7 +45,8 @@ import levelcheck  # noqa: E402
 
 NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,39}")
 SPRITE_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
-SPRITE_ROW_RE = re.compile(rf"[#.e]{{{ba.SPRITE_W}}}")
+SPRITE_ROW_RE = re.compile(rf"[#.eo]{{{ba.SPRITE_W}}}")
+PLAYER_COLOURS = ("player", "eyes", "ice")  # the palette entries the sprite editor may change
 MAX_BODY = 64 * 1024
 EDITOR_HEADER = "X-Editor"
 
@@ -75,8 +79,8 @@ class Project:
         door = ba.door_bytes(tiles)
         pal_path = self.root / "assets" / "palette.txt"
         sprites = [
-            {"name": n, "rows": rows, "eyes": eyes}
-            for n, rows, eyes in ba.parse_sprite_frames(self.root / "assets" / "sprites.txt")
+            {"name": n, "rows": rows, "eyes": eyes, "third": third, "thirdPx": [ba.third_pixels(b) for b in third]}
+            for n, rows, eyes, third in ba.parse_sprite_frames(self.root / "assets" / "sprites.txt")
         ]
         return {
             "cols": ba.COLS,
@@ -143,8 +147,8 @@ class Project:
             "width": ba.SPRITE_W,
             "height": ba.SPRITE_H,
             "frames": [
-                {"name": f["name"], "rows": f["rows"], "body": body, "eyes": eyes}
-                for f, (_n, body, eyes) in zip(frames, built)
+                {"name": f["name"], "rows": f["rows"], "body": body, "eyes": eyes, "third": third, "thirdPx": [ba.third_pixels(b) for b in third]}
+                for f, (_n, body, eyes, third) in zip(frames, built)
             ],
         }
 
@@ -167,10 +171,14 @@ class Project:
                 raise ApiError(400, f"frame {name} has {len(rows) if isinstance(rows, list) else 0} rows, needs {ba.SPRITE_H}")
             for y, row in enumerate(rows):
                 if not isinstance(row, str) or not SPRITE_ROW_RE.fullmatch(row):
-                    raise ApiError(400, f"frame {name} row {y}: needs {ba.SPRITE_W} characters of '#', 'e' and '.', got {row!r}")
+                    raise ApiError(400, f"frame {name} row {y}: needs {ba.SPRITE_W} characters of '#', 'e', 'o' and '.', got {row!r}")
+                try:
+                    ba.third_cells(row)
+                except ValueError as e:
+                    raise ApiError(400, f"frame {name} row {y}: {e}") from None
         for y, row in enumerate(frames[0]["rows"]):
-            if "#" not in row:
-                raise ApiError(400, f"the first frame ({frames[0]['name']}) needs a '#' in every row (the spawn animation reveals it a line at a time); row {y} has none")
+            if row == "." * ba.SPRITE_W:
+                raise ApiError(400, f"the first frame ({frames[0]['name']}) needs a pixel in every row (the spawn animation reveals it a line at a time); row {y} has none")
         for new, old in zip(frames, have):
             for line, row in zip(old["at"], new["rows"]):
                 lines[line] = row
@@ -190,6 +198,61 @@ class Project:
                 Path(tmp).unlink(missing_ok=True)
                 raise
         return {"ok": True, "path": str(self.sprites_path.relative_to(self.root)), "frames": len(frames)}
+
+    # -- palette (Mr. Bubble's three colours) --------------------------------------------------
+    def palette_api(self) -> dict:
+        path = self.root / "assets" / "palette.txt"
+        pal = ba.parse_palette(path)
+        return {"path": str(path.relative_to(self.root)), "palette": pal,
+                "player": pal["player"], "eyes": pal["eyes"], "third": pal["ice"]}
+
+    def save_palette(self, body: dict) -> dict:
+        """Change `player`, `eyes` and/or `ice` (his third colour: the missiles take playfield colour 3) in
+        assets/palette.txt, keeping its comments and every other line."""
+        path = self.root / "assets" / "palette.txt"
+        want: dict[str, int] = {}
+        for key in PLAYER_COLOURS:
+            if key not in body:
+                continue
+            v = body[key]
+            if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 255:
+                raise ApiError(400, f"{key}: an Atari colour is a whole number 0-255 (hue * 16 + luminance), got {v!r}")
+            if v & 1:
+                raise ApiError(400, f"{key}: the luminance of an Atari colour is even (the lowest bit is not used), got ${v:02X}")
+            want[key] = v
+        unknown = set(body) - set(PLAYER_COLOURS)
+        if unknown:
+            raise ApiError(400, f"only {', '.join(PLAYER_COLOURS)} can be changed here, not {', '.join(sorted(unknown))}")
+        if not want:
+            raise ApiError(400, 'send {"player": 78, "eyes": 14, "ice": 138} (any of them)')
+        with self._lock:
+            lines = path.read_text(encoding="utf-8").split("\n")
+            for key, v in want.items():
+                rx = re.compile(rf"^(\s*{key}\s+)[0-9A-Fa-f]+(.*)$")
+                for i, line in enumerate(lines):
+                    m = rx.match(line)
+                    if m:
+                        lines[i] = f"{m.group(1)}{v:02X}{m.group(2)}"
+                        break
+                else:  # an older file without the entry: add it at the end
+                    while lines and lines[-1] == "":
+                        lines.pop()
+                    lines += [f"{key:<10} {v:02X}", ""]
+            out = "\n".join(lines)
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".editor-", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(out)
+                try:  # the asset tool has the last word
+                    ba.parse_palette(Path(tmp))
+                except ba.AssetError as e:
+                    raise ApiError(400, str(e).replace(tmp, "palette.txt")) from None
+                os.chmod(tmp, path.stat().st_mode & 0o777)
+                os.replace(tmp, path)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+        return {"ok": True, **self.palette_api()}
 
     # -- levels --------------------------------------------------------------------------------
     def level_paths(self) -> list[Path]:
@@ -341,6 +404,10 @@ def make_handler(project: Project):
                 return self.send_json(200, project.sprites_api())
             if route == "sprites" and method == "PUT":
                 return self.send_json(200, project.save_sprites(self.read_json().get("frames")))
+            if route == "palette" and method == "GET":
+                return self.send_json(200, project.palette_api())
+            if route == "palette" and method == "PUT":
+                return self.send_json(200, project.save_palette(self.read_json()))
             if route.startswith("level/"):
                 name = route[len("level/"):]
                 if method == "GET":
