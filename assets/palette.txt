@@ -36,7 +36,7 @@ white      0E
 ice        86        # also Mr. Bubble's third colour (see above)
 hud        2A
 background 00
-player     5A
+player     3C
 eyes       0E
 splash_bg    4C
 splash_light 4E
