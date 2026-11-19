@@ -4,9 +4,9 @@
 // of 8*zoom CSS pixels, and the 160x192 playfield is 40x24 square cells.
 
 import { COLS, ROWS } from './model.js';
-import { FLOAT } from './spritemodel.js';
+import { FLOAT, bobFloat } from './spritemodel.js';
 
-export { FLOAT };
+export { FLOAT, bobFloat };
 
 export const COLORS = {
   bg: '#000000',

@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(ROOT / "tools"))
 import build_assets as _ba  # noqa: E402
-from tools.headless import PLAYER_FLOAT, PM_YOFF  # noqa: E402
+from tools.headless import BOB_RANGE, PLAYER_FLOAT, PM_YOFF  # noqa: E402
 
 _TILES = _ba.parse_tiles(ROOT / "assets" / "tiles.txt")
 TILE = {t["name"]: t["byte"] for t in _TILES}
@@ -538,16 +538,36 @@ class GameLogic(Base):
         g = self.g
         self.assertEqual(g.py, SPAWN_Y, "his box is where it always was: standing on the floor")
         for page in (g.mem(g.pm0, 256), g.mem(g.pm0 + 0x300, 256), g.mem(g.pm0 - 0x100, 256)):
-            first = PM_YOFF + g.py - PLAYER_FLOAT
+            first = PM_YOFF + g.py - g.pfloat
             self.assertEqual(page[:first], bytes(first), "nothing above the image")
             self.assertEqual(page[first + 16 :], bytes(256 - first - 16), "and nothing below it")
         body = g.sprite()
         want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][1]
         self.assertEqual(list(body), want)
-        # the lowest picture line is PLAYER_FLOAT scan lines above the bottom of his box (the surface)
+        # the lowest picture line is pfloat (the hover plus the bob, 1 to 3) scan lines above the bottom of his box (the surface)
         feet = PM_YOFF + g.py + 16  # the first PM line of the surface
-        self.assertEqual(g.mem(g.pm0, 256)[feet - PLAYER_FLOAT : feet], bytes(PLAYER_FLOAT), "a gap below him")
-        self.assertTrue(g.mem(g.pm0, 256)[feet - PLAYER_FLOAT - 1], "and his last line right above the gap")
+        self.assertTrue(BOB_RANGE[0] <= g.pfloat <= BOB_RANGE[1], g.pfloat)
+        self.assertEqual(g.mem(g.pm0, 256)[feet - g.pfloat : feet], bytes(g.pfloat), "a gap below him")
+        self.assertEqual(list(g.mem(g.pm0, 256)[feet - g.pfloat - 16 : feet - g.pfloat]), want, "and his picture right above the gap")
+
+    def test_he_bobs_between_one_and_three_lines_above_the_surface_never_below_it(self) -> None:
+        g = self.g
+        seen = set()
+        for _ in range(70):  # a bit more than one period (64 frames)
+            g.idle()
+            seen.add(g.pfloat)
+            self.assertEqual(g.py, SPAWN_Y, "purely visual: the physics box never moves")
+            self.assertTrue(BOB_RANGE[0] <= g.pfloat <= BOB_RANGE[1], g.pfloat)
+            feet = PM_YOFF + g.py + 16
+            raw = g.mem(g.pm0, 256)
+            self.assertEqual(raw[feet - g.pfloat : feet], bytes(g.pfloat), "a gap below him, never into the floor")
+            want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][1]
+            self.assertEqual(list(raw[feet - g.pfloat - 16 : feet - g.pfloat]), want, "and his picture right above it")
+            for page in (g.mem(g.pm0 + 0x300, 256), g.mem(g.pm0 - 0x100, 256)):
+                top = PM_YOFF + g.py - g.pfloat
+                self.assertEqual(page[:top], bytes(top))  # eyes and missiles move with the body
+                self.assertEqual(page[top + 16 :], bytes(256 - top - 16))
+        self.assertEqual(seen, {1, 2, 3}, "he drifts through all three heights")
 
     def test_float_is_the_same_in_the_game_the_editor_and_the_tools(self) -> None:
         import re
@@ -557,10 +577,15 @@ class GameLogic(Base):
         render = int(re.search(r"^PLAYER_FLOAT = (\d+)", (ROOT / "tools" / "render_level.py").read_text(), re.M).group(1))
         self.assertEqual((asm, js, render), (PLAYER_FLOAT,) * 3)
         self.assertIn(PLAYER_FLOAT, (1, 2), "a pixel or two")
+        table = [int(v) for v in re.search(r"^bob_float:\n((?:\s+\.byte [\d,]+\n)+)", (ROOT / "src" / "main.s").read_text(), re.M).group(1).replace(".byte", "").replace("\n", ",").split(",") if v.strip()]
+        self.assertEqual(len(table), 64)
+        self.assertEqual((min(table), max(table)), BOB_RANGE, "the bob stays within 1 to 3 lines above the surface")
+        self.assertTrue(all(abs(a - b) <= 1 for a, b in zip(table, table[1:] + table[:1])), "smooth: one line at a time")
+        self.assertIn(PLAYER_FLOAT, set(table))
 
     def test_his_third_colour_is_the_missile_page_with_the_same_float_and_position(self) -> None:
         g = self.g
-        top = PM_YOFF + g.py - PLAYER_FLOAT
+        top = PM_YOFF + g.py - g.pfloat
         page = g.mem(g.pm0 - 0x100, 256)  # the four missiles: PMBASE + $300 in single-line resolution
         want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][3]
         self.assertEqual(list(page[top : top + 16]), want)
@@ -578,7 +603,7 @@ class GameLogic(Base):
 
     def test_his_eyes_are_player_3(self) -> None:
         g = self.g
-        top = PM_YOFF + g.py - PLAYER_FLOAT
+        top = PM_YOFF + g.py - g.pfloat
         eyes = g.mem(g.pm0 + 0x300, 512)[top : top + 16]
         want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[0][2]
         self.assertEqual(list(eyes), want)
@@ -593,7 +618,7 @@ class GameLogic(Base):
         want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][1]
         self.assertEqual(list(g.sprite()), want, "the body of the frame he is on")
         raw = g.mem(g.pm0, 256)
-        self.assertEqual(raw[PM_YOFF + SPAWN_Y - PLAYER_FLOAT + 15], 0, "no stale image left at the old position")
+        self.assertEqual(raw[PM_YOFF + SPAWN_Y - BOB_RANGE[1] + 15], 0, "no stale image left at the old position")
 
 
 # ---------------------------------------------------------------------------
@@ -620,7 +645,7 @@ class DeathAndLives(Base):
         for py in (0, 1, 2, 3, 40, 198, 199, 200, 201, 202, 230, 253, 254, 255):
             g.poke("py", py)
             g.idle()
-            top = g.py - PLAYER_FLOAT  # where the image starts: a wrapped value is off the screen
+            top = g.py - g.pfloat  # where the image starts: a wrapped value is off the screen
             for page in (g.mem(g.pm0, 256), g.mem(g.pm0 + 0x300, 256), g.mem(g.pm0 - 0x100, 256)):
                 lit = [i for i, b in enumerate(page) if b]
                 if 0 <= top < 200:

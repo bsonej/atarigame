@@ -81,6 +81,41 @@ test('items score ten points', () => {
   assert.equal(g.left, 1);
 });
 
+test('an item is collected at his level only: walking under it or jumping up through it from below does not', () => {
+  // row 21 is his head row on the floor (he occupies rows 21 and 22 there); row 22 is his feet row
+  const head = play(room({ '21,5': '*', '21,6': '*' }));
+  run(head, 40, JOY.RIGHT);
+  assert.equal(head.score, 0, 'walked under items at head height');
+  assert.equal(head.left, 3);
+  const feet = play(room({ '22,5': '*' }));
+  run(feet, 40, JOY.RIGHT);
+  assert.equal(feet.score, 10, 'walked into one at his level');
+  // an item on a ledge above him: the jump rises through it (head, then body) without taking it
+  const up = play(room({ '17,8': '*', '18,6': '====' }));
+  run(up, 30, JOY.RIGHT);
+  up.step(JOY.FIRE);
+  const seen = [];
+  for (let i = 0; i < 12; i++) {
+    up.step(0);
+    seen.push(up.left);
+  }
+  assert.ok(up.py < FLOOR_Y - 20, 'he went up');
+  assert.equal(up.state, STATE.AIR);
+  assert.equal(up.score, 0, 'rising through it collects nothing');
+  assert.ok(seen.every((l) => l === 3));
+});
+
+test('landing on the ledge, at the level of its item, collects it', () => {
+  const g = play(room({ '19,8': '*', '20,6': '=====' })); // a ledge 3 tiles up: reachable by a jump
+  g.px = 32; // right under the item
+  g.step(JOY.FIRE);
+  run(g, 8, 0);
+  assert.equal(g.score, 0, 'he is still rising through it');
+  run(g, 40, 0);
+  assert.equal(g.py, FLOOR_Y - 24, 'standing on the ledge');
+  assert.equal(g.score, 10, 'its item is his now: collected on landing, at its level');
+});
+
 test('the last thing collected makes the exit door fade in; walking into it ends the level and the door fades out', () => {
   const h = play(room({ '22,3': '*' }));
   const T = tables.T;

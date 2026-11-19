@@ -324,7 +324,8 @@ class Sprites(ServerCase):
         import build_assets as ba
 
         status, res = self.req("GET", "/api/palette")
-        self.assertEqual((status, res["player"], res["eyes"], res["third"]), (200, 0x4C, 0x0E, 0x8A))
+        real = ba.parse_palette(ROOT / "assets" / "palette.txt")  # (whatever the sprite editor last saved there)
+        self.assertEqual((status, res["player"], res["eyes"], res["third"]), (200, real["player"], real["eyes"], real["ice"]))
         path = self.tmp / "assets" / "palette.txt"
         before = path.read_text().splitlines()
         status, res = self.req("PUT", "/api/palette", {"player": 0x36, "eyes": 0x1E, "ice": 0xAC})
@@ -342,6 +343,7 @@ class Sprites(ServerCase):
     def test_bad_colours_are_refused_and_nothing_changes(self) -> None:
         path = self.tmp / "assets" / "palette.txt"
         before = path.read_text()
+        real_before = (ROOT / "assets" / "palette.txt").read_text()
         for body in ({"player": 256}, {"player": -2}, {"eyes": "4E"}, {"ice": 0x4F}, {"ice": 1.5}, {"player": True}, {"grey": 2}, {}):
             with self.subTest(body):
                 status, res = self.req("PUT", "/api/palette", body)
@@ -349,7 +351,7 @@ class Sprites(ServerCase):
                 self.assertEqual(path.read_text(), before)
         self.assertEqual(self.req("PUT", "/api/palette", {"player": 0x36}, editor=False)[0], 403)
         self.assertEqual(path.read_text(), before)
-        self.assertEqual((ROOT / "assets" / "palette.txt").read_text().count("player     4C"), 1, "the real file is not touched")
+        self.assertEqual((ROOT / "assets" / "palette.txt").read_text(), real_before, "the real file is not touched")
 
     def test_the_body_must_be_a_list_of_frames(self) -> None:
         for body in ({"frames": "no"}, {"frames": [1, 2]}, {}, {"frames": None}):

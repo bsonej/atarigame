@@ -3,7 +3,7 @@
 
 import { COLS, ROWS, makeTables, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows, applyCaps, applyDots, applyTwins } from './model.js';
 import { Game, MODE, JOY, STATE } from './engine.js';
-import { Atlas, COLORS, applyPlayerColours, cellSize, drawMap, drawTile, drawSprite, drawPlayer, drawHud, PEG_SHAPE } from './render.js';
+import { Atlas, COLORS, applyPlayerColours, bobFloat, cellSize, drawMap, drawTile, drawSprite, drawPlayer, drawHud, PEG_SHAPE } from './render.js';
 import { GROUPS, STAMPS, DOOR_NAMES, DOOR_CELLS, SCENE_W, SCENE_H, sceneFor } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -773,7 +773,7 @@ function drawPlay() {
     let colour = COLORS.player;
     if (g.mode === MODE.SPAWN) colour = `hsl(${(g.mtimer * 22) % 360} 90% 60%)`;
     else if (g.mode === MODE.DYING) colour = g.mtimer & 2 ? '#e84a4a' : COLORS.player;
-    drawPlayer(ctx, sprites[g.frame] || sprites[0], g.px, g.py, cell, colour, g.drawn);
+    drawPlayer(ctx, sprites[g.frame] || sprites[0], g.px, g.py, cell, colour, g.drawn, COLORS.eye, bobFloat(p.tick)); // he bobs, 1 to 3 lines above his box
   }
   drawHud(ctx, cell, { score: g.score, level: p.level, lives: g.lives, left: g.left });
   if (g.mode === MODE.CLEAR) {

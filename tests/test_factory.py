@@ -130,6 +130,68 @@ class OneWayPlatforms(Arena):
 
 
 @needs_emulator
+class ItemsAtHisLevel(Arena):
+    """An item is collected only at HIS level: it must be in the row his feet are in (py+13) and he must not be rising
+    (jumping up, hopping out of a chute, riding up). Walking or jumping up under it does not take it."""
+
+    ITEM_ROW_FEET = 22  # on the floor (py = 168) his body is rows 21 (head) and 22 (feet)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.arena()
+        self.g.poke("left", 9)  # never the last one: the door must not open
+
+    def test_walking_under_an_item_at_head_height_does_not_collect_it(self) -> None:
+        g = self.g
+        g.put_tiles(10, 21, [T["ITEM"]])
+        self.stand(30)
+        g.run(40, RIGHT)  # right through its column (pixels 40-43)
+        self.assertGreater(g.px, 50)
+        self.assertEqual((g.left, g.score16), (9, 0))
+        self.assertEqual(g.tile(10, 21), T["ITEM"], "still there")
+
+    def test_walking_into_an_item_at_his_level_collects_it(self) -> None:
+        g = self.g
+        g.put_tiles(10, self.ITEM_ROW_FEET, [T["ITEM"]])
+        self.stand(30)
+        g.run(40, RIGHT)
+        self.assertEqual((g.left, g.score16), (8, 10))
+        self.assertEqual(g.tile(10, self.ITEM_ROW_FEET), T["EMPTY"])
+
+    def test_jumping_up_under_an_item_does_not_collect_it_but_standing_at_its_level_does(self) -> None:
+        g = self.g
+        g.put_tiles(10, 20, [T["PLATFORM"]] * 5)  # a ledge 3 tiles up (reached by the jump) ...
+        g.put_tiles(12, 19, [T["ITEM"]])  # ... with an item on it (tile column 12 = pixels 48-51)
+        self.stand(48)
+        g.step(FIRE)
+        while g.state == AIR and g.jt != 0xFF:  # the whole rise, through the head row, the body row ...
+            self.assertEqual((g.left, g.score16), (9, 0), f"nothing collected while rising (py {g.py})")
+            g.step()
+        self.assertLess(g.py, FLOOR_Y - 20, "he did rise")
+        g.run(40)  # ... then the fall onto the ledge: now his feet are at the item's level
+        self.assertEqual((g.py, g.state), (FLOOR_Y - 24, GROUND))
+        self.assertEqual((g.left, g.score16), (8, 10), "collected when he is on its level")
+
+    def test_an_item_above_the_ledge_head_row_is_not_collected_by_standing_on_the_ledge(self) -> None:
+        g = self.g
+        g.put_tiles(10, 20, [T["PLATFORM"]] * 5)
+        g.put_tiles(12, 18, [T["ITEM"]])  # two tiles above the ledge: at his head, not his feet
+        self.stand(48, FLOOR_Y - 24)
+        g.run(30)
+        self.assertEqual((g.left, g.score16), (9, 0))
+
+    def test_falling_past_an_item_at_feet_level_collects_it(self) -> None:
+        g = self.g
+        g.put_tiles(12, 16, [T["ITEM"]])
+        self.stand(48, 110)  # (a fall of 58 pixels: under MAX_FALL)
+        g.poke("state", AIR)
+        g.poke("jt", 0xFF)
+        g.run(50)  # drops 2 pixels a frame down to the floor (34 frames)
+        self.assertEqual((g.py, g.state), (FLOOR_Y, GROUND))
+        self.assertEqual((g.left, g.score16), (8, 10))
+
+
+@needs_emulator
 class Stairs(Arena):
     """Steps are thin ledges: you walk straight past them and jump up onto them."""
 

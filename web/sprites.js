@@ -2,7 +2,7 @@
 // server (PUT /api/sprites); the game picks the change up on its next build, the level editor on its next focus.
 
 import { COLORS, applyPlayerColours, atariColour } from './render.js';
-import { ANIMATIONS, BODY, EYE, FLOAT, H, NONE, SpriteDoc, THIRD, W, checkFrames, maxLift, parseSprites, serializeSprites } from './spritemodel.js';
+import { ANIMATIONS, BODY, EYE, FLOAT, H, bobFloat, NONE, SpriteDoc, THIRD, W, checkFrames, maxLift, parseSprites, serializeSprites } from './spritemodel.js';
 
 const $ = (id) => document.getElementById(id);
 const DRAFT_KEY = 'spriteEditor.draft';
@@ -123,10 +123,10 @@ function drawGrid() {
 }
 
 /** One game pixel is 2*s wide and s tall (CSS pixels), s = 1 being the actual size on a 1x screen. */
-function drawScene(cv, rows, scale, { lift = 0, room = 0 } = {}) {
+function drawScene(cv, rows, scale, { lift = 0, room = 0, float = FLOAT } = {}) {
   const pad = 2;
   const wGame = W + 2 * pad;
-  const hGame = room + H + FLOAT + 8; // room above him, his sprite, the gap he floats in, 8 lines of floor
+  const hGame = 1 + room + H + FLOAT + 8; // a line of margin (the bob), room above him, his sprite, the gap he floats in, 8 lines of floor
   cv.width = wGame * 2 * scale;
   cv.height = hGame * scale;
   cv.style.width = `${cv.width}px`;
@@ -135,9 +135,9 @@ function drawScene(cv, rows, scale, { lift = 0, room = 0 } = {}) {
   c.fillStyle = COLORS.bg;
   c.fillRect(0, 0, cv.width, cv.height);
   c.fillStyle = FLOOR;
-  c.fillRect(0, (room + H + FLOAT) * scale, cv.width, 8 * scale);
-  // the bottom of his physics box is the floor; the picture is drawn FLOAT lines above that
-  drawFrame(c, rows, pad, room - lift, 2 * scale, scale);
+  c.fillRect(0, (1 + room + H + FLOAT) * scale, cv.width, 8 * scale);
+  // the bottom of his physics box is the floor; the picture is drawn `float` lines above that (FLOAT, plus the bob when animated)
+  drawFrame(c, rows, pad, 1 + room - lift + (FLOAT - float), 2 * scale, scale);
 }
 
 function thumb(cv, rows) {
@@ -165,7 +165,7 @@ function drawAnim() {
   const t = ticks[i];
   const idx = frameIndex(t.name);
   const cv = $('anim-canvas');
-  drawScene(cv, idx >= 0 ? doc.rows(idx) : doc.rows(0), S.scale, { lift: t.lift, room: maxLift(anim) });
+  drawScene(cv, idx >= 0 ? doc.rows(idx) : doc.rows(0), S.scale, { lift: t.lift, room: maxLift(anim), float: bobFloat(S.tick) }); // the animation bobs like the game
   $('anim-frame').textContent = idx >= 0 ? `${t.name}  (frame ${idx})` : `${t.name}: this file has no such frame`;
 }
 

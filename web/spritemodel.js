@@ -11,6 +11,10 @@ export const W = 8;
 export const H = 16;
 /** Mr. Bubble floats: he is drawn this many scan lines above the surface he stands on (src/main.s PLAYER_FLOAT). Purely visual. */
 export const FLOAT = 2;
+/** On top of the hover he bobs like a bubble: the lines he floats above the surface on each of 64 frames (1 to 3, a slow
+ *  sine; the game indexes bob_float in src/main.s with the OS frame counter and 63). Purely visual. */
+export const BOB_FLOAT = Object.freeze([2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,2,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2]);
+export const bobFloat = (tick) => BOB_FLOAT[tick & 63];
 export const BODY = '#';
 export const EYE = 'e';
 export const THIRD = 'o';

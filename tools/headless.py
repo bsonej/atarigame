@@ -31,7 +31,8 @@ GROUND, AIR, CLIMB, RIDE = 0, 1, 2, 3
 TITLE, PLAY, DYING, SPAWN, CLEAR, OVER = range(6)  # the game's modes
 COLS, ROWS = 40, 24
 PM_YOFF = 32
-PLAYER_FLOAT = 2  # he is drawn this many lines above the top of his physics box (src/main.s)
+PLAYER_FLOAT = 2  # he hovers this many lines above the top of his physics box on average (src/main.s)
+BOB_RANGE = (1, 3)  # ... and bobs between 1 and 3 lines above it: the game's `pfloat` is the float of the last drawing
 SPAWN_FRAMES, DIE_FRAMES, CLEAR_FRAMES = 48, 80, 60
 
 
@@ -203,15 +204,15 @@ class Game:
         return self.mem(self.screen_addr + row * COLS, 256)[col]
 
     def sprite(self) -> bytes:
-        """The 16 bytes of Player 0 where the player is drawn (PLAYER_FLOAT lines above the top of his box)."""
+        """The 16 bytes of Player 0 where the player is drawn (`pfloat` lines above the top of his box: the hover plus the bob)."""
         raw = self.mem(self.pm0, 512)
-        top = PM_YOFF + self.py - PLAYER_FLOAT
+        top = PM_YOFF + self.py - self.pfloat
         return raw[top : top + 16]
 
     def layer(self, page: int) -> bytes:
         """16 bytes of the PM page at PM0 + page (0 Player 0, 0x300 Player 3, -0x100 the missiles = his third colour)."""
         raw = self.mem(self.pm0 + page, 256)
-        top = PM_YOFF + self.py - PLAYER_FLOAT
+        top = PM_YOFF + self.py - self.pfloat
         return raw[top : top + 16]
 
     def eyes(self) -> bytes:

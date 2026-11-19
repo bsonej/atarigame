@@ -22,8 +22,8 @@
 hues       1E 2C 4C 5C 7C 9C AC CC
 grey       0A
 white      0E
-ice        8A        # also Mr. Bubble's third colour (see above)
+ice        86        # also Mr. Bubble's third colour (see above)
 hud        2A
 background 00
-player     4C
+player     5A
 eyes       0E

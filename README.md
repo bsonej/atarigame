@@ -36,6 +36,13 @@ ATTRACT: an AI plays for 30 s, then back to TITLE; fire starts a real game
   `PLAYER_FLOAT` (2) scan lines above the surface he stands on. That is purely visual: the physics box, the collisions and
   the feet-only hazard rules are unchanged (`py` is still the top of a 16 line box whose bottom touches the floor). The
   value lives in `src/main.s`, `web/spritemodel.js`, `tools/render_level.py` and `tools/headless.py`, and a test checks they agree.
+  On top of the hover he **bobs** like a bubble: `draw_player` looks the float up in `bob_float` (64 bytes: 2 + round(sin),
+  so 1, 2 or 3 lines above the surface, never below it and never more than 3 above, a period of 64 frames) indexed by the
+  OS frame counter `RTCLOK+2` (no new state in the game; the lookup is stored in the zero-page `pfloat` for the tests). All
+  layers (body, eyes, the four missiles) use the same value and the same hide/wrap rule (`py - pfloat` of 200 or more hides
+  him). It is purely visual: no physics, collision or hazard change, and it is not part of the state `test_engine.py`
+  compares. `web/spritemodel.js` has the same table (`BOB_FLOAT`; a test checks it equals `main.s`), used by the editor's
+  test play and the sprite editor's animation preview; `tools/render_level.py` keeps the mean hover (`PLAYER_FLOAT`).
   If `py` is so far above the screen that the image would start above PM byte 0 (the death hop), he is hidden rather than wrapped.
 - **He has three colours**, all set in `assets/palette.txt`: `player` (body, Player 0, pink `$4E`), `eyes` (Player 3, white
   `$0E`) and a third (pupils and grin, `o` in `sprites.txt`) that is **the `ice` entry**. The third layer is drawn with the
@@ -190,6 +197,14 @@ edge he is on, he can slide on (he rose into a block and slides about in it and 
 as before, but never inside a solid: if a solid tile is at the lowest row of his body (`py+15`) he keeps falling until he is clear,
 so a block he rose into lets him fall out of its bottom (or land on its top if his feet got above it).
 
+**Items are taken at his level only.** Rising through a tile does not collect what is in it. An item is picked up only
+when it is in the row of his feet (the point 13 pixels below `py`; the head and the middle of his body never take one)
+and he is not rising (the up phase of a jump or of the hop out of an up chute, or a ride up a chute). Walking, standing,
+climbing, riding down and falling all take it. So you walk into an item on your own floor, you take an item on a ledge by
+landing or standing on that ledge, and an item hanging at head height over the floor cannot be taken by walking or jumping
+under it (put something under it to stand on). Dots are unchanged (eaten when standing on their tile). `check_tiles` in
+`src/main.s` and `checkTiles` in `web/engine.js`; the door is still entered by any overlap.
+
 Notes for map builders:
 
 - Bomb blocks and vanishing blocks in the bottom row leave a one-tile hole you can walk out of, not a pit: put them on
@@ -213,7 +228,8 @@ Notes for map builders:
   or one-way.
 
 `tools/levelcheck.py` models a competent player (walk, stairs, ladders, chutes, jumps up to three tiles and across six or seven, drops up
-to eight tiles) and reports items it cannot reach and chutes that are not single-wide vertical runs. It is an approximation: it ignores pegs, treats bomb and vanishing
+to eight tiles) and reports items it cannot reach (an item counts only if he can *stand* in its row, with his feet on the
+row under it, in its column or a neighbour, or climb past it on a ladder: a jump up into it from below does not take it; the door keeps the old overlap reach) and chutes that are not single-wide vertical runs. It is an approximation: it ignores pegs, treats bomb and vanishing
 blocks as solid, and cannot tell you a map is fair.
 
 Adding a level: drop `assets/levels/levelN.txt` next to the others; it is picked up automatically. A level must have
@@ -323,7 +339,7 @@ tables and that the display-list interrupt runs 23 times a frame. They do **not*
 whether the colour changes land cleanly at the start of each row (the interrupt waits for the end of the line with `WSYNC`
 before writing, so there should be no visible tearing, but nobody has looked), the colours themselves (the editor and
 `render_level.py` use an approximation of the Atari palette, so the real hues will differ a little), how the font and animations look, and the vertical offset of the player sprite
-(`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield, and the 2 line float above the surface) were only reasoned about. The same goes for the
+(`PM_YOFF` in `main.s`, assumed 32 for a standard-height playfield, and the 2 line float above the surface, with its 1-3 line bob: how smooth and how light it looks) were only reasoned about. The same goes for the
 new tiles: their art, the deep blue used for ice and the police box (`COLOR3`, `ice` in `assets/palette.txt`), the door's pixel fade, the moving-pixel belt animation, the chutes' turning thread and the ride (the art, its speed and how it reads on a real display, the two directions, and how the ride and the hop out of an up chute feel), the red pegs and Mr. Bubble, a round pink bubble with white eyes (Player 3 drawn behind Player 0, so the eyes only show where the body has a hole) and the third colour (the four missiles as a fifth sprite with `GPRIOR` bit 4: that the missiles line up with the player, the colour of `COLPF3` and the priority behind the body were checked only in memory, not on a real display or screenshot) have never been
 looked at on a real display, and the numbers for speeds, fuses and friction are a first guess to be tuned by playing.
 Maps 4 and 5 have not been completed by anything (the AI clears 1-3 in about 1,000 frames each; on 4 and 5 it ran out of its 3,000-frame test budget with 32 and 16 things left, and it never dies): the AI gets round most of both (it climbs the stairs and ladders,

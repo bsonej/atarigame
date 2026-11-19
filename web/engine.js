@@ -640,10 +640,15 @@ export class Game {
   }
 
   // ---- items, spikes -------------------------------------------------------------------------
+  // An item is only collected AT HIS LEVEL: only the feet points (the last two, py+13: the row his feet are in) collect
+  // it, never the head or mid-body ones, and neither does rising (the up phase of a jump or hop, or a ride up a chute):
+  // he is passing through it from below. Standing, walking, climbing, riding down and falling collect it.
   checkTiles() {
+    const rising = (this.state === STATE.AIR && this.jt !== 0xff) || (this.state === STATE.RIDE && this.rkind !== 0);
     for (let i = 0; i < 6; i++) {
       const t = this.getTile(u8(this.px + PT_DX[i]), u8(this.py + PT_DY[i]));
       if (t === this.T.ITEM) {
+        if (i < 4 || rising) continue;
         this.map[this.ptr] = this.T.EMPTY;
         this.pickup();
       } else if (this.doorOpen && this.door && t >= this.door[0] && t <= this.door[5]) {

@@ -19,7 +19,7 @@
         .exportzp px, py, state, jt, hop, hdir, rkind, fall, score, hiscore, left, lives, level, lvlidx
         .exportzp mode, demo, demo_n, timer, mtimer, frame, drawn, deaths, joy, anim, moved, flash
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
-        .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir
+        .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir, pfloat
         .export tt_col, tt_row, tt_t, tt_ph, tt_kind, tt_orig, pg_x, pg_y, pg_min, pg_max, pg_dir, pg_wait, cph
         .export pal0, pal1, pal2, pal3, dli_row, dli_n, ai_kind, door_open, door_dir, door_phase, door_art, face
 
@@ -79,6 +79,8 @@ PM_YOFF = 32            ; PM byte index of the first playfield scan line
 PM0Y    = PM0 + PM_YOFF
 PLAYER_FLOAT = 2        ; he is a bubble: drawn this many scan lines above the surface he stands on (purely visual;
                         ; the physics box is unchanged). Keep equal to FLOAT in web/spritemodel.js and tools/headless.py.
+                        ; On top of that he bobs: bob_float holds the actual float for each of 64 frames (1 to 3 lines,
+                        ; PLAYER_FLOAT +/- 1, a slow sine), indexed by the OS frame counter (RTCLOK+2) and kept in pfloat.
 PM3Y    = PM0Y + $300     ; Player 3: the eyes
 MISSY   = PMAREA + $0300 + PM_YOFF      ; the missiles: 2 bits a line each, M0 in bits 1-0 ... M3 in bits 7-6
 ; His colours come from assets/palette.txt (gen/palette.inc): PAL_PLAYER (the body, Player 0), PAL_EYES (Player 3) and
@@ -162,6 +164,7 @@ OVER_SECS    = 10
 px:       .res 1
 py:       .res 1
 oldpy:    .res 1
+pfloat:   .res 1        ; lines he floated above his box the last time he was drawn (PLAYER_FLOAT +/- the bob)
 state:    .res 1
 jt:       .res 1        ; index into jump_dy, $FF = not rising
 cx:       .res 1        ; the pixel column of the edge he is on while stepping (see step_to)
@@ -1415,7 +1418,22 @@ check_tiles:
         lda door_open           ; ... once it is there
         beq @skip
         jmp level_clear
-@item:  lda #T_EMPTY
+@item:  lda tmp2                ; an item is only collected AT HIS LEVEL: only the feet points (the last two, py+13: the
+        cmp #4                  ; row his feet are in) collect it, never the head or mid-body ones, and neither does
+        bcc @skip               ; rising (the up phase of a jump or hop, or a ride up a chute): he is passing through
+        lda state               ; it from below. Standing, walking, climbing, riding down and falling collect it.
+        cmp #S_AIR
+        bne @notair
+        lda jt
+        cmp #$FF
+        bne @skip               ; rising in a jump
+        beq @take
+@notair:
+        cmp #S_RIDE
+        bne @take
+        lda rkind
+        bne @skip               ; carried up a chute
+@take:  lda #T_EMPTY
         ldy #0
         sta (ptr),y             ; remove it from the screen
         jsr pickup
@@ -2268,8 +2286,8 @@ choose_frame:
 ; Draw the player sprite: erase the old image, copy the first `drawn` lines of `frame`, position it. He is three
 ; layers: the body (Player 0), the eyes (Player 3) and the third colour (the four missiles, each 2 clocks wide, side by
 ; side at HPOS, +2, +4 and +6; the missile page holds 2 bits per missile per line, see spr_third). The image starts
-; PLAYER_FLOAT lines above the top of the physics box (py), i.e. at PM byte py - PLAYER_FLOAT + PM_YOFF. If py is
-; less than PLAYER_FLOAT (he is above the screen, as in the death hop) the subtraction wraps to 254 or 255 and, like any
+; pfloat (1 to 3, PLAYER_FLOAT +/- the bob) lines above the top of the physics box (py), i.e. at PM byte py - pfloat +
+; PM_YOFF. If py is less than pfloat (he is above the screen, as in the death hop) the subtraction wraps to 253..255 and, like any
 ; value of 200 or more, hides him: nothing is drawn, nothing is written above or below the 256 bytes of a player.
 draw_player:
         ldx oldpy
@@ -2294,9 +2312,14 @@ draw_player:
         sta HPOSM0+2
         adc #2
         sta HPOSM0+3
+        lda RTCLOK+2            ; the bubble drifts up and down: 1 to 3 lines above his box, a period of 64 frames
+        and #63
+        tax
+        lda bob_float,x
+        sta pfloat
         lda py
         sec
-        sbc #PLAYER_FLOAT       ; he floats above his box
+        sbc pfloat              ; he floats above his box
         cmp #200
         bcc @on
         lda #200                ; off the screen (above or below): nothing to draw, and next time nothing to erase
@@ -3441,6 +3464,13 @@ pow_hi: .byte >10000, >1000, >100, >10, >1
 
 ; Pixels the player rises on each frame of a jump (0 ends the rise).
 jump_dy: .byte 3,3,3,3,3,2,2,2,2,1,1,1,0
+
+; Lines he floats above his box on each of 64 frames (index RTCLOK+2 and 63): 2 + round(sin), so 1 to 3.
+bob_float:
+        .byte 2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3
+        .byte 3,3,3,3,3,3,3,3,3,3,3,2,2,2,2,2
+        .byte 2,2,2,2,2,2,1,1,1,1,1,1,1,1,1,1
+        .byte 1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2
 
 ; The death hop: signed pixels per frame, then a steady fall.
 die_dy:  .byte $FC,$FC,$FD,$FD,$FE,$FE,$FF,$FF,0,1,1,2,2,3,3,4,4,5,5

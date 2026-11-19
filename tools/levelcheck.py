@@ -11,6 +11,9 @@ Bomb blocks and vanishing blocks count as solid, belts and ice do not change whe
 are ignored (the player is expected to jump them, so spikes are only checked for headroom). So "reachable" here
 means "reachable by a competent player"; it cannot tell you the level is fun or fair. Chutes must be isolated,
 single-wide vertical runs of one kind (`\\` down, `/` up); diagonal or side-by-side chutes are rejected.
+An item is collected only at HIS level (never by jumping up into it from below), so it counts as reachable only if he
+can stand in the row of the item (feet on the row under it, in its column or a neighbour); the door is entered by any
+overlap and keeps the old reach (up to 3 tiles above a standing cell).
 Exit status is 1 if any item, dot or the door (or the start) is unreachable or a chute is laid out wrongly.
 """
 
@@ -182,7 +185,10 @@ class Level:
                     spots |= {(c, k + 1) for k in range(run[0], run[1] + 1)}
         got = set()
         for ic, ir in self.items:
-            if any(abs(c - ic) <= 1 and r - 4 <= ir <= r - 1 for c, r in spots):
+            if self.t(ic, ir) == "D":  # the door is entered by any overlap, a jump up into it included
+                if any(abs(c - ic) <= 1 and r - 4 <= ir <= r - 1 for c, r in spots):
+                    got.add((ic, ir))
+            elif any(abs(c - ic) <= 1 and r == ir + 1 for c, r in spots):  # an item: he must stand at its level
                 got.add((ic, ir))
         return got
 

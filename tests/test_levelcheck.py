@@ -90,6 +90,15 @@ class LevelCheck(unittest.TestCase):
         self.assertEqual(lc.check(make({(20, 19): "*", **{(c, 20): "#" for c in range(19, 24)}})), [])  # a ledge 3 up
         self.assertTrue(lc.check(make({(20, 18): "*", **{(c, 19): "#" for c in range(19, 24)}})), "4 tiles up is too high")
 
+    def test_an_item_he_could_only_hit_from_below_is_reported(self) -> None:
+        # it floats at head height over the floor (row 21; he stands in rows 21-22): walking and jumping under it
+        # never collect it, he must be at its level
+        problems = lc.check(make({(20, 21): "*"}))
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("item at column 20, row 21", problems[0])
+        # with a block under it to stand on (row 22) it is fine
+        self.assertEqual(lc.check(make({(20, 21): "*", (20, 22): "#"})), [])
+
     def test_an_up_chute_makes_a_high_ledge_reachable(self) -> None:
         ledge = {(20, 12): "*", **{(c, 13): "#" for c in range(16, 23)}}
         self.assertTrue(lc.check(make(ledge)))

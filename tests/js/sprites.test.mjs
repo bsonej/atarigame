@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   THIRD,
-  ANIMATIONS, FLOAT, H, SpriteDoc, W, blankRows, checkFrames, counterpartName, flipRows, linePixels, maxLift, parseSprites,
+  ANIMATIONS, BOB_FLOAT, FLOAT, H, SpriteDoc, W, blankRows, checkFrames, counterpartName, flipRows, linePixels, maxLift, parseSprites,
   serializeSprites, toBytes,
 } from '../../web/spritemodel.js';
 import { api, ROOT } from './helpers.mjs';
@@ -248,6 +248,16 @@ test('the preview cycles only use frames the file has, and the jump comes back t
 
 test('he floats one or two pixels above the surface', () => {
   assert.ok(FLOAT >= 1 && FLOAT <= 2);
+});
+
+test('the bob stays within 1 to 3 lines above the surface and agrees with the table in main.s', () => {
+  assert.equal(BOB_FLOAT.length, 64);
+  assert.equal(Math.min(...BOB_FLOAT), 1);
+  assert.equal(Math.max(...BOB_FLOAT), 3);
+  assert.ok(BOB_FLOAT.every((v, i) => Math.abs(v - BOB_FLOAT[(i + 1) % 64]) <= 1), 'one line at a time');
+  const asm = fs.readFileSync(path.join(ROOT, 'src/main.s'), 'utf8');
+  const body = /^bob_float:\n((?:\s+\.byte [\d,]+\n)+)/m.exec(asm)[1];
+  assert.deepEqual([...body.matchAll(/\d+/g)].map((m) => Number(m[0])), [...BOB_FLOAT]);
 });
 
 test('the third colour is free: any single pixel can be o, painted and erased one at a time', () => {
