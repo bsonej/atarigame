@@ -54,7 +54,7 @@ ATTRACT: an AI plays for 30 s, then back to TITLE; fire starts a real game
   his pupils too. Its priority is that of playfield colour 3, so it sits **behind the body and the eyes** (it shows through
   their holes, which is what the pupils and the grin are) and in front of the background, but behind playfield colours 0-2
   (so over a platform or a ladder pixel his pupils are hidden). Each `o` pixel is free (a missile is a 2-bit-wide player, one pixel per bit); a pixel is one character, so there is no pixel that is body and third at once.
-- **Death animation**: red flash, the player hops, tumbles off the bottom of the screen, a falling tone.
+- **Death animation**: red flash, the player hops, tumbles off the bottom of the screen, a falling tone. Falling past the bottom of the screen is death too: below the playfield there is nothing to land on.
 - **Come to life animation**: at every start and respawn the player is drawn line by line from the top, then blinks, in
   cycling colours with a rising tone. You cannot move until it ends.
 - **Game over screen** with the score, the hi-score and NEW HIGH SCORE!; fire (after one second) or 10 s returns to the title.

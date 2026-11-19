@@ -635,12 +635,18 @@ tile_standable:
 @no:    clc
         rts
 
-; C set if the player's feet rest on something.
+; C set if the player's feet rest on something. A feet line past the last tile row (191 and on; the floor tile
+; fills 184-190) is below the playfield: the abyss, so falling off the bottom of the screen is death. (get_tile
+; returns brick there, which would otherwise be an invisible floor.)
 ground_below:
         lda py
         clc
         adc #SPR_H
-        sta ty
+        cmp #191
+        bcc @on
+        clc
+        rts
+@on:    sta ty
         lda px
         sta tx
         jsr tile_standable
@@ -1282,6 +1288,9 @@ air_fall:
         jsr feet_clear
         bcs @land
 @fall:  inc py
+        lda py
+        cmp #240                ; fallen out of sight: death (the death animation's own fall stops at 200)
+        bcs @abyss
         inc fall
         dec tmp2
         bne @step
@@ -1300,6 +1309,8 @@ air_fall:
         sta fall
         sta jumped
 @bounced:
+        rts
+@abyss: jmp die
         rts
 
 ; Landing on a trampoline after a JUMP (air_fall only calls this when `jumped` is set; walking off an edge is an ordinary

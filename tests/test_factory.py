@@ -554,6 +554,17 @@ class JumpingThroughThings(Arena):
 
 @needs_emulator
 class SlowFall(Arena):
+    def test_falling_off_the_bottom_of_the_screen_is_death(self) -> None:
+        g = self.g
+        self.arena()
+        g.put_tiles(1, 23, [0] * 38)  # no floor: the abyss
+        self.stand(60, 170)
+        g.poke("state", AIR)
+        g.poke("jt", 0xFF)
+        g.run(40)
+        self.assertEqual(g.mode, DYING, "below the playfield nothing catches him")
+        self.assertGreaterEqual(g.py, 192)
+
     def test_the_lethal_fall_is_still_64_pixels(self) -> None:
         g = self.g
         self.arena()

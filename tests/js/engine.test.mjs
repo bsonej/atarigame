@@ -659,6 +659,17 @@ test('a bounce is automatic: a long fall onto a trampoline does not hurt and bou
   assert.equal(hard.mode, MODE.DYING, 'the same fall onto a plain floor kills');
 });
 
+test('falling off the bottom of the screen is death: below the playfield nothing catches him', () => {
+  const g = play(room({ '23,1': '.'.repeat(38) })); // no floor: the abyss
+  g.px = 11 * 4;
+  g.py = 170;
+  g.state = STATE.AIR;
+  g.jt = 0xff;
+  run(g, 40);
+  assert.equal(g.mode, MODE.DYING, 'below the playfield nothing catches him');
+  assert.ok(g.py >= 192);
+});
+
 test('the same fall without a jump is an ordinary landing: no bounce, and the usual fall death', () => {
   const g = play(room({ '23,10': 'TTTT', '12,8': '#######' }));
   g.px = 11 * 4;

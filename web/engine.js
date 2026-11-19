@@ -190,7 +190,11 @@ export class Game {
   }
 
   groundBelow() {
+    // a feet line past the last tile row (191 and on; the floor tile fills 184-190) is below the playfield: the
+    // abyss, so falling off the bottom of the screen is death (getTile returns brick there, which would otherwise be
+    // an invisible floor)
     const ty = u8(this.py + SPR_H);
+    if (ty >= 191) return false;
     return this.tileStandable(this.px, ty) || this.tileStandable(u8(this.px + 3), ty);
   }
 
@@ -721,6 +725,7 @@ export class Game {
         return;
       }
       this.py = u8(this.py + 1);
+      if (this.py >= 240) return this.die(); // fallen out of sight (the death animation's own fall stops at 200)
       this.fall = u8(this.fall + 1);
     }
   }
