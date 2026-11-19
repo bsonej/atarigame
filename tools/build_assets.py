@@ -65,11 +65,13 @@ def parse_tiles(path: Path) -> list[dict]:
         if text.startswith("tile "):
             parts = text.split()
             if len(parts) < 4:
-                raise AssetError(f"{path}:{n}: expected 'tile <id> <NAME> <char> [solid] [oneway] [alt]'")
+                raise AssetError(f"{path}:{n}: expected 'tile <id> <NAME> <char> [solid] [oneway] [alt] [glow]'")
             flags = parts[4:]
             for f in flags:
-                if f not in ("solid", "oneway", "alt"):
-                    raise AssetError(f"{path}:{n}: unknown tile flag {f!r} (use solid, oneway, alt)")
+                if f not in ("solid", "oneway", "alt", "glow"):
+                    raise AssetError(f"{path}:{n}: unknown tile flag {f!r} (use solid, oneway, alt, glow)")
+            if "glow" in flags and "alt" in flags:
+                raise AssetError(f"{path}:{n}: a tile cannot be both alt and glow (glow is the same tile in the other colour)")
             if "solid" in flags and "oneway" in flags:
                 raise AssetError(f"{path}:{n}: a tile cannot be both solid and oneway")
             try:
@@ -94,6 +96,7 @@ def parse_tiles(path: Path) -> list[dict]:
                 "char": char,
                 "solid": "solid" in flags,
                 "oneway": "oneway" in flags,
+                "glow": "glow" in flags,
                 "rows": [],
             }
             tiles.append(cur)
@@ -354,7 +357,8 @@ def tile_tables(tiles: list[dict]) -> tuple[list[int], list[int]]:
 
     tile_flags: bit 0 solid, bit 1 one-way, bit 2 a tile with a dot in it. tile_canon: the tile that byte stands
     for (a platform end cap or a dotted tile stands for its plain tile, every other byte for itself), so the
-    game's rules never need to know about caps and dots."""
+    game's rules never need to know about caps and dots. A ``glow`` tile also has its byte + 128 in the tables: the
+    same tile, which the game puts on the screen for a moment to make it flicker."""
     flags = [0] * 256
     canon = list(range(256))
     for t in tiles:
@@ -369,6 +373,9 @@ def tile_tables(tiles: list[dict]) -> tuple[list[int], list[int]]:
     for t in tiles:
         if t.get("frame_of"):  # an animation frame stands for its tile (or for the plain tile of the end cap it is a frame of)
             canon[t["byte"]] = next(f for f in tiles if f["name"] == t["frame_of"])["byte"]
+        if t.get("glow"):  # the same tile in the other colour (bit 7): the game flips between the two (the teleporter charging)
+            flags[t["byte"] | 0x80] = flags[t["byte"]]
+            canon[t["byte"] | 0x80] = t["byte"]
     return flags, canon
 
 
@@ -634,9 +641,10 @@ def render_sprites(frames: list[tuple[str, list[int], list[int], list[int]]]) ->
 def parse_level(path: Path, tile_chars: dict[str, int], solid_bytes: set[int] | None = None,
                 caps: dict[int, dict[str, int]] | None = None, text: str | None = None,
                 dots: dict[int, int] | None = None, door: tuple[int, ...] | None = None,
-                twins: dict[int, int] | None = None) -> dict:
+                twins: dict[int, int] | None = None, teleport: tuple[int, int] | None = None) -> dict:
     """Compile one level file (or `text`, with `path` only naming it in messages). ``dots`` maps a platform tile
-    to its dotted twin; ``twins`` maps a tile to the one drawn in its place on odd rows; ``door`` is the bytes of the six tiles of the exit door (see ``door_bytes``). A ``D`` in the map
+    to its dotted twin; ``twins`` maps a tile to the one drawn in its place on odd rows; ``teleport`` is the bytes of the two
+    teleport tiles (``teleport_bytes``: TELEPORT, TELEPORT_ONCE); ``door`` is the bytes of the six tiles of the exit door (see ``door_bytes``). A ``D`` in the map
     is the door's bottom left tile; the compiler fills in the other five."""
     solid_bytes = solid_bytes if solid_bytes is not None else {1}
     if text is None:
@@ -685,6 +693,12 @@ def parse_level(path: Path, tile_chars: dict[str, int], solid_bytes: set[int] | 
         for c, r in doors:
             for tile, (dc, dr) in zip(door, DOOR_CELLS):
                 data[(r - dr) * COLS + c + dc] = tile
+    if teleport is not None:
+        kinds = {(i % COLS, i // COLS): teleport.index(b) for i, b in enumerate(data) if b in teleport}
+        blocking = set(solid_bytes) | ({tile_chars["^"]} if "^" in tile_chars else set())
+        problems = teleport_problems(kinds, lambda c, r: data[r * COLS + c] in blocking)
+        if problems:
+            raise AssetError(f"{path}: {problems[0]}")
     platform = platform_bytes(tile_chars, solid_bytes, door)
     pegs = [peg_for(path, data, c, r, solid_bytes, platform) for c, r in peg_marks]
     if len(pegs) > MAX_PEGS:
@@ -767,6 +781,94 @@ def render_levels(levels: list[dict]) -> str:
         "level_sy:    .byte " + ",".join(str(lv["spawn"][1] * 8) for lv in levels),  # start py
     ]
     return "\n".join(out) + "\n"
+
+
+# ------------------------------------------------------------- teleporters
+
+MAX_TELEPORT_GROUP = 64  # the game's flood fill keeps one stack entry per tile of a group of teleport tiles
+TELEPORT_NAMES = ["TELEPORT", "TELEPORT_ONCE"]
+
+
+def teleport_bytes(tiles: list[dict]) -> tuple[int, int] | None:
+    """The map bytes of TELEPORT and TELEPORT_ONCE if the tile set has them. The game needs the two to have the ids 125
+    and 126, and leaves id 127 blank (its flood fill marks a group by writing that byte over it for a moment)."""
+    by_name = {t["name"]: t for t in tiles}
+    if not all(n in by_name for n in TELEPORT_NAMES):
+        return None
+    got = tuple(by_name[n]["byte"] for n in TELEPORT_NAMES)
+    if got != (125, 126):
+        raise AssetError(f"the teleport tiles must have the ids 125 and 126, got {got[0]} and {got[1]}")
+    if any(t["id"] == 127 for t in tiles):
+        raise AssetError("tile id 127 must stay free: the teleport code marks tiles with it")
+    return got
+
+
+def teleport_groups(kinds: dict[tuple[int, int], int]) -> list[dict]:
+    """The teleporters of a level. ``kinds`` maps (column, row) to the kind of every teleport tile (0 = TELEPORT, 1 =
+    TELEPORT_ONCE). Teleport tiles that touch (left, right, above, below) are ONE teleporter, whatever their kinds. Returns
+    them in reading order of their first tile (top row first, then leftmost): {"tiles": [(col, row), ...] in reading
+    order, "head": the first of them, "kinds": the set of kinds in it}. The game goes from a teleporter to the next in
+    this order (the last to the first) and arrives on the head tile."""
+    seen: set[tuple[int, int]] = set()
+    groups = []
+    for r, c in sorted((r, c) for c, r in kinds):
+        if (c, r) in seen:
+            continue
+        todo, tiles = [(c, r)], []
+        seen.add((c, r))
+        while todo:
+            x, y = todo.pop()
+            tiles.append((x, y))
+            for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if n in kinds and n not in seen:
+                    seen.add(n)
+                    todo.append(n)
+        tiles.sort(key=lambda t: (t[1], t[0]))
+        groups.append({"tiles": tiles, "head": tiles[0], "kinds": {kinds[t] for t in tiles}})
+    groups.sort(key=lambda g: (g["head"][1], g["head"][0]))
+    return groups
+
+
+def teleport_problems(kinds: dict[tuple[int, int], int], blocked) -> list[str]:
+    """What is wrong with the teleporters of a level (none, if it has none): a group that mixes the two kinds, a group too
+    big for the game's flood fill, no room to stand on the group's first tile (``blocked(col, row)`` is true for a tile
+    he cannot stand in: solid or spikes), and a level with teleport tiles but fewer than two groups."""
+    groups = teleport_groups(kinds)
+    out = []
+    for g in groups:
+        c, r = g["head"]
+        if len(g["kinds"]) > 1:
+            out.append(f"the teleporter whose first tile is at column {c}, row {r} mixes the two kinds of teleport tile (all the tiles that touch must be of one kind)")
+        if len(g["tiles"]) > MAX_TELEPORT_GROUP:
+            out.append(f"the teleporter at column {c}, row {r} is {len(g['tiles'])} tiles (at most {MAX_TELEPORT_GROUP} that touch)")
+        if r < 3 or blocked(c, r - 1) or blocked(c, r - 2):
+            out.append(f"no room to stand on the teleporter at column {c}, row {r} (its first tile, where you arrive, needs two free tiles above it)")
+    if groups and len(groups) < 2:
+        c, r = groups[0]["head"]
+        out.append(f"the teleporter at column {c}, row {r} is the only one: a level with teleport tiles needs at least two separate teleporters to go between")
+    return out
+
+
+# Teleporting dissolves him in 16 steps and rebuilds him in 16: the sprite is ANDed with an ordered-dither mask. Step s (0 = whole,
+# 16 = gone) shows the pixel at (x, y) if the 4x4 Bayer matrix entry at (y mod 4, x mod 4) is at least s, so every step
+# takes one more pixel out of each 4x4 block. A mask byte is the row's 4 columns twice over (a nibble n gives n * 17); the
+# missiles (his third colour) take the byte rotated left by two bits, because of the way their bits are laid out.
+BAYER4 = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
+DISSOLVE_STEPS = 16
+
+
+def dissolve_masks() -> list[int]:
+    """(DISSOLVE_STEPS + 1) steps of 4 mask bytes (one per row mod 4), step-major: index 4 * step + row % 4."""
+    out = []
+    for step in range(DISSOLVE_STEPS + 1):
+        for row in range(4):
+            nib = sum(8 >> k for k in range(4) if BAYER4[row][k] >= step)
+            out.append(nib * 17)
+    return out
+
+
+def render_dissolve() -> str:
+    return "; Generated by tools/build_assets.py - do not edit.\ntp_mask:\n" + _bytes_block(dissolve_masks(), 4) + "\n"
 
 
 DOOR_W, DOOR_H = 2, 3
@@ -914,7 +1016,8 @@ def build(root: Path, out: Path) -> None:
     dots = dot_families(tiles)
     twins = twin_families(tiles)
     door = door_bytes(tiles)
-    levels = [parse_level(p, chars, solid_bytes, caps, dots=dots, door=door, twins=twins) for p in paths]
+    tele = teleport_bytes(tiles)
+    levels = [parse_level(p, chars, solid_bytes, caps, dots=dots, door=door, twins=twins, teleport=tele) for p in paths]
     cmap = font_charmap(font)
     screens = [(p.stem, parse_screen(p, cmap, chars)) for p in sorted((assets / "screens").glob("*.txt"))]
     out.mkdir(parents=True, exist_ok=True)
@@ -924,6 +1027,7 @@ def build(root: Path, out: Path) -> None:
     if (assets / "palette.txt").exists():
         (out / "palette.inc").write_text(render_palette(parse_palette(assets / "palette.txt")))
     (out / "fade.inc").write_text(render_fade())
+    (out / "dissolve.inc").write_text(render_dissolve())
     (out / "helix.inc").write_text(render_helix(tiles))
     (out / "font.inc").write_text(render_font_include(font))
     (out / "sprites.inc").write_text(render_sprites(frames))

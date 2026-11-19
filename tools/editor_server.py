@@ -94,6 +94,7 @@ class Project:
                     "solid": t["solid"],
                     "oneway": t["oneway"],
                     "alt": t["byte"] != t["id"],
+                    "glow": bool(t.get("glow")),
                     "family": t.get("family"),
                     "cap": t.get("cap"),
                     "dotOf": t.get("dot_of"),
@@ -109,6 +110,7 @@ class Project:
             "doorCells": [list(c) for c in ba.DOOR_CELLS],
             "fade": ba.fade_thresholds(),
             "fadeSteps": ba.FADE_STEPS,
+            "dissolve": ba.dissolve_masks(),
             "palette": ba.parse_palette(pal_path) if pal_path.exists() else None,
             "maxCollect": ba.MAX_COLLECT,
             "flags": flags,
@@ -278,7 +280,8 @@ class Project:
         solid = {t["byte"] for t in tiles if t["solid"]}
         try:
             ba.parse_level(Path(f"{name}.txt"), chars, solid, ba.cap_families(tiles), text=text,
-                           dots=ba.dot_families(tiles), door=ba.door_bytes(tiles), twins=ba.twin_families(tiles))
+                           dots=ba.dot_families(tiles), door=ba.door_bytes(tiles), twins=ba.twin_families(tiles),
+                           teleport=ba.teleport_bytes(tiles))
         except ba.AssetError as e:
             raise ApiError(400, str(e).removeprefix(f"{name}.txt: ")) from None
         rows = [ln for ln in text.splitlines() if ln.strip() and not ba._is_comment(ln)]

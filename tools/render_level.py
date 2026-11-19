@@ -66,7 +66,7 @@ def render(level: Path, out: Path, scale: int = 6, root: Path = ROOT, level_inde
     chars = {t["char"]: t["byte"] for t in tiles if t["char"] is not None}
     solid = {t["byte"] for t in tiles if t["solid"]}
     lv = ba.parse_level(level, chars, solid, ba.cap_families(tiles), dots=ba.dot_families(tiles), door=ba.door_bytes(tiles),
-                         twins=ba.twin_families(tiles))
+                         twins=ba.twin_families(tiles), teleport=ba.teleport_bytes(tiles))
     if level_index is None:  # its place among the shipped levels
         names = sorted((root / "assets" / "levels").glob("*.txt"), key=ba.natural_key)
         level_index = next((i for i, n in enumerate(names) if n.stem == level.stem), 0)

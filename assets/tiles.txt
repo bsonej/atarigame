@@ -1,6 +1,6 @@
 # Playfield tiles for ANTIC mode 4 (4 colours). Each tile is 4 pixels wide and 8 rows tall.
 #
-#   tile <id> <NAME> <map-char> [solid] [oneway] [alt]
+#   tile <id> <NAME> <map-char> [solid] [oneway] [alt] [glow]
 #   <8 rows of 4 digits>      0 = background, 1 = COLOR0, 2 = COLOR1, 3 = COLOR2 (COLOR3 for an alt tile)
 #
 # What the four colours are is decided per row of the screen (a display-list interrupt changes them
@@ -15,6 +15,9 @@
 #   oneway  can be stood on from above only; you can jump up through it and walk through it
 #   alt     drawn in the second colour (COLOR3) for pixel value 3: the map byte is id + 128, so
 #           T_<NAME> is that byte. Use it for a tile that needs a colour the others do not have.
+#   glow    the tile also exists as its map byte + 128: the same glyph with pixel value 3 in the other colour (white <->
+#           ice blue). The game flips a teleporter between the two while it charges. The tables (tile_flags, tile_canon)
+#           treat both bytes as the tile. Not for alt tiles (the id + 128 byte is theirs already).
 #
 #   cap <id> <FAMILY> <L|R|LR> [rows=a-b] [outline=n]
 #           the left end, right end, or both ends of a platform tile. You never put these in a map: the
@@ -694,6 +697,31 @@ cap 113 VANISH LR
 2002
 2332
 0330
+
+# Teleporters (see "Teleports" in README.md and tp_update in main.s): solid pads like the trampoline's, no dots, no end caps.
+# Teleport tiles that touch are ONE teleporter. Stand on one for a second and he dissolves and is rebuilt on the next
+# teleporter in reading order. TELEPORT works any number of times; TELEPORT_ONCE (a different, dashed glow) is a one-way
+# trip: after he teleports away from it the whole pad becomes plain brick. Ids 125 and 126 are required (the game's
+# flood fill marks tiles with the unused id 127); both are `glow` tiles, whose pixel value 3 flips colour while charging.
+tile 125 TELEPORT Z solid glow
+3333
+1331
+0110
+0000
+0000
+0000
+0000
+0000
+
+tile 126 TELEPORT_ONCE z solid glow
+3131
+1313
+0101
+0000
+0000
+0000
+0000
+0000
 
 # Conveyor belts: the end wheels are made from the belt art; rows 0-1 are the moving surface and stay as they are.
 

@@ -13,6 +13,7 @@ export const MAX_PEGS = 2;
 export const F_SOLID = 1;
 export const F_ONEWAY = 2;
 export const F_DOT = 4;
+export const MAX_TELEPORT_GROUP = 64; // the game's flood fill keeps one stack entry per tile of a group
 
 /** What the server's /api/tiles describes, made handy: char -> byte, solid bytes, cap and dot families, the door. */
 export function makeTables(api) {
@@ -36,7 +37,8 @@ export function makeTables(api) {
   return {
     chars, solid, caps, dots, dotted, twins, byByte, T, flags: api.flags, canon: api.canon, tiles: api.tiles,
     door: api.door || null, doorCells: api.doorCells || [], fade: api.fade || [], fadeSteps: api.fadeSteps || 16,
-    palette: api.palette || null, maxCollect: api.maxCollect || 250,
+    palette: api.palette || null, maxCollect: api.maxCollect || 250, dissolve: api.dissolve || [],
+    teleport: T.TELEPORT !== undefined && T.TELEPORT_ONCE !== undefined ? [T.TELEPORT, T.TELEPORT_ONCE] : null,
   };
 }
 
@@ -173,6 +175,56 @@ export function pegFor(data, c, r, solid, platform = solid) {
 }
 
 /**
+ * The teleporters of a level: `kinds` maps cell (row * COLS + col) to the kind (0 TELEPORT, 1 TELEPORT_ONCE) of each teleport
+ * tile. Teleport tiles that touch (left, right, above, below) are ONE teleporter, whatever their kinds. Returns them in
+ * reading order of their first tile: [{tiles: [cells in reading order], head: cell, kinds: Set}]. Mirrors teleport_groups
+ * in build_assets.py.
+ */
+export function teleportGroups(kinds) {
+  const seen = new Set();
+  const groups = [];
+  for (const start of [...kinds.keys()].sort((a, b) => a - b)) {
+    if (seen.has(start)) continue;
+    const todo = [start];
+    const tiles = [];
+    seen.add(start);
+    while (todo.length) {
+      const i = todo.pop();
+      tiles.push(i);
+      const c = i % COLS;
+      for (const n of [c > 0 ? i - 1 : -1, c < COLS - 1 ? i + 1 : -1, i - COLS, i + COLS]) {
+        if (kinds.has(n) && !seen.has(n)) {
+          seen.add(n);
+          todo.push(n);
+        }
+      }
+    }
+    tiles.sort((a, b) => a - b);
+    groups.push({ tiles, head: tiles[0], kinds: new Set(tiles.map((t) => kinds.get(t))) });
+  }
+  return groups.sort((a, b) => a.head - b.head);
+}
+
+/** What is wrong with the teleporters (mirrors teleport_problems in build_assets.py): [{msg, c, r}]. `blocked(c, r)`: a tile he cannot stand in. */
+export function teleportProblems(kinds, blocked) {
+  const groups = teleportGroups(kinds);
+  const out = [];
+  for (const g of groups) {
+    const c = g.head % COLS;
+    const r = Math.floor(g.head / COLS);
+    if (g.kinds.size > 1) out.push({ msg: `the teleporter whose first tile is at column ${c}, row ${r} mixes the two kinds of teleport tile (all the tiles that touch must be of one kind)`, c, r });
+    if (g.tiles.length > MAX_TELEPORT_GROUP) out.push({ msg: `the teleporter at column ${c}, row ${r} is ${g.tiles.length} tiles (at most ${MAX_TELEPORT_GROUP} that touch)`, c, r });
+    if (r < 3 || blocked(c, r - 1) || blocked(c, r - 2)) out.push({ msg: `no room to stand on the teleporter at column ${c}, row ${r} (its first tile, where you arrive, needs two free tiles above it)`, c, r });
+  }
+  if (groups.length === 1) {
+    const c = groups[0].head % COLS;
+    const r = Math.floor(groups[0].head / COLS);
+    out.push({ msg: `the teleporter at column ${c}, row ${r} is the only one: a level with teleport tiles needs at least two separate teleporters to go between`, c, r });
+  }
+  return out;
+}
+
+/**
  * Compile the character grid. Never throws: problems are returned in `errors` (the game would refuse
  * the level) and `warnings`, and whatever could be compiled still is, so the editor can keep drawing.
  */
@@ -223,6 +275,16 @@ export function compileLevel(rows, tables) {
     }
     if (doors.length === 0 && !errors.some((e) => e.msg.startsWith('the door'))) errors.push({ msg: "no exit door ('D')" });
     for (const [c, r] of doors) cells.forEach(([dc, dr], k) => { data[(r - dr) * COLS + c + dc] = tables.door[k]; });
+  }
+  if (tables.teleport) {
+    const kinds = new Map();
+    data.forEach((b, i) => {
+      if (b === tables.teleport[0]) kinds.set(i, 0);
+      else if (b === tables.teleport[1]) kinds.set(i, 1);
+    });
+    const blockedBy = new Set(tables.solid);
+    if ('^' in tables.chars) blockedBy.add(tables.chars['^']);
+    errors.push(...teleportProblems(kinds, (c, r) => blockedBy.has(data[r * COLS + c])));
   }
   const pegs = [];
   const platform = platformBytes(tables.chars, tables.solid, tables.door);

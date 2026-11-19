@@ -89,7 +89,12 @@ export class Atlas {
     this.alt = new Set(api.tiles.filter((t) => t.alt).map((t) => t.byte));
     this.rows = {};
     for (const t of api.tiles) this.rows[t.byte] = t.rows;
-    for (const t of api.tiles) this.paint(t.byte);
+    for (const t of api.tiles) {
+      if (!t.glow) continue; // a glow tile also exists as byte + 128: pixel value 3 in the other colour (a charging teleporter)
+      this.rows[t.byte | 0x80] = t.rows;
+      this.alt.add(t.byte | 0x80);
+    }
+    for (const byte of Object.keys(this.rows)) this.paint(Number(byte));
     this.beltPhase = -1;
     this.chuteTick = -1;
     // each chute and its twin: the thread they draw between them (16 rows)
@@ -225,6 +230,17 @@ export function drawPlayer(ctx, frame, px, py, cell, colour = COLORS.player, lin
   if (frame.thirdPx) drawSprite(ctx, frame.thirdPx, px - 2, py - float, cell, thirdColour, lines, 8);
   drawSprite(ctx, frame.eyes, px - 2, py - float, cell, eyeColour, lines, 8);
   drawSprite(ctx, frame.rows, px - 2, py - float, cell, colour, lines, 8);
+}
+
+/**
+ * The dissolve of a teleport (main.s tp_mask_player): `frame` with every row ANDed with the mask byte `masks[s4 + (row & 3)]`
+ * (the table of /api/tiles, `dissolve`: 17 steps of 4 bytes; s4 = 4 * the step, 0 whole, 64 gone). The body, the eyes and the
+ * third colour are all rows of pixels, leftmost in bit 7, so the same mask applies to each.
+ */
+export function dissolveFrame(frame, masks, s4) {
+  if (!s4 || !masks || !masks.length) return frame;
+  const m = (rows) => rows.map((b, y) => b & masks[s4 + (y & 3)]);
+  return { ...frame, rows: m(frame.rows), eyes: m(frame.eyes), thirdPx: frame.thirdPx ? m(frame.thirdPx) : frame.thirdPx };
 }
 
 export const PEG_SHAPE = [0x60, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0x90];

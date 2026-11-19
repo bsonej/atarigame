@@ -137,6 +137,8 @@ through it and can stand on it (a jump still rises through it: see "Jumping").
 | `~` | ice | solid; you speed up slowly, turn round slowly and slide a long way after letting go |
 | `o` | roller | solid; the same idea as ice with quicker grip, so you stop sooner. The longer the run of rollers under your feet, the harder it grips: it speeds you up by as many 1/16 pixels a frame as it is tiles long, up to 8 (a 1-tile roller is slower to get going than ice, an 8-tile one is almost instant) |
 | `T` | trampoline | solid, like a platform, with no dots: walking over it or standing on it does nothing. Land on it from the air (after a jump or a fall, any height) and it bounces you straight back up, no button needed, just high enough to land on the next surface above you (see "Trampolines"). Nothing above you in range: no bounce, an ordinary landing |
+| `Z` | teleport | solid, no dots. Tiles of it that touch (sides or above and below) are **one** teleporter. Stand on it (feet on the top of any of its tiles, walking along it counts) for 1 second and you are pixelated away and rebuilt at the next teleporter (see "Teleports") |
+| `z` | one-use teleport | the same, but once you have gone from it, all of it turns into a plain platform for good. Still a destination while unused |
 | `X` | bomb block | step on it and it flashes for about 0.9 seconds, then explodes. The blast kills you if your feet are within one tile either side and between two tiles above the block and its bottom edge (so a bomb going off over your head, or beside your knees, does nothing), and sets off bomb blocks next to it. The block is gone afterwards |
 | `v` | vanishing block | step on it and it flickers for about 0.6 seconds, then goes (you fall); it comes back after about 3.6 seconds, waiting until you are out of the way |
 | `p` | peg | not a tile: marks where a peg starts. It sits on the platform under it and sweeps the whole platform there (see below), pausing at each end, at half a pixel a frame. It pushes you along ahead of it, all the way to the end of the platform and off it, if it is beside your feet; jump over it. A peg on a block above you does not touch you. At most 2 per map, each needs a platform at least 2 tiles wide |
@@ -226,6 +228,36 @@ afresh anyway. The state is zero-page `tr_t` (0 = idle), `tr_row`, `tr_l`, `tr_r
 within the bounce's air time), and does not claim anything more. The attract AI knows nothing of trampolines (it
 ignores them); no shipped map has one yet.
 
+### Teleports
+
+`Z` (`TELEPORT`, id 125) and `z` (`TELEPORT_ONCE`, id 126) are solid, single-tile parts with no end caps and no dots, drawn
+as a pad with two rows of dots on top that glow (ice blue in place of white, `glow` flag in `assets/tiles.txt`).
+
+- **A teleporter** is a set of tiles of the same kind joined by an edge (4-connected, at most 64 tiles). Each has a
+  *first tile*: the top-most, then left-most one. A group with both kinds in it is an error.
+- **Charging**: with his feet on top of any tile of a teleporter, grounded, `fps` frames (1 second: 60 NTSC, 50 PAL) in a
+  row, he teleports. Walking along it keeps counting; jumping, falling or stepping off starts over. While he charges the
+  pad flickers between its two colours every 4 frames, and is plain again if he leaves. After arriving he must leave the
+  ground (jump or walk off) before the pad he landed on charges again, or he would go straight back.
+- **Where to**: teleporters are ordered by their first tile in reading order (row, then column); he goes to the next one,
+  the last to the first, skipping one-use ones that have been used. With no other teleporter left nothing happens. He is
+  rebuilt standing on the first tile of the destination. The count of teleporters is taken from the screen map, so it
+  tracks what has been used.
+- **One-use**: when he leaves it, the whole group turns into plain `BRICK` (map-only: `begin_level` copies the whole
+  map afresh on every level start and respawn, which restores it). It is skipped as a destination from then on.
+- **The dissolve** (mode `M_TELE`, 32 frames): 16 frames taking the picture out in a 4x4 ordered dither, over the body
+  (Player 0), eyes (Player 3) and the third colour (missiles), the move on the 17th, 16 frames building it up again.
+  Input is ignored, hazards do not act, pegs and fuses wait. The masks are `src/gen/dissolve.inc` (17 steps).
+- **Checks**: the asset tool, `levelcheck` and the editor refuse a level with exactly one teleporter, a group of both
+  kinds, a first tile without two clear tiles above it (no room to stand and be rebuilt), or a group over 64 tiles.
+  `levelcheck` adds an edge from every tile of a teleporter to the next one's first tile (first trips only: it does not
+  model one-use ones being gone, so it never claims more is reachable than is). The attract AI ignores teleporters.
+- **Slots**: ids 125 and 126 are the two tiles; 127 is kept as the marker the flood fill (a runtime walk of the screen
+  map, so levels poked into RAM work) writes while it scans, and is cleaned afterwards; no existing tile was removed. The
+  glow is the alt-colour bit (map byte + 128) of the same id, so it takes no further slot.
+- State: zero page `tp_t` (frames charged), `tp_lock`, `tp_s4` (dissolve mask row offset, 0 = whole) and temporaries
+  `tp_*`; BSS `tp_a`, `tp_b`, `tp_n`, `tp_hr`, `tp_hc` (group scan).
+
 ### Jumping
 
 A jump rises 26 pixels (`jump_dy` in `src/main.s`, `JUMP_DY` in `web/engine.js` and `web/spritemodel.js`; three tiles up
@@ -271,7 +303,7 @@ Notes for map builders:
   shorter on NTSC.
 - Durations and speeds are constants at the top of `src/main.s` (`FUSE_EXPL`, `FUSE_VANISH`, `VANISH_BACK`, `PEG_WAIT`,
   `SLICK_MAX`, and the belt tables `conv_spd`, `slick_acc`...).
-- To add a tile, add it to `assets/tiles.txt` (ids 0-15, 26-31, 62-124 are mostly in use; only 125-127 are free, see the header of that file; a `frame` line adds a picture only the game puts on the screen, as the trampoline's rubber band does; an alt-colour tile is stored with bit 7
+- To add a tile, add it to `assets/tiles.txt` (ids 0-15, 26-31, 62-126 are in use; only 127 is left, and the teleports' flood fill uses it as its marker, see the header of that file; a `glow` flag makes bit 7 of the byte a flickering twin of a solid tile; a `frame` line adds a picture only the game puts on the screen, as the trampoline's rubber band does; an alt-colour tile is stored with bit 7
   set, so its map byte is its id plus 128) and give it behaviour in `main.s` if it needs any; flags alone make it solid
   or one-way.
 
@@ -295,7 +327,7 @@ task editor        # starts tools/editor_server.py and opens http://localhost:87
 
 Build a level by dragging parts from the palette onto the board (or click a part, then click or drag on the board):
 
-- **Palette** (each swatch is a little scene compiled and drawn like the playfield: capsule ends, dots, the row's colours, the whole 2x3 door): platforms, belts (left and right, four speeds), ice, rollers, trampolines, ladders, stairs, chutes, spikes, bomb and
+- **Palette** (each swatch is a little scene compiled and drawn like the playfield: capsule ends, dots, the row's colours, the whole 2x3 door): platforms, belts (left and right, four speeds), ice, rollers, trampolines, teleports (two tiles, a short stamp each), ladders, stairs, chutes, spikes, bomb and
   vanishing blocks, pegs, items and the player start, plus ready-made **stamps** (a belt run, a flight of stairs, a block
   with a peg already on it). `Shift`+drag fills a rectangle, the right mouse button erases, `V` is a select tool (drag a
   selection to move it, `Alt`+drag or `Cmd/Ctrl+C` to copy, `Delete` to clear). `Cmd/Ctrl+Z` undoes. Row 0 belongs to the
@@ -304,7 +336,7 @@ Build a level by dragging parts from the palette onto the board (or click a part
   `R` restarts, `Esc` returns to editing). `Shift+P` starts you at the cell under the mouse, to try the far end of a big
   map. Pegs, belts, ice, bombs, vanishing blocks, spikes, lives, death, spawn and clearing all work.
 - **Checks** on the right update as you edit: the problems that would stop the game accepting the level (no start, no
-  items, a peg with nothing under it) and the `levelcheck` reachability warnings. Click one to find it on the board.
+  items, a peg with nothing under it, a lone teleporter, a teleporter of both kinds, no room over a teleporter's first tile) and the `levelcheck` reachability warnings. Click one to find it on the board.
 - **Save to game** writes `assets/levels/<name>.txt` (only if the game's own asset tool accepts it). The level number is its
   place in name order, so a new `levelN` joins the end. Then `task build` or `task run`, or press **Run in emulator**,
   which saves, builds and opens the game on that map. Your unsaved work is also kept in the browser, so a closed tab does
@@ -369,7 +401,7 @@ screen and sprite memory. They cover the physics, the title, the spawn/death/cle
 hi-score, the score row, dots and the door, the 30-second attract run, and the AI clearing maps 1-3 (dots, items, door) without dying. `test_engine.py` also checks that the colour tables the game's display-list interrupt loads are the editor's colours for every level, and that the interrupt fires once per row, every frame. `test_factory.py` builds small arenas
 by poking tiles into screen RAM and checks each part (platform jump-through, stairs as ledges you walk past and jump onto, chutes that carry you down and up (and are walked and jumped through otherwise), jumps that rise through blocks, trampoline bounces (walking over, landing, nothing above, long falls, repeat), belt speeds and
 direction, acceleration and reset, ice and roller glide, the thread of the chutes in the character set turning one row at a time, down for one chute and up for the other, vanishing and bomb timing and chain reaction, peg
-start/sweep/push/jump-over) and that maps 4 and 5 load. They are skipped if
+start/sweep/push/jump-over, teleporter timing, order, one-use and the dissolve) and that maps 4 and 5 load. They are skipped if
 atari800 or the test build is missing. `test_engine.py` (see "Level editor") replays scripted input on both the game and the
 editor's JavaScript engine; `task test-js` runs just the node tests, which need no emulator.
 

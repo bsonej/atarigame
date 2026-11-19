@@ -1,7 +1,7 @@
 // Replay scripted joystick input on the JS engine and print the state after each segment as JSON.
 // Used by tests/test_engine.py to compare the engine with the real game running in the emulator.
 //
-//   stdin:  {"tiles": <GET /api/tiles>, "text": "<level file>", "lives": 3,
+//   stdin:  {"tiles": <GET /api/tiles>, "text": "<level file>", "lives": 3, "fps": 50,
 //            "start": {"px": 8, "py": 168} | null, "segments": [[buttons, frames], ...]}
 //   stdout: {"compiled": {...}, "records": [{"snap": {...}, "map": [...], "pegs": [[x, dir, wait], ...]}, ...]}
 //
@@ -19,7 +19,7 @@ if (compiled.errors.length) {
   console.log(JSON.stringify({ error: compiled.errors.map((e) => e.msg) }));
   process.exit(0);
 }
-const game = new Game(compiled, tables, { lives: spec.lives });
+const game = new Game(compiled, tables, { lives: spec.lives, fps: spec.fps });
 game.mode = MODE.PLAY;
 game.drawn = 16;
 if (spec.start) {

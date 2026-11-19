@@ -3,6 +3,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JOY, MODE, STATE, FRAME, BOUNCE_N, TRAMP_AMP } from '../../web/engine.js';
+import { compileLevel } from '../../web/model.js';
+import { Game } from '../../web/engine.js';
+import { dissolveFrame } from '../../web/render.js';
 import { room, play, run, tables, vertical } from './helpers.mjs';
 
 const T = tables.T;
@@ -734,4 +737,250 @@ test('a trampoline run sags like a rubber band across its span, caps stay, and t
   assert.equal(g.tr.t, 0);
   assert.deepEqual([g.py, g.state], [18 * 8 - 16, STATE.GROUND]);
   for (const b of [T.TRAMPOLINE_S1, T.TRAMPOLINE_S2, T.TRAMPOLINE_S3, T.TRAMPOLINE_TAUT]) assert.equal(g.canon[b], T.TRAMPOLINE, 'a frame is a trampoline to every rule');
+});
+
+// ---- teleporters ---------------------------------------------------------------------------------------------------
+// Pad A on row 22 (he stands on it at py 160), pad B higher up on row 15, pad C on row 9: reading order is C, B, A... by
+// first tile: row 9 first. The helpers put him on a pad and count frames.
+const standOn = (g, col, row) => {
+  g.px = col * 4;
+  g.py = row * 8 - 16;
+  g.state = STATE.GROUND;
+};
+const arrival = (col, row) => [col * 4, row * 8 - 16];
+const FPS = 50;
+/** A hop: jump and wait to land again on the same pad (he has left the ground, so an arrival pad charges again). */
+const hop = (g) => {
+  g.step(JOY.FIRE);
+  for (let i = 0; i < 100 && g.state !== STATE.GROUND; i++) g.step(0);
+};
+
+test('standing on a teleporter for a second dissolves him and rebuilds him on the next one', () => {
+  // pads: Z at row 15 (first in reading order), Z at row 22 (second): from the lower one the next is the first again
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }));
+  standOn(g, 7, 22);
+  run(g, FPS - 1);
+  assert.equal(g.mode, MODE.PLAY, 'not yet: 49 frames');
+  assert.equal(g.tpT, FPS - 1);
+  run(g, 1);
+  assert.equal(g.mode, MODE.TELE, 'the 50th frame starts it');
+  assert.deepEqual([g.px, g.py], [28, 160], 'he is still where he was while dissolving');
+  let seen = [];
+  for (let i = 0; i < 32; i++) {
+    g.step(0);
+    seen.push([g.mode, g.px, g.py, g.tpS4]);
+  }
+  assert.equal(g.mode, MODE.PLAY);
+  assert.deepEqual([g.px, g.py, g.state], [...arrival(30, 15), STATE.GROUND], 'on the first tile of the other teleporter, feet on its top');
+  assert.equal(g.tpS4, 0, 'whole again');
+  // 16 frames going (steps 1..16: 4..64), the move on the 17th (still gone), 16 coming back (16 down to 1)
+  assert.deepEqual(seen.slice(0, 16).map((s) => s[3]), Array.from({ length: 16 }, (_, i) => (i + 1) * 4));
+  // (the frame on which play resumes shows step 1 and then clears it: tpS4 is 0 again afterwards)
+  assert.deepEqual(seen.slice(16).map((s) => s[3]), [...Array.from({ length: 15 }, (_, i) => (16 - i) * 4), 0]);
+  assert.ok(seen.slice(0, 16).every((s) => s[1] === 28 && s[2] === 160));
+  assert.ok(seen.slice(16).every((s) => s[1] === 120 && s[2] === 104));
+});
+
+test('a second is fps frames: 60 on an NTSC machine', () => {
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }), { fps: 60 });
+  standOn(g, 7, 22);
+  run(g, 59);
+  assert.equal(g.mode, MODE.PLAY);
+  run(g, 1);
+  assert.equal(g.mode, MODE.TELE);
+});
+
+test('walking along a teleporter counts as staying on it, leaving it or jumping starts over', () => {
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }));
+  standOn(g, 6, 22);
+  run(g, 30);
+  assert.equal(g.tpT, 30);
+  run(g, 6, JOY.RIGHT); // still on the pad (columns 6-8)
+  assert.equal(g.tpT, 36);
+  run(g, 20, JOY.RIGHT); // walks off its end and falls
+  assert.equal(g.mode, MODE.PLAY);
+  assert.equal(g.tpT, 0, 'left it: the count starts again');
+  const h = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }));
+  standOn(h, 7, 22);
+  run(h, 40);
+  h.step(JOY.FIRE); // jump
+  run(h, 45);
+  assert.equal(h.mode, MODE.PLAY, 'the jump started the count over');
+  assert.ok(h.tpT < 45);
+  run(h, FPS);
+  assert.equal(h.mode, MODE.TELE, 'landed on the pad: a fresh second, and it goes');
+});
+
+test('walking over a teleporter in under a second does nothing', () => {
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }));
+  standOn(g, 3, 22);
+  g.py = 168; // on the floor, then walk across the pad (a pad of 3 tiles is 12 pixels: 12+ frames)
+  run(g, 60, JOY.RIGHT);
+  assert.equal(g.mode, MODE.PLAY);
+  assert.equal(g.tpT, 0);
+});
+
+test('with a single teleporter in the level the editor refuses the level and the engine does nothing', () => {
+  const rows = room({ '22,6': 'ZZZ' });
+  const compiled = compileLevel(rows, tables);
+  assert.ok(compiled.errors.some((e) => /only one/.test(e.msg)), compiled.errors.map((e) => e.msg).join('; '));
+  const g = new Game(compiled, tables); // the game itself: no other group, no teleport
+  g.mode = MODE.PLAY;
+  standOn(g, 7, 22);
+  run(g, 3 * FPS);
+  assert.equal(g.mode, MODE.PLAY);
+  assert.deepEqual([g.px, g.py], [28, 160]);
+});
+
+test('three teleporters go round in reading order, the last back to the first', () => {
+  // first tiles in reading order: (30,9), (6,15), (20,22)
+  const g = play(room({ '9,30': 'ZZ', '15,6': 'ZZZ', '22,20': 'ZZ' }));
+  const order = [[30, 9], [6, 15], [20, 22]];
+  standOn(g, 30, 9);
+  for (const [want, next] of [[1, 'step off'], [2, 'step off'], [0, 'done']]) {
+    run(g, FPS + 32);
+    assert.equal(g.mode, MODE.PLAY);
+    assert.deepEqual([g.px, g.py], arrival(...order[want]), `arrived at teleporter ${want}`);
+    if (next === 'step off') hop(g);
+  }
+});
+
+test('teleporters are ordered by the first tile in reading order, a U shape is one teleporter', () => {
+  // a U (arms in columns 4 and 8 from row 10, bottom row 12): first tile (4,10); a bar whose first tile is (20,10) (same row,
+  // further right); a bar at (5,16)
+  const rows = room({ '10,4': 'Z', '11,4': 'Z', '12,4': 'ZZZZZ', '11,8': 'Z', '10,8': 'Z', '10,20': 'ZZZ', '16,5': 'ZZZ' });
+  const g = play(rows);
+  const compiled = compileLevel(rows, tables);
+  assert.deepEqual(compiled.errors, [], 'a U of one kind is fine');
+  standOn(g, 4, 10);
+  run(g, FPS + 32);
+  assert.deepEqual([g.px, g.py], arrival(20, 10), 'from the U to the next first tile in reading order');
+  hop(g);
+  run(g, FPS + 32);
+  assert.deepEqual([g.px, g.py], arrival(5, 16));
+  hop(g);
+  run(g, FPS + 32);
+  assert.deepEqual([g.px, g.py], arrival(4, 10), 'and the last goes back to the first');
+});
+
+test('he can stand on any tile of the group, the first tile is where he arrives', () => {
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }));
+  standOn(g, 8, 22); // the right-hand tile of the lower one
+  run(g, FPS + 32);
+  assert.deepEqual([g.px, g.py], arrival(30, 15));
+  const h = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }));
+  standOn(h, 30, 15);
+  run(h, FPS + 32);
+  assert.deepEqual([h.px, h.py], arrival(6, 22), 'and from the first one, the second');
+});
+
+test('a teleporter he has arrived on does not charge until he steps off it', () => {
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }));
+  standOn(g, 7, 22);
+  run(g, FPS + 32);
+  assert.equal(g.tpLock, 1);
+  run(g, 3 * FPS);
+  assert.equal(g.mode, MODE.PLAY, 'standing there does not send him back');
+  assert.deepEqual([g.px, g.py], arrival(30, 15));
+  assert.equal(g.tpT, 0);
+  run(g, 4, JOY.RIGHT);
+  assert.equal(g.tpLock, 1, 'walking along it does not unlock it');
+  hop(g);
+  assert.equal(g.tpLock, 0, 'leaving the ground does');
+  run(g, FPS + 32);
+  assert.deepEqual([g.px, g.py], arrival(6, 22), 'and then it charges and sends him on');
+});
+
+test('a one-use teleporter turns into brick once he has gone, is skipped from then on, and cannot be used again', () => {
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'zzz' }));
+  standOn(g, 7, 22);
+  const padTiles = [6, 7, 8].map((c) => 22 * 40 + c);
+  assert.deepEqual(padTiles.map((i) => g.map[i]), [T.TELEPORT_ONCE, T.TELEPORT_ONCE, T.TELEPORT_ONCE]);
+  run(g, FPS);
+  assert.equal(g.mode, MODE.TELE);
+  run(g, 16);
+  assert.equal(g.mode, MODE.TELE);
+  assert.deepEqual(padTiles.map((i) => g.map[i]), [T.TELEPORT_ONCE, T.TELEPORT_ONCE, T.TELEPORT_ONCE], 'still a pad while he dissolves');
+  g.step(0); // the 17th frame: he is moved, the pad is spent
+  assert.deepEqual(padTiles.map((i) => g.map[i]), [T.BRICK, T.BRICK, T.BRICK], 'the whole pad is plain brick');
+  assert.deepEqual([g.px, g.py], arrival(30, 15));
+  run(g, 15);
+  assert.equal(g.mode, MODE.PLAY);
+  // the other teleporter has nowhere to send him now: nothing happens, however long he waits
+  run(g, 4, JOY.RIGHT);
+  run(g, 4, JOY.LEFT);
+  run(g, 3 * FPS);
+  assert.equal(g.mode, MODE.PLAY);
+  assert.deepEqual([g.px, g.py], [arrival(30, 15)[0], arrival(30, 15)[1]]);
+  // and the brick is a normal solid platform to stand on (no dots, he does not teleport)
+  const h = play(room({ '15,30': 'ZZZ', '22,6': 'zzz' }));
+  standOn(h, 7, 22);
+  run(h, FPS + 32);
+  const ground = h.getSolid(7 * 4, 22 * 8);
+  assert.equal(ground[0], true);
+  assert.equal(h.getTile(7 * 4, 22 * 8), T.BRICK);
+});
+
+test('a one-use teleporter is a valid destination while unused, and the arrival does not use it', () => {
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'zzz' }));
+  standOn(g, 30, 15); // from the ordinary one down to the one-use pad
+  run(g, FPS + 32);
+  assert.deepEqual([g.px, g.py], arrival(6, 22));
+  assert.equal(g.map[22 * 40 + 6], T.TELEPORT_ONCE, 'still unused');
+  run(g, 3 * FPS);
+  assert.equal(g.mode, MODE.PLAY, 'not used just by arriving');
+  hop(g);
+  run(g, FPS + 32);
+  assert.deepEqual([g.px, g.py], arrival(30, 15), 'used now: back up');
+  assert.equal(g.map[22 * 40 + 6], T.BRICK);
+});
+
+test('while he charges the pad flickers between its two colours every 4 frames and comes back plain when he leaves', () => {
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }));
+  standOn(g, 7, 22);
+  const pad = () => [6, 7, 8].map((c) => g.map[22 * 40 + c]);
+  const seen = [];
+  for (let i = 1; i <= 20; i++) {
+    g.step(0);
+    seen.push(pad()[0]);
+  }
+  const GLOW = T.TELEPORT | 0x80;
+  assert.deepEqual(seen.slice(0, 3), [T.TELEPORT, T.TELEPORT, T.TELEPORT]);
+  assert.deepEqual(seen.slice(3, 7), [GLOW, GLOW, GLOW, GLOW], 'frames 4-7 glow');
+  assert.deepEqual(seen.slice(7, 11), [T.TELEPORT, T.TELEPORT, T.TELEPORT, T.TELEPORT]);
+  assert.deepEqual(pad(), [GLOW, GLOW, GLOW], 'the whole group flickers together (frames 12-15 and 20-23 glow)'.slice(0, 0) || pad());
+  assert.equal(g.canon[GLOW], T.TELEPORT);
+  assert.equal(g.flags[GLOW] & 1, 1, 'the glowing pad is as solid as the plain one');
+  run(g, 3, JOY.RIGHT); // still on the pad, still charging
+  g.px = 3 * 4; // pull him off it
+  g.step(0);
+  assert.deepEqual(pad(), [T.TELEPORT, T.TELEPORT, T.TELEPORT], 'plain again when he is off');
+  assert.equal(g.tpT, 0);
+});
+
+test('no hazards or input act during a teleport', () => {
+  const g = play(room({ '15,30': 'ZZZ', '22,6': 'ZZZ' }));
+  standOn(g, 7, 22);
+  run(g, FPS);
+  assert.equal(g.mode, MODE.TELE);
+  for (let i = 0; i < 31; i++) g.step(JOY.LEFT | JOY.FIRE | JOY.UP);
+  assert.equal(g.mode, MODE.TELE);
+  g.step(JOY.LEFT);
+  assert.equal(g.mode, MODE.PLAY);
+  assert.deepEqual([g.px, g.py], arrival(30, 15), 'the joystick did nothing');
+  assert.equal(g.deaths, 0);
+});
+
+test('the dissolve masks of the editor take pixels out and put them back', () => {
+  const masks = tables.dissolve;
+  assert.equal(masks.length, 68);
+  assert.deepEqual(masks.slice(0, 4), [255, 255, 255, 255]);
+  assert.deepEqual(masks.slice(64), [0, 0, 0, 0]);
+  const shown = (s) => masks.slice(4 * s, 4 * s + 4).reduce((n, m) => n + [...(m & 15).toString(2)].filter((c) => c === '1').length, 0);
+  assert.deepEqual(Array.from({ length: 17 }, (_, s) => shown(s)), Array.from({ length: 17 }, (_, s) => 16 - s));
+  const frame = { rows: Array(16).fill(0xff), eyes: Array(16).fill(0xff), thirdPx: Array(16).fill(0xff) };
+  const out = dissolveFrame(frame, masks, 32);
+  assert.equal(out.rows.length, 16);
+  assert.ok(out.rows.every((b, y) => b === masks[32 + (y & 3)]));
+  assert.equal(dissolveFrame(frame, masks, 0), frame, 'step 0 draws the frame as it is');
 });

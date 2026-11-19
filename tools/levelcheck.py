@@ -18,6 +18,12 @@ single-wide vertical runs of one kind (`\\` down, `/` up); diagonal or side-by-s
 An item is collected only at HIS level (never by jumping up into it from below), so it counts as reachable only if he
 can stand in the row of the item (feet on the row under it, in its column or a neighbour); the door is entered by any
 overlap and keeps the old reach (up to 3 tiles above a standing cell).
+Teleporters (`Z` teleport, `z` one-use teleport; teleport tiles that touch are ONE teleporter, see ba.teleport_groups) connect
+standing places: from any tile of a teleporter the player can reach the first tile of the next teleporter in reading order
+(the last leads to the first). Only that first use is claimed (a one-use teleporter he has left is brick, and the groups
+that are gone are skipped by the game, which this does not follow), so a place that can only be reached by a second trip
+may be reported unreachable, but nothing impossible is claimed. A teleporter group that mixes the two kinds, a level with
+only one teleporter group, one without room to stand on its first tile, or one bigger than 64 tiles is a problem.
 Exit status is 1 if any item, dot or the door (or the start) is unreachable or a chute is laid out wrongly.
 """
 
@@ -31,7 +37,8 @@ import build_assets as ba  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 ROWS, COLS = 24, 40
-SOLID = set("#W ~oXvT>)]<([{}".replace(" ", ""))
+SOLID = set("#W ~oXvT>)]<([{}Zz".replace(" ", ""))
+TELEPORTS = {"Z": 0, "z": 1}  # the map characters of TELEPORT and TELEPORT_ONCE (assets/tiles.txt)
 ONEWAY = set("=S")  # thin platforms and steps: stand on top, walk and jump up through
 CHUTE_DOWN, CHUTE_UP = "\\", "/"  # chutes are not solid and not standable: they carry a walker along their column
 MAX_FALL_TILES = 8  # 64 pixels
@@ -76,6 +83,14 @@ class Level:
         self.rows = rows
         self.start = None
         self.items: list[tuple[int, int]] = []
+        kinds = {(c, r): TELEPORTS[ch] for r, line in enumerate(rows) for c, ch in enumerate(line) if ch in TELEPORTS}
+        groups = ba.teleport_groups(kinds)
+        # standing on any tile of a teleporter: the first tile of the next one (when there are two at least)
+        self.tele: dict[tuple[int, int], tuple[int, int]] = {}
+        if len(groups) > 1:
+            for i, g in enumerate(groups):
+                for tile in g["tiles"]:
+                    self.tele[tile] = groups[(i + 1) % len(groups)]["head"]
         for r, line in enumerate(rows):
             for c, ch in enumerate(line):
                 if ch == "@":
@@ -187,6 +202,8 @@ class Level:
                     out.append((c + dc, r - dy))
         if self.t(c, r) == TRAMPOLINE:  # he can always jump up and land on it again
             out.extend(self.bounces(c, r))
+        if (c, r) in self.tele:  # a second on a teleporter
+            out.append(self.tele[(c, r)])
         for dc in range(-JUMP_REACH[0], JUMP_REACH[0] + 1):  # jump out and drop down
             land = self.fall_to(c + dc, r + 1) if dc and 0 < c + dc < COLS - 1 else None
             if land and not self.solid(c + dc, r - 1) and not self.solid(c + dc, r - 2):
@@ -253,6 +270,8 @@ def check_rows(rows: list[str]) -> list[str]:
             if ch == "^" and any(lv.solid(col + dc, r - 3) for dc in (-2, -1, 0, 1, 2)):
                 problems.append(f"the spike at column {col}, row {r} has too little headroom to jump over")
     problems += chute_problems(lv.rows)
+    kinds = {(c, r): TELEPORTS[ch] for r, line in enumerate(lv.rows) for c, ch in enumerate(line) if ch in TELEPORTS}
+    problems += ba.teleport_problems(kinds, lambda c, r: lv.solid(c, r) or lv.t(c, r) == "^")
     cells = lv.reachable()
     for ic, ir in sorted(set(lv.items) - lv.collectable(cells)):
         what = "door" if lv.t(ic, ir) == "D" else "item"

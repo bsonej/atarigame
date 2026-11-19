@@ -17,10 +17,12 @@
         .export start
         .export frame_end                       ; breakpoint target for tools/headless.py
         .exportzp tr_t, tr_l, tr_r, tr_row, tr_c
+        .exportzp fps, tp_t, tp_lock, tp_k, tp_c, tp_r, tp_dc, tp_dr, tp_s4
         .exportzp px, py, state, jt, bn, hop, hdir, rkind, fall, score, hiscore, left, lives, level, lvlidx
         .exportzp mode, demo, demo_n, timer, mtimer, frame, drawn, deaths, joy, anim, moved, flash
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
         .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir, pfloat
+        .export tp_a, tp_b, tp_n, tp_hr, tp_hc
         .export tt_col, tt_row, tt_t, tt_ph, tt_kind, tt_orig, pg_x, pg_y, pg_min, pg_max, pg_dir, pg_wait, cph
         .export pal0, pal1, pal2, pal3, dli_row, dli_n, ai_kind, door_open, door_dir, door_phase, door_art, face
 
@@ -99,6 +101,7 @@ M_DYING  = 2
 M_SPAWN  = 3
 M_CLEAR  = 4
 M_OVER   = 5
+M_TELE   = 6            ; teleporting: dissolving, moving, rebuilding (see mode_tele)
 
 FR_STAND   = 0          ; sprite frames, in the order of assets/sprites.txt: families of frames, to which
 FR_LEAN    = 3          ; `face` (0 front, 1 right, 2 left) is added: stand (3), lean (2: right, left),
@@ -117,6 +120,7 @@ FALL_FAST   = 16        ; FALL_FAST it is 1, 1, 2 pixels on successive frames (a
 SPIKE_TOP   = 1         ; a spike tile's tips are on this line of the tile (assets/tiles.txt): feet below it are hurt
 TR_STEPS    = 13        ; the trampoline's mat takes 2 frames on each of these amplitudes (tramp_amp), 26 frames in all
 .assert T_TRAMPOLINE_LR - T_TRAMPOLINE_L = 2, error, "the trampoline's three end caps need consecutive ids"
+.assert T_TELEPORT = 125 .and T_TELEPORT_ONCE = 126, error, "the flood fill (tp_search) relies on the teleport tiles being 125 and 126 (glow bytes 253, 254) and 127 being free"
 
 JOY_UP    = $01
 JOY_DOWN  = $02
@@ -160,13 +164,18 @@ ITEM_POINTS = 10
 DOT_POINTS  = 1
 CLEAR_BONUS = 100
 SPAWN_FRAMES = 48       ; length of the "come to life" animation
+COLS         = 40       ; the playfield, in tiles
+ROWS         = 24
+TP_FRAMES    = 32       ; teleporting: 16 frames of dissolving, then 16 of rebuilding him at the other teleporter
+T_MARK       = 127      ; the one unused glyph: the teleport flood fill writes it over the tiles of the group he leaves
+MAX_TP_STACK = 64       ; the flood fill's pending tiles (a group is at most 64 tiles: MAX_TELEPORT_GROUP in build_assets.py)
 DIE_FRAMES   = 80       ; length of the death animation
 CLEAR_FRAMES = 60
 TITLE_IDLE_SECS = 10
 DEMO_SECS    = 30
 OVER_SECS    = 10
 
-        .export SCREEN, PM0, M_TITLE, M_PLAY, M_DYING, M_SPAWN, M_CLEAR, M_OVER
+        .export SCREEN, PM0, M_TITLE, M_PLAY, M_DYING, M_SPAWN, M_CLEAR, M_OVER, M_TELE
 
 ; ---------------------------------------------------------------------------
         .segment "ZEROPAGE"
@@ -261,6 +270,18 @@ tt_f:     .res 1
 ov_x:     .res 1
 ov_y:     .res 1
 tt_o:     .res 1        ; the screen byte (with its end cap) of the tile being armed
+tp_t:     .res 1        ; teleporter: frames he has stood on one, 0 = not charging
+tp_lock:  .res 1        ; 1 = he has arrived on this one (or it leads nowhere): step off it before it charges again
+tp_k:     .res 1        ; the kind (T_TELEPORT or T_TELEPORT_ONCE) of the teleporter he stands on, and the column and row
+tp_c:     .res 1        ; ... of the tile of it under his feet
+tp_r:     .res 1
+tp_dc:    .res 1        ; where it sends him: column and row of the first tile (reading order) of the next teleporter
+tp_dr:    .res 1
+tp_s4:    .res 1        ; the dissolve: 4 * the step (0 = whole, 16 = gone), index into tp_mask
+tp_mr:    .res 1        ; flood fill: the first tile (reading order) found, row and column
+tp_mc:    .res 1
+tcx:      .res 1        ; flood fill: the tile being looked at
+tcy:      .res 1
 
         .segment "BSS"
 tt_col:   .res 8        ; timed tiles (bomb blocks and vanishing blocks that have been stepped on)
@@ -299,6 +320,11 @@ d_b:      .res 1
 d_o:      .res 1
 d_p:      .res 1
 d_t:      .res 1
+tp_a:     .res 1        ; flood fill: the byte that is filled over, and the byte written in its place
+tp_b:     .res 1
+tp_n:     .res 1        ; flood fill: tiles waiting on the stack (2 bytes each: column, row)
+tp_hr:    .res 1        ; the first tile of the group he leaves: row and column
+tp_hc:    .res 1
 
 ; ---------------------------------------------------------------------------
         .macro SETDST addr
@@ -346,6 +372,7 @@ start:
         sta oldpy
         sta frame
         sta demo
+        sta tp_s4
         lda #16
         sta drawn
         lda PAL
@@ -1800,6 +1827,10 @@ mode_play:
         lda mode
         cmp #M_PLAY
         bne @draw
+        jsr tp_update           ; a second on a teleporter sends him away
+        lda mode
+        cmp #M_PLAY
+        bne @draw
         jsr choose_frame
 @draw:  jsr draw_player
         jmp draw_hud
@@ -1916,6 +1947,49 @@ mode_spawn:
         sta drawn
         lda #PAL_PLAYER
         sta PCOLR0
+@rts:   rts
+
+; Teleporting: he dissolves for 16 frames, is moved to the next teleporter (the one-use pad he leaves is spent now) at the 17th
+; and is rebuilt there over the last 16. The joystick is ignored and nothing acts on him (pegs and fuses stand still, as
+; in the spawn). tp_s4 is the step of the dissolve for draw_player: 1..16 going, 16 down to 1 coming back.
+mode_tele:
+        lda hjoy                ; keep joy current so a held button is not a fresh press later
+        sta joy
+        jsr inc_mtimer
+        lda mtimer
+        cmp #TP_FRAMES/2+1
+        bne @nomove
+        jsr tp_move
+@nomove:
+        lda mtimer
+        cmp #TP_FRAMES/2+1
+        bcs @in
+        asl a                   ; going: the step is the frame number
+        asl a
+        bne @set                ; (never 0)
+@in:    lda #TP_FRAMES+1        ; coming back: 16 down to 1
+        sec
+        sbc mtimer
+        asl a
+        asl a
+@set:   sta tp_s4
+        lda #160                ; a sweep up and down
+        sec
+        sbc tp_s4
+        sta sndf
+        lda #3
+        sta snd
+        jsr draw_player
+        jsr draw_hud
+        lda mtimer
+        cmp #TP_FRAMES
+        bcc @rts
+        lda #M_PLAY
+        sta mode
+        lda #0
+        sta tp_s4
+        lda #1
+        sta tp_lock             ; he stands on a teleporter: step off before it charges again
 @rts:   rts
 
 ; Level cleared: flash and play a rising arpeggio, then on to the next level.
@@ -2168,6 +2242,9 @@ begin_level:
         sta face                ; looking at you, not squashed
         sta land_t
         sta last_st
+        sta tp_t                ; no teleporter charging, none to step off first, not dissolving
+        sta tp_lock
+        sta tp_s4
         jsr door_draw
         lda #FR_STAND
         sta frame
@@ -2481,7 +2558,41 @@ draw_player:
         iny
         cpy #SPR_H
         bne @draw
+        lda tp_s4
+        bne tp_mask_player      ; teleporting: dissolve what was drawn
 @rts:   rts
+
+; AND the 16 lines just drawn with the dissolve step's mask (tp_mask, see build_assets.py): a row's byte is the mask
+; of the body and the eyes, and rotated left by two bits it is the mask of the missiles (their bits are laid out in
+; pairs the other way round, see third_cells).
+tp_mask_player:
+        ldx oldpy               ; (he is on the screen: draw_player got here)
+        lda #0
+        sta tmp
+@m:     lda tmp
+        and #3
+        ora tp_s4
+        tay
+        lda tp_mask,y
+        sta tmp2
+        and PM0Y,x
+        sta PM0Y,x
+        lda tmp2
+        and PM3Y,x
+        sta PM3Y,x
+        lda tmp2
+        asl a
+        adc #0
+        asl a
+        adc #0
+        and MISSY,x
+        sta MISSY,x
+        inx
+        inc tmp
+        lda tmp
+        cmp #SPR_H
+        bne @m
+        rts
 
 ; ---------------------------------------------------------------------------
 ; Text and numbers.
@@ -2832,6 +2943,372 @@ update_timed:
         bmi @done
         jmp @slot
 @done:  rts
+
+; ---------------------------------------------------------------------------
+; Teleporters. Teleport tiles (T_TELEPORT, and T_TELEPORT_ONCE, which is spent after one use) that touch left, right, above
+; or below are ONE teleporter. Stand on the ground on any tile of one for a second (fps frames in a row; walking along it
+; counts, leaving it or jumping starts again) and he dissolves and is rebuilt on the NEXT teleporter: the teleporters are
+; ordered by their first tile in reading order (top row first, then leftmost), the one after the last is the first, and he
+; arrives standing on the next one's first tile. A one-use teleporter he leaves turns into plain brick (all of its tiles),
+; which takes it out of the order. A teleporter he arrives on does not charge until he has stepped off it.
+; There is no table of teleporters: the groups are found on the screen when it is needed, with a flood fill (tp_fill)
+; that marks the tiles it has seen by changing their bytes (so a level poked into screen RAM works), and the marks are
+; all taken off again before the game goes on (tp_clean).
+; While he charges the pad flickers: every 4 frames the group's tiles are flipped between the byte and the byte + 128
+; (a `glow` tile of assets/tiles.txt: the same glyph with pixel value 3 in the other colour).
+
+; C set if his feet are on a teleport tile (the tile under px or px+3); then tp_k is its kind (the plain tile) and
+; tp_c, tp_r its column and row.
+tp_under:
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+        lda px
+        sta tx
+        jsr @look
+        bcs @rts
+        lda px
+        clc
+        adc #3
+        sta tx
+@look:  jsr get_tile            ; (a glowing tile comes back as its plain tile)
+        cmp #T_TELEPORT
+        beq @yes
+        cmp #T_TELEPORT_ONCE
+        beq @yes
+        clc
+        rts
+@yes:   sta tp_k
+        lda tx
+        lsr a
+        lsr a
+        sta tp_c
+        lda ty
+        lsr a
+        lsr a
+        lsr a
+        sta tp_r
+        sec
+@rts:   rts
+
+; One frame of play: count the seconds on a teleporter.
+tp_update:
+        lda state
+        bne @off                ; only standing on the ground counts
+        jsr tp_under
+        bcc @off
+        lda tp_lock
+        bne @rts                ; he has just arrived: step off and on again to use it
+        inc tp_t
+        lda tp_t
+        and #3
+        bne @cmp
+        jsr tp_flip             ; flicker: 4 frames one colour, 4 the other
+@cmp:   lda tp_t
+        cmp fps
+        bcs tp_go               ; a second: away
+@rts:   rts
+@off:   lda #0
+        sta tp_lock
+        lda tp_t
+        beq @rts
+        and #4                  ; he stepped off (or jumped): the pad's colour back to the plain one
+        beq @zero
+        jsr tp_flip
+@zero:  lda #0
+        sta tp_t
+        rts
+
+; A second has passed: work out where he goes and start the teleport, or (no other teleporter) do nothing.
+tp_go:
+        lda tp_t
+        and #4
+        beq @plain
+        jsr tp_flip             ; (plain colour again)
+@plain: lda #0
+        sta tp_t
+        jsr tp_dest
+        bcs @send
+        lda #1
+        sta tp_lock             ; nowhere to go: nothing to do until he steps off
+        rts
+@send:  lda #M_TELE
+        sta mode
+        lda #0
+        sta mtimer
+        sta vx
+        sta vfrac
+        sta land_t
+        sta last_st
+        sta moved
+        lda #FR_STAND
+        clc
+        adc face
+        sta frame
+        rts
+
+; Halfway through the teleport: he reappears at the destination (standing on the first tile of the teleporter, which is
+; one tile wide as he is: px = 4 * column, his feet on the top line of the tile), and a one-use pad he left is spent.
+tp_move:
+        lda tp_dc
+        asl a
+        asl a
+        sta px
+        lda tp_dr
+        asl a
+        asl a
+        asl a
+        sec
+        sbc #SPR_H
+        sta py
+        lda tp_k
+        cmp #T_TELEPORT_ONCE
+        bne @rts
+        sta tp_a                ; the whole pad of the one he left turns into plain brick
+        lda #T_BRICK
+        sta tp_b
+        jsr tp_start
+        jmp tp_fill
+@rts:   rts
+
+; Flip the glow of the teleporter at tp_c, tp_r (its byte <-> its byte + 128, for the whole group).
+tp_flip:
+        jsr tp_start
+        jsr tp_at
+        sta tp_a
+        eor #$80
+        sta tp_b
+        jmp tp_fill
+
+tp_start:                       ; tcx, tcy and X, Y = tp_c, tp_r
+        ldx tp_c
+        stx tcx
+        ldy tp_r
+        sty tcy
+        rts
+
+; A = the screen byte at column X, row Y; ptr points to it, Y = 0.
+tp_at:
+        txa
+        clc
+        adc row_lo,y
+        sta ptr
+        lda row_hi,y
+        adc #0
+        sta ptr+1
+        ldy #0
+        lda (ptr),y
+        rts
+
+; Flood fill: every tile that touches (left, right, above, below) the one at tcx, tcy and holds tp_a, itself included,
+; is changed to tp_b. Afterwards tp_mr, tp_mc are the first of them in reading order. Each tile is changed when it is put
+; on the stack (two bytes: column, row, pushed here and not in a subroutine, whose return address would be in the way), so
+; the stack holds at most one entry per tile of the group.
+tp_fill:
+        lda #$FF
+        sta tp_mr
+        lda #0
+        sta tp_n
+        lda tcx
+        sta tmp
+        lda tcy
+        sta tmp2
+        jsr tp_visit
+        bcc @done
+        lda tmp
+        pha
+        lda tmp2
+        pha
+        inc tp_n
+@pop:   lda tp_n
+        beq @done
+        dec tp_n
+        pla
+        sta tcy
+        pla
+        sta tcx
+        lda tcy                 ; first in reading order so far?
+        cmp tp_mr
+        bcc @new
+        bne @nomin
+        lda tcx
+        cmp tp_mc
+        bcs @nomin
+@new:   lda tcy
+        sta tp_mr
+        lda tcx
+        sta tp_mc
+@nomin: ldx #3                  ; the four neighbours (nb_dc, nb_dr: left, right, up, down)
+@dir:   lda tcx
+        clc
+        adc nb_dc,x
+        cmp #COLS               ; (off the left edge wraps to 255)
+        bcs @skip
+        sta tmp
+        lda tcy
+        clc
+        adc nb_dr,x
+        cmp #ROWS
+        bcs @skip
+        sta tmp2
+        jsr tp_visit
+        bcc @skip
+        lda tmp
+        pha
+        lda tmp2
+        pha
+        inc tp_n
+@skip:  dex
+        bpl @dir
+        bmi @pop                ; (always)
+@done:  rts
+
+; C set (and the tile at column tmp, row tmp2 changed to tp_b) if it holds tp_a and the stack has room. Keeps X.
+tp_visit:
+        ldy tmp2
+        lda row_lo,y
+        clc
+        adc tmp
+        sta ptr
+        lda row_hi,y
+        adc #0
+        sta ptr+1
+        ldy #0
+        lda (ptr),y
+        cmp tp_a
+        bne @no
+        lda tp_n
+        cmp #MAX_TP_STACK
+        bcs @no
+        lda tp_b
+        sta (ptr),y
+        sec
+        rts
+@no:    clc
+        rts
+
+; Find the teleporter after the one at tp_c, tp_r: C set and tp_dc, tp_dr = its first tile; clear if there is none.
+; The screen is left as it was.
+tp_dest:
+        jsr tp_search
+        php
+        jsr tp_clean
+        plp
+        rts
+
+; The order is by first tile in reading order, cyclic. Mark the group he stands on (T_MARK) and find its first tile
+; (tp_hr, tp_hc). Pass 1: look at the tiles after it, in reading order; a teleport tile that is not marked belongs to a group
+; not seen yet, which is filled with its byte + 128 (seen): if the first tile of that group is this tile it is the first
+; teleporter after his (the groups come in order of their first tile, so no other group can lie in between); otherwise
+; that group starts before his and has only been marked as seen. Pass 2 (none found after his): the first teleport tile on
+; the screen that is not in his group (marked) is the first tile of the first teleporter.
+tp_search:
+        lda tp_k
+        sta tp_a
+        lda #T_MARK
+        sta tp_b
+        jsr tp_start
+        jsr tp_fill
+        lda tp_mr
+        sta tp_hr
+        sta tp_dr
+        lda tp_mc
+        sta tp_hc
+        sta tp_dc
+        inc tp_dc               ; start with the tile after it
+@row:   ldy tp_dr
+        cpy #ROWS
+        bcs @pass2
+        lda row_lo,y
+        sta ptr2
+        lda row_hi,y
+        sta ptr2+1
+        ldy tp_dc
+@cell:  cpy #COLS
+        bcs @next
+        lda (ptr2),y
+        cmp #T_TELEPORT
+        beq @cand
+        cmp #T_TELEPORT_ONCE
+        bne @adv
+@cand:  sty tp_dc
+        sta tp_a
+        ora #$80
+        sta tp_b
+        sty tcx
+        lda tp_dr
+        sta tcy
+        jsr tp_fill
+        ldy tp_dc
+        lda tp_mr
+        cmp tp_dr
+        bne @adv
+        cpy tp_mc
+        beq @found              ; this tile is the first of its group
+@adv:   iny
+        bne @cell
+@next:  lda #0
+        sta tp_dc
+        inc tp_dr
+        bne @row
+@found: sec
+        rts
+@pass2: lda #1
+        sta tp_dr
+@wrow:  ldy tp_dr
+        cpy #ROWS
+        bcs @none
+        lda row_lo,y
+        sta ptr2
+        lda row_hi,y
+        sta ptr2+1
+        ldy #0
+@wcell: lda (ptr2),y
+        and #$7F                ; (seen or not)
+        cmp #T_TELEPORT
+        beq @wfound
+        cmp #T_TELEPORT_ONCE
+        beq @wfound
+        iny
+        cpy #COLS
+        bcc @wcell
+        inc tp_dr
+        bne @wrow
+@none:  clc
+        rts
+@wfound:
+        sty tp_dc
+        sec
+        rts
+
+; Take the marks off the screen: T_MARK back to the kind of the teleporter he stands on, bytes 253 and 254 (seen) to the
+; plain tile.
+tp_clean:
+        lda #<SCREEN
+        sta ptr
+        lda #>SCREEN
+        sta ptr+1
+        ldx #4
+@page:  ldy #0
+@l:     lda (ptr),y
+        cmp #T_MARK
+        bne @seen
+        lda tp_k
+        sta (ptr),y
+        bne @nx                 ; (never 0)
+@seen:  cmp #T_TELEPORT|$80
+        bcc @nx
+        cmp #(T_TELEPORT_ONCE|$80)+1
+        bcs @nx
+        and #$7F
+        sta (ptr),y
+@nx:    iny
+        bne @l
+        inc ptr+1
+        dex
+        bne @page
+        rts
 
 ; ---------------------------------------------------------------------------
 ; The trampoline's rubber band. When he bounces, the mat of the whole connected run he landed on (tiles of the trampoline
@@ -3723,6 +4200,7 @@ ai_ground:
         .include "gen/levels.inc"       ; the maps and the level tables
         .include "gen/screens.inc"      ; screen_title, screen_gameover
         .include "gen/fade.inc"         ; door_thr: when each pixel of the exit door shows
+        .include "gen/dissolve.inc"     ; tp_mask: the teleport dissolve's masks
         .include "gen/helix.inc"        ; helix_r, helix_l: the thread of the chutes
         .include "gen/tileflags.inc"    ; tile_flags: bit 0 solid, bit 1 one-way
 
@@ -3804,7 +4282,7 @@ spr_hi: .repeat SPR_COUNT, i
         .endrepeat
 
 mode_tab:
-        .word mode_title, mode_play, mode_dying, mode_spawn, mode_clear, mode_over
+        .word mode_title, mode_play, mode_dying, mode_spawn, mode_clear, mode_over, mode_tele
 
 str_score:   STR "SCORE"
 str_level:   STR "LEVEL"

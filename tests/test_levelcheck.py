@@ -135,5 +135,57 @@ class LevelCheck(unittest.TestCase):
         self.assertEqual(lc.check(path), ["no player start (@)"])
 
 
+class Teleporters(unittest.TestCase):
+    """`Z` is a teleport, `z` a one-use teleport; tiles that touch are one teleporter."""
+
+    def pads(self, **extra: str) -> dict[tuple[int, int], str]:
+        """A pad of three on a step above the floor (row 22, columns 8-10) and one high up (row 10, columns 25-27) with an item above."""
+        edits = {(c, 22): "Z" for c in (8, 9, 10)}
+        edits.update({(c, 10): "Z" for c in (25, 26, 27)})
+        edits[(26, 9)] = "*"
+        return edits
+
+    def test_a_ledge_only_a_teleporter_reaches(self) -> None:
+        self.assertEqual(lc.check(make(self.pads())), [])
+        # the same ledge with an ordinary platform instead of the second pad is out of reach
+        plain = {k: v for k, v in self.pads().items() if k[1] != 10}
+        plain.update({(c, 10): "#" for c in (25, 26, 27)})
+        self.assertTrue([p for p in lc.check(make(plain)) if p.startswith("item")])
+
+    def test_the_item_is_reached_through_a_third_teleporter_in_between(self) -> None:
+        # reading order: high (row 10), third (row 16), low (row 22): low -> high (the last goes back to the first), so the item is
+        # reachable; and with the third one the walk from the third to the low one is a drop, the third is reached from the high one
+        three = {**self.pads(), **{(c, 16): "Z" for c in (5, 6)}}
+        self.assertEqual(lc.check(make(three)), [])
+
+    def test_one_use_teleporters_count_for_the_first_trip(self) -> None:
+        once = {k: ("z" if v == "Z" else v) for k, v in self.pads().items()}
+        self.assertEqual(lc.check(make(once)), [])
+
+    def test_a_single_teleporter_is_a_problem(self) -> None:
+        problems = lc.check(make({(c, 22): "Z" for c in (8, 9, 10)}))
+        self.assertTrue(any("only one" in p and "column 8, row 22" in p for p in problems), problems)
+
+    def test_a_group_of_both_kinds_is_a_problem(self) -> None:
+        edits = {**self.pads(), (11, 22): "z"}
+        problems = lc.check(make(edits))
+        self.assertTrue(any("mixes the two kinds" in p and "column 8, row 22" in p for p in problems), problems)
+        stacked = {**self.pads(), (9, 21): "z"}  # above counts as touching
+        self.assertTrue(any("mixes" in p for p in lc.check(make(stacked))))
+
+    def test_a_first_tile_with_something_above_it_is_a_problem(self) -> None:
+        edits = {**self.pads(), (25, 9): "#"}
+        problems = lc.check(make(edits))
+        self.assertTrue(any("no room to stand" in p and "column 25, row 10" in p for p in problems), problems)
+
+    def test_the_edges_follow_reading_order_and_the_last_goes_back_to_the_first(self) -> None:
+        lv = lc.Level(lc.load(make(self.pads())))
+        self.assertEqual(lv.tele[(8, 22)], (25, 10), "the lower one is last in reading order: it goes back to the first, the high one")
+        self.assertEqual(lv.tele[(26, 10)], (8, 22), "and the high one goes to the next, the low one")
+        self.assertEqual(len(lv.tele), 6)
+        one = lc.Level(lc.load(make({(c, 22): "Z" for c in (8, 9, 10)})))
+        self.assertEqual(one.tele, {}, "a single teleporter leads nowhere")
+
+
 if __name__ == "__main__":
     unittest.main()

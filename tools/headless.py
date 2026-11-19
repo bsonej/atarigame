@@ -28,12 +28,13 @@ LABELS = ROOT / "build" / "test" / "atarigame.lbl"
 UP, DOWN, LEFT, RIGHT, FIRE = 0x01, 0x02, 0x04, 0x08, 0x10
 
 GROUND, AIR, CLIMB, RIDE = 0, 1, 2, 3
-TITLE, PLAY, DYING, SPAWN, CLEAR, OVER = range(6)  # the game's modes
+TITLE, PLAY, DYING, SPAWN, CLEAR, OVER, TELE = range(7)  # the game's modes
 COLS, ROWS = 40, 24
 PM_YOFF = 32
 PLAYER_FLOAT = 2  # he hovers this many lines above the top of his physics box on average (src/main.s)
 BOB_RANGE = (1, 3)  # ... and bobs between 1 and 3 lines above it: the game's `pfloat` is the float of the last drawing
 SPAWN_FRAMES, DIE_FRAMES, CLEAR_FRAMES = 48, 80, 60
+TELE_FRAMES = 32  # teleporting: 16 frames dissolving, 16 rebuilding him at the other teleporter
 
 
 def read_labels(path: Path) -> dict[str, int]:

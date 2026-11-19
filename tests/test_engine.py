@@ -49,7 +49,7 @@ TILES_BY_NAME = {t["name"]: t["byte"] for t in TILES}
 
 def compile_level(path: Path, text: str | None = None) -> dict:
     """What the asset tool makes of a level (caps, dots, the door)."""
-    return ba.parse_level(path, CHARS, SOLID, CAPS, text=text, dots=DOTS, door=DOOR, twins=TWINS)
+    return ba.parse_level(path, CHARS, SOLID, CAPS, text=text, dots=DOTS, door=DOOR, twins=TWINS, teleport=ba.teleport_bytes(TILES))
 LEVELS = sorted((ROOT / "assets" / "levels").glob("*.txt"), key=ba.natural_key)
 
 BELTS = [n for n in CHAR if n.startswith("CONV_")]
@@ -113,6 +113,25 @@ def random_level(seed: int) -> str:
         + "\n".join("".join(row) for row in grid)
         + "\n"
     )
+
+
+def teleport_level(seed: int) -> str:
+    """Three teleporters (of mixed kinds, never mixed in one) on three rows, a floor, and him standing on the first."""
+    rnd = random.Random(seed + 500)
+    grid = [["."] * 40 for _ in range(24)]
+    for r in range(1, 24):
+        grid[r][0] = grid[r][39] = "W"
+    grid[23] = ["#"] * 40
+    cols = rnd.sample(range(2, 30), 3)
+    for (row, c0) in zip((20, 14, 8), cols):
+        tile = rnd.choice("Zz")
+        for c in range(c0, c0 + rnd.randint(2, 6)):
+            grid[row][c] = tile
+    first = cols[0]
+    grid[18][first + 1] = "@"
+    grid[22][20] = "*"
+    grid[22][36] = "D"
+    return "# Level 99. 40 columns x 24 rows.\n" + "\n".join("".join(row) for row in grid) + "\n"
 
 
 def random_segments(seed: int, frames: int = 300) -> list[list[int]]:
@@ -183,6 +202,7 @@ class CompileParity(unittest.TestCase):
 
 FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "bn", "fall", "vx", "vfrac", "frame", "hop"]
 DOOR_FIELDS = {"doorOpen": "door_open", "doorDir": "door_dir", "doorPhase": "door_phase", "face": "face"}  # engine name -> game variable
+TELE_FIELDS = {"tpT": "tp_t", "tpLock": "tp_lock", "tpS4": "tp_s4"}  # (in zero page)
 
 
 @needs_emulator
@@ -200,6 +220,8 @@ class EngineMatchesGame(Arena):
         snap["score"] = g.score16
         for field, label in DOOR_FIELDS.items():
             snap[field] = g.bss(label)[0]
+        for field, label in TELE_FIELDS.items():
+            snap[field] = getattr(g, label)
         return snap
 
     def read_map(self) -> list[int]:
@@ -211,7 +233,7 @@ class EngineMatchesGame(Arena):
 
     def compare(self, label: str, rec: dict) -> None:
         got = self.read_game()
-        want = {f: rec["snap"][f] for f in [*FIELDS, *DOOR_FIELDS]}
+        want = {f: rec["snap"][f] for f in [*FIELDS, *DOOR_FIELDS, *TELE_FIELDS]}
         self.assertEqual(got, want, f"{label}: player state differs (game vs engine)")
         if want["mode"] == OVER:  # the real game now draws its game-over screen over the map
             return
@@ -225,7 +247,7 @@ class EngineMatchesGame(Arena):
         segs = spec["segments"]
         if fine:
             segs = [[b, 1] for b, n in segs for _ in range(n)]
-        trace = node_trace({**spec, "segments": segs})
+        trace = node_trace({"fps": self.g.fps, **spec, "segments": segs})
         self.assertNotIn("error", trace, trace.get("error"))
         done = 0
         for i, (buttons, frames) in enumerate(segs[: len(trace["records"])]):
@@ -261,6 +283,7 @@ class EngineMatchesGame(Arena):
         for name, value in dict(
             px=lv["spawn"][0] * 4, py=lv["spawn"][1] * 8, state=0, jt=0xFF, bn=0, hop=0, fall=0, vx=0, vfrac=0, cfrac=0, fcount=0,
             gtick=0, cacc_t=0, cacc=4, anim=0, moved=0, joy=0, joyprev=0, left=lv["items"], lives=1, pg_n=0,
+            tp_t=0, tp_lock=0, tp_s4=0,
         ).items():
             g.poke(name, value)
         g.poke_bytes(g.labels["tt_ph"], [0xFF] * 8)
@@ -273,6 +296,49 @@ class EngineMatchesGame(Arena):
                 text = random_level(seed)
                 self.fresh()
                 segs = random_segments(seed)
+                self.check(lambda: self.load_random_level(text), {"text": text, "lives": 1, "segments": segs})
+
+    def test_teleporters_frame_by_frame(self) -> None:
+        """Four teleporters of both kinds (one of them an L, two one-use) walked, hopped and waited on for a few hundred frames
+        in several scripted tours: position, mode, the charge and dissolve counters and the screen map (the flicker, the
+        one-use pads turning to brick) are the same on the game and the engine at every compared point."""
+        grid = [["."] * 40 for _ in range(24)]
+        for r in range(1, 24):
+            grid[r][0] = grid[r][39] = "W"
+        grid[23] = ["#"] * 40
+        for c in range(5, 8):
+            grid[20][c] = "z"
+        for c in range(25, 29):
+            grid[15][c] = "Z"
+        for c in range(12, 15):
+            grid[10][c] = "z"
+        for c in range(30, 33):  # an L: a bar and a tile hanging off its right end
+            grid[19][c] = "Z"
+        grid[20][32] = "Z"
+        grid[18][6] = "@"
+        grid[22][20] = "*"
+        grid[22][34] = "D"
+        text = "# Level 99. 40 columns x 24 rows.\n" + "\n".join("".join(row) for row in grid) + "\n"
+        stay = [0, 70]
+        hop = [[FIRE, 1], [0, 40]]
+        tours = [
+            [stay, *hop, [RIGHT, 3], [LEFT, 2], stay, *hop, [RIGHT, 2], stay, *hop, [LEFT, 3], stay, *hop, stay],  # round the ring
+            [[0, 30], [RIGHT, 12], [0, 20], [LEFT, 8], [0, 60], *hop, [0, 60]],  # walking along a pad still counts
+            [[0, 49], [FIRE, 1], [0, 35], [0, 60], [RIGHT, 40], [0, 70], [LEFT | FIRE, 1], [LEFT, 30], [0, 70]],  # just short of the second
+            [[0, 90], [RIGHT, 5], [FIRE, 1], [RIGHT, 6], [0, 60], [UP, 3], [0, 70]],  # input while dissolving is ignored
+        ]
+        for n, segs in enumerate(tours):
+            with self.subTest(tour=n):
+                self.fresh()
+                self.check(lambda: self.load_random_level(text), {"text": text, "lives": 1, "segments": [list(x) for x in segs]})
+
+    def test_a_teleporter_in_the_middle_of_random_play(self) -> None:
+        for seed in range(4):
+            with self.subTest(seed=seed):
+                text = teleport_level(seed)
+                rnd = random.Random(seed)
+                segs = [[rnd.choice([0, 0, RIGHT, LEFT, FIRE, RIGHT | FIRE]), rnd.choice([1, 3, 8, 30, 55])] for _ in range(40)]
+                self.fresh()
                 self.check(lambda: self.load_random_level(text), {"text": text, "lives": 1, "segments": segs})
 
     def test_the_trampoline_rubber_band_frame_by_frame(self) -> None:

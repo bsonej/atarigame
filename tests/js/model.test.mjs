@@ -230,3 +230,52 @@ test('the palette offers the chutes and the ready-made runs, and not the twins',
   assert.ok(!offered.has('SLIDE_R_B') && !offered.has('SLIDE_L_B'));
   for (const label of ['Chute down', 'Chute up']) assert.ok(STAMPS.some((s) => s.label === label), label);
 });
+
+// ---- teleporters ---------------------------------------------------------------------------------------------------
+test('the palette offers the two teleports in their own group, with a tooltip and a short stamp each', () => {
+  const group = GROUPS.find((g) => g.title === 'Teleports');
+  assert.ok(group);
+  assert.deepEqual(group.items.map((i) => i.name), ['TELEPORT', 'TELEPORT_ONCE']);
+  assert.ok(group.items.every((i) => i.tip.length > 40));
+  assert.deepEqual(STAMPS.filter((s) => /teleport/i.test(s.label)).map((s) => s.cells.length), [3, 3]);
+  assert.deepEqual([T.TELEPORT, T.TELEPORT_ONCE], [125, 126]);
+});
+
+const errorsOf = (edit) => compileLevel(room(edit), tables).errors.map((e) => e.msg);
+
+test('the checks: two teleporters are fine, one is an error, a group of both kinds is an error', () => {
+  assert.deepEqual(errorsOf({ '22,6': 'ZZZ', '15,30': 'zz' }), []);
+  assert.deepEqual(errorsOf({}), [], 'no teleporters, no rule');
+  assert.ok(errorsOf({ '22,6': 'ZZZ' }).some((m) => /only one/.test(m)));
+  assert.ok(errorsOf({ '22,6': 'ZZ', '21,7': 'Z', '15,30': 'ZZ' }).length === 0, 'tiles that touch of one kind are one teleporter');
+  const mixed = errorsOf({ '22,6': 'ZZz', '15,30': 'ZZ' });
+  assert.ok(mixed.some((m) => /mixes the two kinds/.test(m) && /column 6, row 22/.test(m)), mixed.join('; '));
+  assert.ok(errorsOf({ '22,6': 'Z', '23,6': 'z', '15,30': 'ZZ' }).some((m) => /mixes/.test(m)), 'above and below touch too');
+  assert.deepEqual(errorsOf({ '22,6': 'ZZ.zz', '15,30': 'ZZ' }), [], 'a gap keeps them apart');
+});
+
+test('the checks: the first tile needs room to stand on and a group is at most 64 tiles', () => {
+  const low = errorsOf({ '22,6': 'ZZZ', '15,30': 'ZZ', '20,6': '#' });
+  assert.ok(low.some((m) => /no room to stand/.test(m)), low.join('; '));
+  assert.ok(errorsOf({ '22,6': 'ZZZ', '15,30': 'ZZ', '14,30': '^' }).some((m) => /no room to stand/.test(m)), 'a spike over the first tile is no room either');
+  assert.ok(errorsOf({ '22,6': 'ZZZ', '2,30': 'ZZ' }).some((m) => /no room to stand/.test(m)), 'first tile on row 2: no room under the score row');
+  const wall = {};
+  for (let r = 5; r < 14; r++) wall[`${r},3`] = 'ZZZZZZZZ';
+  assert.ok(errorsOf({ ...wall, '22,16': 'ZZ' }).some((m) => /72 tiles/.test(m)));
+});
+
+test('the editor reads the groups the way the asset tool does', () => {
+  const rows = room({ '22,6': 'ZZ', '21,7': 'Z', '15,30': 'ZZ' });
+  const c = compileLevel(rows, tables);
+  assert.equal(c.map[22 * 40 + 6], T.TELEPORT);
+  assert.equal(c.map[21 * 40 + 7], T.TELEPORT);
+  assert.equal(c.dots, 0, 'no dots on teleporters');
+});
+
+test('both teleport tiles are drawn, glowing too', () => {
+  const t = api.tiles.filter((x) => x.name.startsWith('TELEPORT'));
+  assert.equal(t.length, 2);
+  assert.ok(t.every((x) => x.glow && x.solid));
+  assert.notDeepEqual(t[0].rows, t[1].rows);
+  assert.equal(tables.canon[T.TELEPORT | 0x80], T.TELEPORT);
+});

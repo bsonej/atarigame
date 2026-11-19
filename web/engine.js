@@ -10,7 +10,7 @@ export const COLS = 40;
 export const ROWS = 24;
 
 export const JOY = { UP: 1, DOWN: 2, LEFT: 4, RIGHT: 8, FIRE: 16 };
-export const MODE = { TITLE: 0, PLAY: 1, DYING: 2, SPAWN: 3, CLEAR: 4, OVER: 5 };
+export const MODE = { TITLE: 0, PLAY: 1, DYING: 2, SPAWN: 3, CLEAR: 4, OVER: 5, TELE: 6 }; // TELE: dissolving, moved, rebuilt (teleporter)
 export const STATE = { GROUND: 0, AIR: 1, CLIMB: 2, RIDE: 3 }; // RIDE: carried along a chute, joystick ignored
 // Sprite frames (assets/sprites.txt): families to which `face` (0 at you, 1 right, 2 left) is added.
 export const FRAME = { STAND: 0, LEAN: 3, SQUASH: 5, STRETCH: 8, DIE_A: 11, DIE_B: 12 };
@@ -48,6 +48,8 @@ const CLEAR_BONUS = 100;
 export const SPAWN_FRAMES = 48;
 export const DIE_FRAMES = 80;
 export const CLEAR_FRAMES = 60;
+export const TP_FRAMES = 32; // teleporting: 16 frames dissolving, 16 rebuilding him at the other teleporter
+const MAX_TP_STACK = 64; // (the game's flood fill; groups are at most 64 tiles, see MAX_TELEPORT_GROUP in build_assets.py)
 
 const JUMP_DY = [3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 0];
 // Extra full-speed frames of a bounce to clear a surface k tiles up (index k): the smallest n with 17 + 3n >= 8k + 8.
@@ -83,6 +85,7 @@ export class Game {
     this.convFirst = this.T.CONV_R_SLOW;
     this.door = tables.door; // the bytes of the exit door's six tiles, bottom left first
     this.fadeSteps = tables.fadeSteps || 16;
+    this.fps = opts.fps || 50; // frames a second: the game counts a second on a teleporter in these (60 NTSC, 50 PAL)
     this.lives = opts.lives === undefined ? START_LIVES : opts.lives;
     this.score = 0;
     this.deaths = 0;
@@ -134,6 +137,14 @@ export class Game {
     this.frame = FRAME.STAND;
     this.drawn = 0;
     this.dyi = 0;
+    this.tpT = 0; // teleporter: frames he has stood on one (0 = not charging)
+    this.tpLock = 0; // 1 = he arrived on this one: step off it before it charges again
+    this.tpK = 0; // the kind of the teleporter he stands on (TELEPORT or TELEPORT_ONCE) and the column and row of its tile
+    this.tpC = 0;
+    this.tpR = 0;
+    this.tpDc = 0; // where it sends him: column and row of the first tile of the next teleporter
+    this.tpDr = 0;
+    this.tpS4 = 0; // the dissolve: 4 * the step (0 whole, 16 gone), the row of the mask table
     this.mode = MODE.SPAWN;
   }
 
@@ -144,6 +155,7 @@ export class Game {
       score: this.score, jt: this.jt, bn: this.bn, fall: this.fall, vx: this.vx, vfrac: this.vfrac, under: this.under,
       cacc: this.cacc, mtimer: this.mtimer, frame: this.frame, face: this.face, hop: this.hop,
       doorOpen: this.doorOpen, doorDir: u8(this.doorDir), doorPhase: this.doorPhase,
+      tpT: this.tpT, tpLock: this.tpLock, tpS4: this.tpS4,
     };
   }
 
@@ -259,6 +271,141 @@ export class Game {
     return t === T.ICE || t === T.ROLLER || u8(t - this.convFirst) < 8;
   }
 
+  // ---- teleporters ---------------------------------------------------------------------------
+  // Teleport tiles that touch (same kind) are ONE teleporter. A second (this.fps frames) standing on the ground on any tile
+  // of one sends him to the next teleporter: they are ordered by their first tile in reading order, the one after the last
+  // is the first, and he arrives on the next one's first tile. A one-use teleporter he leaves becomes brick. A teleporter
+  // he arrives on does not charge until he has stepped off it. While he charges the group flips between its byte and its
+  // byte + 128 (the `glow` tile) every 4 frames. main.s finds the groups on the screen with a flood fill (tp_fill ...);
+  // this does the same through fill(), which also gives the first tile in reading order.
+
+  /** Flood fill from (c, r): every tile of 4-neighbours holding `match` becomes `next`. Returns the first of them in
+   *  reading order as [row, col] (null if the start does not hold `match`). */
+  fill(c, r, match, next) {
+    if (this.map[r * COLS + c] !== match) return null;
+    this.map[r * COLS + c] = next;
+    const todo = [[c, r]];
+    let first = [0xff, 0];
+    while (todo.length) {
+      const [x, y] = todo.pop();
+      if (y < first[0] || (y === first[0] && x < first[1])) first = [y, x];
+      for (let k = 3; k >= 0; k--) {
+        const nx = u8(x + NB_DC[k]);
+        const ny = u8(y + NB_DR[k]);
+        if (nx >= COLS || ny >= ROWS || this.map[ny * COLS + nx] !== match || todo.length >= MAX_TP_STACK) continue;
+        this.map[ny * COLS + nx] = next;
+        todo.push([nx, ny]);
+      }
+    }
+    return first;
+  }
+
+  /** True (and tpK, tpC, tpR set) if his feet are on a teleport tile (the tile under px or px+3). */
+  tpUnder() {
+    const ty = u8(this.py + SPR_H);
+    for (const tx of [this.px, u8(this.px + 3)]) {
+      const t = this.getTile(tx, ty);
+      if (t === this.T.TELEPORT || t === this.T.TELEPORT_ONCE) {
+        this.tpK = t;
+        this.tpC = tx >> 2;
+        this.tpR = ty >> 3;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** One frame of play: count the time on a teleporter. */
+  tpUpdate() {
+    if (this.state === STATE.GROUND && this.tpUnder()) {
+      if (this.tpLock) return;
+      this.tpT = u8(this.tpT + 1);
+      if ((this.tpT & 3) === 0) this.tpFlip();
+      if (this.tpT >= this.fps) this.tpGo();
+      return;
+    }
+    this.tpLock = 0;
+    if (this.tpT === 0) return;
+    if (this.tpT & 4) this.tpFlip(); // the pad's colour back to the plain one
+    this.tpT = 0;
+  }
+
+  /** Flip the glow of the teleporter at (tpC, tpR): its byte <-> its byte + 128, the whole group. */
+  tpFlip() {
+    const b = this.map[this.tpR * COLS + this.tpC];
+    this.fill(this.tpC, this.tpR, b, b ^ 0x80);
+  }
+
+  tpGo() {
+    if (this.tpT & 4) this.tpFlip();
+    this.tpT = 0;
+    const dest = this.tpDest();
+    if (!dest) {
+      this.tpLock = 1; // nowhere to go: nothing to do until he steps off
+      return;
+    }
+    [this.tpDc, this.tpDr] = dest;
+    this.mode = MODE.TELE;
+    this.mtimer = 0;
+    this.vx = 0;
+    this.vfrac = 0;
+    this.landT = 0;
+    this.lastSt = 0;
+    this.moved = 0;
+    this.frame = FRAME.STAND + this.face;
+  }
+
+  /** The first tile [col, row] of the teleporter after the one at (tpC, tpR) in reading order of first tiles (cyclic), or null.
+   *  Teleporters are the connected tiles of one byte. */
+  tpDest() {
+    const T = this.T;
+    const seen = new Set();
+    const heads = []; // the first tile of every teleporter, in reading order
+    let mine = null;
+    for (let i = COLS; i < ROWS * COLS; i++) {
+      const b = this.map[i];
+      if ((b !== T.TELEPORT && b !== T.TELEPORT_ONCE) || seen.has(i)) continue;
+      const todo = [i];
+      seen.add(i);
+      const members = [];
+      while (todo.length) {
+        const j = todo.pop();
+        members.push(j);
+        const x = j % COLS;
+        for (const n of [x > 0 ? j - 1 : -1, x < COLS - 1 ? j + 1 : -1, j - COLS, j + COLS]) {
+          if (n >= COLS && n < ROWS * COLS && this.map[n] === b && !seen.has(n)) {
+            seen.add(n);
+            todo.push(n);
+          }
+        }
+      }
+      heads.push(i); // the scan is in reading order, so this is the group's first tile
+      if (members.includes(this.tpR * COLS + this.tpC)) mine = heads.length - 1;
+    }
+    if (mine === null || heads.length < 2) return null;
+    const h = heads[(mine + 1) % heads.length];
+    return [h % COLS, Math.floor(h / COLS)];
+  }
+
+  /** Halfway through the teleport: he reappears on the first tile of the destination; a one-use pad he left is spent. */
+  tpMove() {
+    this.px = u8(this.tpDc << 2);
+    this.py = u8((this.tpDr << 3) - SPR_H);
+    if (this.tpK === this.T.TELEPORT_ONCE) this.fill(this.tpC, this.tpR, this.T.TELEPORT_ONCE, this.T.BRICK);
+  }
+
+  modeTele(hjoy) {
+    this.joy = hjoy; // a held button must not count as a fresh press later
+    this.incMtimer();
+    if (this.mtimer === TP_FRAMES / 2 + 1) this.tpMove();
+    this.tpS4 = (this.mtimer < TP_FRAMES / 2 + 1 ? this.mtimer : TP_FRAMES + 1 - this.mtimer) << 2; // 1..16, then 16 down to 1
+    if (this.mtimer >= TP_FRAMES) {
+      this.mode = MODE.PLAY;
+      this.tpS4 = 0;
+      this.tpLock = 1; // he stands on a teleporter: step off before it charges again
+    }
+  }
+
   // ---- one frame -----------------------------------------------------------------------------
   /** Advance one frame with the joystick `hjoy` (JOY bits). Returns this.mode. */
   step(hjoy) {
@@ -267,6 +414,7 @@ export class Game {
       case MODE.DYING: this.modeDying(); break;
       case MODE.SPAWN: this.modeSpawn(hjoy); break;
       case MODE.CLEAR: this.modeClear(); break;
+      case MODE.TELE: this.modeTele(hjoy); break;
       default: break;
     }
     return this.mode;
@@ -289,6 +437,8 @@ export class Game {
     this.updateTimed();
     this.trampAnim();
     this.updatePegs();
+    if (this.mode !== MODE.PLAY) return;
+    this.tpUpdate();
     if (this.mode !== MODE.PLAY) return;
     this.chooseFrame();
   }

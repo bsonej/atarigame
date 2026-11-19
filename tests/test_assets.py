@@ -788,12 +788,157 @@ class ChuteThread(unittest.TestCase):
             self.assertEqual(ba.chute_frame(h, t + 1, up=True), (a, b), "odd frames change nothing")
 
 
+class Teleports(unittest.TestCase):
+    """The two teleport tiles (ids 125 and 126 and the unused 127, glow bytes, groups of joined tiles) and the rules a level must follow."""
+
+    TELE = flagged(125, "TELEPORT", "Z", "solid glow")
+    ONCE = flagged(126, "TELEPORT_ONCE", "z", "solid glow")
+
+    def setUp(self) -> None:
+        self.p = Project()
+        self.addCleanup(self.p.cleanup)
+        self.p.write("assets/tiles.txt", "\n".join([EMPTY_TILE, SOLID_BRICK, ITEM_TILE, self.TELE, self.ONCE]) + "\n")
+
+    def rows(self, places: dict[int, str]) -> list[str]:
+        """The good level with `places` ({row: text}) written over it from column 4 on."""
+        rows = good_rows()
+        for r, text in places.items():
+            rows[r] = rows[r][:4] + text + rows[r][4 + len(text):]
+        return rows
+
+    def build(self, rows: list[str]) -> Path:
+        self.p.write("assets/levels/level1.txt", level(rows))
+        return self.p.build()
+
+    def error(self, rows: list[str]) -> str:
+        with self.assertRaises(ba.AssetError) as cm:
+            self.build(rows)
+        return str(cm.exception)
+
+    def test_the_real_tiles_are_at_ids_125_and_126_and_127_is_free(self) -> None:
+        tiles = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
+        by_name = {t["name"]: t for t in tiles}
+        self.assertEqual((by_name["TELEPORT"]["id"], by_name["TELEPORT_ONCE"]["id"]), (125, 126))
+        self.assertEqual(ba.teleport_bytes(tiles), (125, 126))
+        self.assertNotIn(127, {t["id"] for t in tiles}, "the game's flood fill marks tiles with the unused glyph 127")
+        ids = [t["id"] for t in tiles]
+        self.assertEqual(len(ids), len(set(ids)), "no id is used twice")
+        self.assertNotEqual(by_name["TELEPORT"]["rows"], by_name["TELEPORT_ONCE"]["rows"], "the one-use pad looks different")
+        for n in ("TELEPORT", "TELEPORT_ONCE"):
+            self.assertEqual((by_name[n]["solid"], by_name[n]["oneway"], by_name[n]["glow"]), (True, False, True))
+            self.assertNotIn(by_name[n]["byte"], ba.dot_families(tiles), "no dots on a teleporter")
+            self.assertNotIn(by_name[n]["byte"], ba.cap_families(tiles), "and no end caps")
+
+    def test_the_wrong_ids_are_rejected(self) -> None:
+        self.p.write("assets/tiles.txt", "\n".join([EMPTY_TILE, SOLID_BRICK, ITEM_TILE, flagged(124, "TELEPORT", "Z", "solid"), self.ONCE]) + "\n")
+        with self.assertRaises(ba.AssetError) as cm:
+            self.p.build()
+        self.assertIn("ids 125 and 126", str(cm.exception))
+
+    def test_a_glow_tile_has_its_byte_plus_128_in_the_tables(self) -> None:
+        flags, canon = ba.tile_tables(ba.parse_tiles(self.p.dir / "assets" / "tiles.txt"))
+        for b in (125, 126):
+            self.assertEqual((flags[b], flags[b | 0x80]), (ba.F_SOLID, ba.F_SOLID))
+            self.assertEqual((canon[b], canon[b | 0x80]), (b, b), "both bytes are the same tile to the game's rules")
+        self.assertEqual(canon[127], 127)
+
+    def test_glow_cannot_be_combined_with_alt(self) -> None:
+        self.p.write("assets/tiles.txt", "\n".join([EMPTY_TILE, SOLID_BRICK, ITEM_TILE, flagged(7, "ICE", "~", "solid alt glow")]) + "\n")
+        with self.assertRaises(ba.AssetError):
+            self.p.build()
+
+    def test_two_teleporters_build(self) -> None:
+        out = self.build(self.rows({20: "ZZZ", 12: "z"}))
+        text = (out / "levels.inc").read_text()
+        self.assertIn("$7D,$7D,$7D", text)
+        self.assertIn("$7E", text)
+
+    def test_groups_are_the_tiles_that_touch_and_come_in_reading_order(self) -> None:
+        # (col, row) -> kind. A is an L shape (its first tile is the top left one), B is a bar, C touches nothing
+        kinds = {(10, 5): 0, (10, 6): 0, (11, 6): 0, (20, 5): 1, (21, 5): 1, (3, 9): 0, (15, 8): 0}
+        groups = ba.teleport_groups(kinds)
+        self.assertEqual([g["head"] for g in groups], [(10, 5), (20, 5), (15, 8), (3, 9)])
+        self.assertEqual([len(g["tiles"]) for g in groups], [3, 2, 1, 1])
+        self.assertEqual(groups[0]["tiles"], [(10, 5), (10, 6), (11, 6)], "a group's tiles are in reading order")
+
+    def test_a_diagonal_neighbour_is_another_teleporter(self) -> None:
+        groups = ba.teleport_groups({(5, 5): 0, (6, 6): 0})
+        self.assertEqual(len(groups), 2)
+
+    def test_a_u_shape_is_one_group_ordered_by_its_first_tile(self) -> None:
+        kinds = {(2, 4): 0, (2, 5): 0, (3, 5): 0, (4, 5): 0, (4, 4): 0, (9, 4): 0}
+        groups = ba.teleport_groups(kinds)
+        self.assertEqual([g["head"] for g in groups], [(2, 4), (9, 4)])
+        self.assertEqual(len(groups[0]["tiles"]), 5)
+
+    def test_a_level_with_only_one_teleporter_is_refused(self) -> None:
+        self.assertIn("only one", self.error(self.rows({20: "ZZZ"})))
+        self.assertIn("only one", self.error(self.rows({20: "ZZ", 21: ".ZZ"})), "tiles that touch are one teleporter, however shaped")
+
+    def test_one_group_of_the_two_kinds_is_refused(self) -> None:
+        msg = self.error(self.rows({20: "ZZz", 12: "Z"}))
+        self.assertIn("mixes the two kinds", msg)
+        self.assertIn("column 4, row 20", msg)
+        self.assertIn("mixes", self.error(self.rows({20: "Z", 21: "z", 12: "ZZ"})), "above and below count as touching")
+
+    def test_a_bar_of_a_kind_next_to_the_other_kind_is_refused_but_a_gap_is_fine(self) -> None:
+        self.build(self.rows({20: "ZZ.zz", 12: "Z"}))
+
+    def test_no_teleport_tiles_means_no_rules(self) -> None:
+        self.build(good_rows())
+
+    def test_a_first_tile_without_room_to_stand_is_refused(self) -> None:
+        rows = self.rows({20: "ZZZ", 12: "z"})
+        rows[19] = rows[19][:4] + "#" + rows[19][5:]  # a brick right over the first tile
+        self.assertIn("no room to stand", self.error(rows))
+        rows = self.rows({20: "ZZZ", 12: "z"})
+        rows[10] = rows[10][:4] + "#" + rows[10][5:]  # two over the second teleporter's: also too low
+        self.assertIn("no room to stand", self.error(rows))
+        rows = self.rows({2: "ZZ", 12: "z"})  # a first tile at row 2 leaves no room under the score row
+        self.assertIn("no room to stand", self.error(rows))
+
+    def test_a_group_is_at_most_64_tiles(self) -> None:
+        kinds = {(c, 5 + r): 0 for c in range(8) for r in range(9)}  # 72 tiles
+        kinds[(30, 5)] = 0
+        problems = ba.teleport_problems(kinds, lambda c, r: False)
+        self.assertTrue(any("72 tiles" in m for m in problems), problems)
+
+    def test_the_dissolve_masks_take_a_pixel_out_of_every_block_a_step(self) -> None:
+        masks = ba.dissolve_masks()
+        self.assertEqual(len(masks), (ba.DISSOLVE_STEPS + 1) * 4)
+        self.assertEqual(masks[:4], [0xFF] * 4, "step 0 shows everything")
+        self.assertEqual(masks[-4:], [0] * 4, "the last step shows nothing")
+        shown = [sum(bin(m & 0xF).count("1") for m in masks[4 * s : 4 * s + 4]) for s in range(17)]
+        self.assertEqual(shown, list(range(16, -1, -1)), "one pixel fewer of each 4x4 block every step")
+        for s in range(16):  # nothing that is gone comes back
+            for row in range(4):
+                self.assertEqual(masks[4 * (s + 1) + row] & ~masks[4 * s + row] & 0xFF, 0)
+        for m in masks:
+            self.assertEqual(m >> 4, m & 0xF, "a row's 4 columns are repeated over the 8 pixels")
+
+    def test_the_include_has_the_masks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ba.build(ROOT, Path(tmp))
+            text = (Path(tmp) / "dissolve.inc").read_text()
+            self.assertIn("tp_mask:", text)
+            self.assertEqual(len(re.findall(r"\$[0-9A-F]{2}", text)), 68)
+
+    def test_every_shipped_level_still_builds_and_has_no_teleporters(self) -> None:
+        tiles = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
+        tele = set(ba.teleport_bytes(tiles))
+        for path in sorted((ROOT / "assets" / "levels").glob("*.txt")):
+            chars = {t["char"]: t["byte"] for t in tiles if t["char"]}
+            lv = ba.parse_level(path, chars, {t["byte"] for t in tiles if t["solid"]}, ba.cap_families(tiles), dots=ba.dot_families(tiles),
+                                door=ba.door_bytes(tiles), twins=ba.twin_families(tiles), teleport=tuple(tele))
+            self.assertFalse(tele & set(lv["data"]), path.name)
+
+
 class RealAssets(unittest.TestCase):
     def test_project_assets_convert(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ba.build(ROOT, Path(tmp))
             names = {p.name for p in Path(tmp).iterdir()}
-            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "helix.inc", "charset.inc", "font.inc", "palette.inc", "fade.inc", "sprites.inc", "levels.inc", "screens.inc"})
+            self.assertEqual(names, {"tiles.inc", "tileflags.inc", "helix.inc", "charset.inc", "font.inc", "palette.inc", "fade.inc", "dissolve.inc", "sprites.inc", "levels.inc", "screens.inc"})
             self.assertIn("T_BRICK", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("T_DIGIT0       = 16", (Path(tmp) / "tiles.inc").read_text())
             self.assertIn("level1_spawn", (Path(tmp) / "levels.inc").read_text())

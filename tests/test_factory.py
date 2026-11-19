@@ -31,6 +31,8 @@ from tools.headless import (  # noqa: E402
     RIDE,
     RIGHT,
     SPAWN,
+    TELE,
+    TELE_FRAMES,
 )
 
 T = {m.group(1): int(m.group(2)) for m in re.finditer(r"^T_(\w+)\s*=\s*(\d+)", (ROOT / "src/gen/tiles.inc").read_text(), re.M)}
@@ -737,6 +739,232 @@ class VanishingBlocks(Arena):
         g.run(50, RIGHT)
         self.assertEqual((g.py, g.state), (144, GROUND))
         self.assertGreater(g.px, 16 * 4)
+
+
+@needs_emulator
+class Teleports(Arena):
+    """Stand on a teleporter for a second: he dissolves and is rebuilt on the next one (reading order of each one's first tile)."""
+
+    A = (5, 20)  # first tiles; each teleporter is three tiles wide
+    B = (25, 15)
+    C = (15, 10)
+
+    def build(self, a: str = "TELEPORT", b: str | None = "TELEPORT", c: str | None = None, on: str = "A") -> None:
+        self.arena()
+        g = self.g
+        for name, spec in (("A", a), ("B", b), ("C", c)):
+            if spec:
+                col, row = getattr(self, name)
+                g.put_tiles(col, row, [T[spec]] * 3)
+        col, row = getattr(self, on)
+        self.stand(col * 4 + 4, row * 8 - 16)
+        self.second = self.g.fps
+
+    def arrival(self, name: str) -> tuple[int, int]:
+        col, row = getattr(self, name)
+        return col * 4, row * 8 - 16
+
+    def wait_for_teleport(self, limit: int = 80) -> int:
+        return self.g.run_until(lambda g: g.mode == TELE, limit=limit, every=1)
+
+    def hop(self) -> None:
+        """Leave the ground and land on the same teleporter again (arriving locks it until he does)."""
+        g = self.g
+        g.step(FIRE)
+        g.run_until(lambda g: g.state == GROUND, limit=100, every=1)
+
+    def land_after_teleport(self) -> tuple[int, int]:
+        g = self.g
+        g.run(TELE_FRAMES)
+        self.assertEqual(g.mode, PLAY)
+        return g.px, g.py
+
+    def test_standing_on_one_for_a_second_moves_him_to_the_other(self) -> None:
+        g = self.g
+        self.build()
+        self.assertIn(g.fps, (50, 60))
+        ran = self.wait_for_teleport()
+        self.assertIn(ran, range(g.fps - 2, g.fps + 2), "a second")
+        self.assertEqual(g.mode, TELE)
+        self.assertEqual(self.land_after_teleport(), self.arrival("B"))
+        self.assertEqual((g.state, g.mode), (GROUND, PLAY))
+
+    def test_he_is_rebuilt_at_the_first_tile_even_when_he_stood_at_the_far_end(self) -> None:
+        g = self.g
+        self.build()
+        self.stand(self.A[0] * 4 + 8, self.A[1] * 8 - 16)
+        self.wait_for_teleport()
+        self.assertEqual(self.land_after_teleport(), self.arrival("B"))
+
+    def test_the_dissolve_takes_the_picture_out_and_puts_it_back(self) -> None:
+        g = self.g
+        self.build()
+        self.wait_for_teleport()
+        masks = []
+        for _ in range(TELE_FRAMES - 1):
+            g.step()
+            masks.append(g.tp_s4)
+        self.assertEqual(masks[:16], [4 * i for i in range(1, 17)])
+        self.assertEqual(masks[16:], [4 * i for i in range(16, 1, -1)])
+        g.step()
+        self.assertEqual((g.mode, g.tp_s4), (PLAY, 0))
+
+    def test_he_cannot_be_steered_while_he_is_gone(self) -> None:
+        g = self.g
+        self.build()
+        self.wait_for_teleport()
+        g.run(TELE_FRAMES, RIGHT | FIRE)
+        self.assertEqual(g.mode, PLAY)
+        self.assertEqual((g.px, g.py), self.arrival("B"))
+
+    def test_walking_along_it_counts(self) -> None:
+        g = self.g
+        self.build()
+        self.stand(self.A[0] * 4 - 2, self.A[1] * 8 - 16)  # hanging over its left end
+        g.run(self.second // 2)
+        g.run(6, RIGHT)
+        self.assertEqual(g.py, self.A[1] * 8 - 16, "still on it")
+        g.run(self.second // 2 - 4)
+        self.assertEqual(g.mode, TELE, "the whole time counted: walking along a teleporter is staying on it")
+
+    def test_leaving_it_starts_the_count_over(self) -> None:
+        g = self.g
+        self.build()
+        g.run(self.second - 10)
+        g.run(30, RIGHT)  # off the end and down to the floor
+        self.assertEqual(g.py, FLOOR_Y)
+        g.run(self.second + TELE_FRAMES)
+        self.assertEqual((g.mode, g.py), (PLAY, FLOOR_Y), "leaving started the count over, and he is not on one now")
+
+    def test_jumping_off_starts_over(self) -> None:
+        g = self.g
+        self.build()
+        g.run(self.second - 10)
+        self.hop()
+        self.assertLess(g.tp_t, 20)
+        self.assertEqual(g.mode, PLAY)
+        g.run(10)
+        self.assertEqual(g.mode, PLAY, "the second does not carry over a jump")
+
+    def test_walking_over_one_does_nothing(self) -> None:
+        g = self.g
+        self.build()
+        self.stand(self.A[0] * 4 - 2, self.A[1] * 8 - 16)
+        g.run(100, RIGHT)  # across the pad in a dozen frames and off the end
+        self.assertEqual((g.mode, g.py), (PLAY, FLOOR_Y))
+        self.assertGreater(g.px, self.A[0] * 4 + 12)
+
+    def test_a_level_with_one_teleporter_does_nothing(self) -> None:
+        g = self.g
+        self.build(b=None)
+        g.run(self.second * 2 + TELE_FRAMES)
+        self.assertEqual(g.mode, PLAY)
+        self.assertEqual((g.px, g.py), (self.A[0] * 4 + 4, self.A[1] * 8 - 16))
+
+    def test_after_arriving_it_waits_until_he_has_left_the_ground(self) -> None:
+        g = self.g
+        self.build()
+        self.wait_for_teleport()
+        self.land_after_teleport()
+        self.assertEqual(g.tp_lock, 1)
+        g.run(self.second * 2)
+        self.assertEqual((g.mode, g.px, g.py), (PLAY, *self.arrival("B")), "not back again by itself")
+        self.hop()
+        self.assertGreater(g.tp_t, 0, "the landing starts the count")
+        self.wait_for_teleport()
+        self.assertEqual(self.land_after_teleport(), self.arrival("A"))
+
+    def test_it_flickers_while_he_charges_and_is_plain_again_afterwards(self) -> None:
+        g = self.g
+        self.build()
+        seen = set()
+        for _ in range(self.second - 4):
+            g.step()
+            seen.add(g.tile(self.A[0], self.A[1]))
+        self.assertEqual(seen, {T["TELEPORT"], T["TELEPORT"] | 0x80})
+        self.wait_for_teleport()
+        g.run(TELE_FRAMES)
+        for name in "AB":
+            col, row = getattr(self, name)
+            self.assertEqual([g.tile(col + i, row) for i in range(3)], [T["TELEPORT"]] * 3, name)
+
+    def test_the_pad_he_has_left_early_is_not_left_glowing(self) -> None:
+        g = self.g
+        self.build()
+        g.run(7)
+        g.run(30, RIGHT)
+        g.run(2)
+        self.assertEqual([g.tile(self.A[0] + i, self.A[1]) for i in range(3)], [T["TELEPORT"]] * 3)
+
+    def test_the_teleporters_go_round_in_reading_order(self) -> None:
+        g = self.g
+        self.build(c="TELEPORT")
+        order = []
+        for _ in range(4):
+            self.wait_for_teleport(limit=120)
+            order.append(self.land_after_teleport())
+            self.hop()
+        # from A (the last in reading order) to C (first), then B, then A, then C again
+        self.assertEqual(order, [self.arrival("C"), self.arrival("B"), self.arrival("A"), self.arrival("C")])
+
+    def test_a_one_use_teleporter_becomes_a_plain_platform_once_he_has_gone(self) -> None:
+        g = self.g
+        self.build(a="TELEPORT_ONCE")
+        self.wait_for_teleport()
+        g.run(TELE_FRAMES)
+        col, row = self.A
+        self.assertEqual([g.tile(col + i, row) for i in range(3)], [T["BRICK"]] * 3)
+        self.assertEqual(self.arrival("B"), (g.px, g.py))
+        # from the other one nothing happens now, it is the only teleporter left
+        self.hop()
+        g.run(self.second * 2 + TELE_FRAMES)
+        self.assertEqual((g.mode, g.px, g.py), (PLAY, *self.arrival("B")))
+
+    def test_the_brick_it_became_is_solid_and_has_no_dots(self) -> None:
+        g = self.g
+        self.build(a="TELEPORT_ONCE")
+        self.wait_for_teleport()
+        g.run(TELE_FRAMES)
+        col, row = self.A
+        self.stand(col * 4 + 4, row * 8 - 16)
+        g.run(self.second * 2)
+        self.assertEqual((g.mode, g.py), (PLAY, row * 8 - 16), "stands on it like on any platform")
+        self.assertEqual(g.tp_t, 0)
+
+    def test_a_one_use_teleporter_is_a_destination_until_it_is_used(self) -> None:
+        g = self.g
+        self.build(a="TELEPORT_ONCE", on="B")
+        self.wait_for_teleport()
+        self.assertEqual(self.land_after_teleport(), self.arrival("A"))
+        col, row = self.A
+        self.assertEqual([g.tile(col + i, row) for i in range(3)], [T["TELEPORT_ONCE"]] * 3, "arriving does not use it up")
+        self.hop()
+        self.wait_for_teleport()
+        self.assertEqual(self.land_after_teleport(), self.arrival("B"))
+        self.assertEqual([g.tile(col + i, row) for i in range(3)], [T["BRICK"]] * 3, "leaving does")
+
+    def test_the_one_use_teleporters_in_a_ring_are_skipped_once_used(self) -> None:
+        g = self.g
+        self.build(a="TELEPORT_ONCE", b="TELEPORT", c="TELEPORT_ONCE", on="A")
+        # A -> C (first in reading order, a one-use one: used up behind him at A) ...
+        self.wait_for_teleport()
+        self.assertEqual(self.land_after_teleport(), self.arrival("C"))
+        self.hop()
+        self.wait_for_teleport()  # ... C -> B (A is brick now), C turns into brick
+        self.assertEqual(self.land_after_teleport(), self.arrival("B"))
+        self.hop()
+        g.run(self.second * 2 + TELE_FRAMES)
+        self.assertEqual((g.mode, g.px, g.py), (PLAY, *self.arrival("B")), "B is the only teleporter left")
+        self.assertEqual(g.tile(*self.A), T["BRICK"])
+        self.assertEqual(g.tile(*self.C), T["BRICK"])
+
+    def test_nothing_else_is_disturbed_by_the_scan(self) -> None:
+        g = self.g
+        self.build(c="TELEPORT")
+        before = [g.screen()[r] for r in range(24)]
+        self.wait_for_teleport()
+        g.run(TELE_FRAMES)
+        self.assertEqual([g.screen()[r] for r in range(24)], before, "no marks left behind in the map")
 
 
 @needs_emulator

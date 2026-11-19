@@ -17,6 +17,13 @@ export const GROUPS = [
     ],
   },
   {
+    title: 'Teleports',
+    items: [
+      { kind: 'tile', name: 'TELEPORT', tip: 'Teleport: a solid pad (no dots). Teleport tiles that touch are ONE teleporter. Stand on it for 1 second and you dissolve and are rebuilt on the next teleporter (in reading order: top to bottom, then left to right, by each one\'s first tile; the last goes back to the first), standing on its first tile, which needs two free tiles above it. A level with teleports needs at least 2 teleporters; do not join the two kinds. Step off an arrival pad before it can be used again' },
+      { kind: 'tile', name: 'TELEPORT_ONCE', tip: 'One-use teleport (dashed glow): works like a teleport, but one way only. After you teleport away from it the whole pad turns into plain brick and is out of the order. You can still arrive on it while it is unused' },
+    ],
+  },
+  {
     title: 'Conveyor belts, right',
     items: [
       { kind: 'tile', name: 'CONV_R_SLOW', tip: 'Belt right, slow' },
@@ -79,6 +86,8 @@ export const STAMPS = [
   { label: 'Ice', cells: row('ICE', 8), tip: '8 ice tiles' },
   { label: 'Roller', cells: row('ROLLER', 8), tip: '8 roller tiles' },
   { label: 'Trampoline', cells: row('TRAMPOLINE', 3), tip: '3 trampoline tiles: land on them and they bounce you up to the platform above' },
+  { label: 'Teleport', cells: row('TELEPORT', 3), tip: '3 teleport tiles = one teleporter. You need at least two teleporters in a level (a second stamp elsewhere); tiles that touch are one teleporter' },
+  { label: 'One-use teleport', cells: row('TELEPORT_ONCE', 3), tip: '3 one-use teleport tiles = one teleporter that turns into brick after you leave by it' },
   { label: 'Bombs', cells: row('EXPLOSIVE', 4), tip: '4 bomb blocks: setting one off chains to its neighbours' },
   { label: 'Vanishing', cells: row('VANISH', 4), tip: '4 vanishing blocks' },
   { label: 'Ladder', cells: Array.from({ length: 5 }, (_, i) => [0, i, 'LADDER']), tip: 'A ladder 5 tiles tall' },
