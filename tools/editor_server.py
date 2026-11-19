@@ -172,10 +172,6 @@ class Project:
             for y, row in enumerate(rows):
                 if not isinstance(row, str) or not SPRITE_ROW_RE.fullmatch(row):
                     raise ApiError(400, f"frame {name} row {y}: needs {ba.SPRITE_W} characters of '#', 'e', 'o' and '.', got {row!r}")
-                try:
-                    ba.third_cells(row)
-                except ValueError as e:
-                    raise ApiError(400, f"frame {name} row {y}: {e}") from None
         for new, old in zip(frames, have):
             for line, row in zip(old["at"], new["rows"]):
                 lines[line] = row

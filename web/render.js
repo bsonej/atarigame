@@ -217,7 +217,7 @@ export function drawSprite(ctx, rows, px, py, cell, colour, lines = 16, bit = 4)
     for (let x = 0; x < bit; x++) if (rows[y] & (0x80 >> x)) ctx.fillRect((px + x) * w, (py + y) * h, w, h);
 }
 
-/** Mr. Bubble: his third colour (the missiles, a fifth sprite behind the other two: `frame.thirdPx`, pairs of pixels),
+/** Mr. Bubble: his third colour (the missiles, a fifth sprite behind the other two: `frame.thirdPx`, single pixels),
  * his eyes (hardware Player 3, which sits behind the body) and then the pink body (Player 0). The frames
  * are 8 pixels wide on a 4 pixel wide physics box, so he is drawn 2 pixels to the left of (px, py). He is a bubble: he
  * floats FLOAT lines above his box (py is the top of the physics box, so its bottom, where he stands, is py + 16). */

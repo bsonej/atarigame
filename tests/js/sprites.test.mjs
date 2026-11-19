@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  THIRD, pairProblem,
+  THIRD,
   ANIMATIONS, FLOAT, H, SpriteDoc, W, blankRows, checkFrames, counterpartName, flipRows, linePixels, maxLift, parseSprites,
   serializeSprites, toBytes,
 } from '../../web/spritemodel.js';
@@ -250,30 +250,28 @@ test('he floats one or two pixels above the surface', () => {
   assert.ok(FLOAT >= 1 && FLOAT <= 2);
 });
 
-test('the third colour comes in aligned pairs: checked, painted and erased a pair at a time', () => {
-  assert.equal(pairProblem('##oooo##'), '');
-  assert.match(pairProblem('#o##oo##'), /pairs of pixels \(columns 0-1\)/);
-  assert.match(pairProblem('##.oo.##'), /columns 2-3/);
+test('the third colour is free: any single pixel can be o, painted and erased one at a time', () => {
   const f = frames();
   f[1].rows[3] = '.o.o.o.o';
-  assert.match(checkFrames(f, f.map((x) => x.name))[0], /frame stand_right row 3: the third colour/);
-  // bytes: cell k is missile k: M0 bits 1-0 ... M3 bits 7-6
-  assert.deepEqual(toBytes(['oo......', '..oo....', '....oo..', '......oo', 'oooooooo'].concat(Array(11).fill('........'))).third.slice(0, 5), [0x03, 0x0c, 0x30, 0xc0, 0xff]);
+  assert.deepEqual(checkFrames(f, f.map((x) => x.name)), []);
+  // bytes: column c is bit 2*(c>>1) + 1 - (c&1): M0 bits 1-0 ... M3 bits 7-6, high bit on the left
+  const rows = ['o.......', '.o......', '..o.....', '......o.', '.......o', 'oooooooo', 'oo......'].concat(Array(9).fill('........'));
+  assert.deepEqual(toBytes(rows).third.slice(0, 7), [0x02, 0x01, 0x08, 0x80, 0x40, 0xff, 0x03]);
   const doc = new SpriteDoc(frames());
-  doc.setPixel(0, 3, 0, THIRD); // painting one pixel paints its pair (columns 2-3)
-  assert.equal(doc.rows(0)[0], '..oo##..');
-  doc.setPixel(0, 2, 0, '#'); // body on one of the pair: the other half goes
-  assert.equal(doc.rows(0)[0].slice(2, 4), '#.');
-  doc.setPixel(0, 5, 11, '.'); // erasing one pixel of a pair erases both
-  assert.equal(doc.rows(0)[11], '##oo..##');
+  doc.setPixel(0, 3, 0, THIRD); // painting one pixel paints just that pixel
+  assert.equal(doc.get(0, 3, 0), THIRD);
+  assert.equal(doc.get(0, 2, 0), '#', 'the neighbour is untouched');
+  doc.setPixel(0, 2, 0, '#'); // body next to it: nothing else changes
+  assert.equal(doc.get(0, 3, 0), THIRD);
+  doc.setPixel(0, 3, 0, '.'); // erasing one pixel erases just that one
+  assert.equal(doc.get(0, 3, 0), '.');
   assert.deepEqual(checkFrames(doc.frames, doc.frames.map((x) => x.name)), []);
 });
 
-test('nudging sideways moves the body and eyes a pixel but the third colour stays on its cells', () => {
+test('nudging sideways moves all three layers a pixel', () => {
   const doc = new SpriteDoc(frames());
-  const before = doc.rows(0)[4]; // eeooooee
+  assert.equal(doc.rows(0)[4], 'eeooooee');
   assert.ok(doc.shift(0, 1, 0));
-  assert.equal(doc.rows(0)[4], '.ee.oo.e', 'the eyes moved a pixel; the pupils stayed (the pair the eye landed on lost its other half)');
+  assert.equal(doc.rows(0)[4], '.eeooooe', 'the eyes and the pupils all moved one pixel');
   assert.deepEqual(checkFrames(doc.frames, doc.frames.map((x) => x.name)), []);
-  assert.notEqual(before, doc.rows(0)[4]);
 });

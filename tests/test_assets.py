@@ -903,25 +903,21 @@ class Validation(unittest.TestCase):
         ((_name, body, eyes, third),) = ba.parse_sprite_frames(self.p.dir / "assets" / "sprites.txt")
         self.assertEqual((body[0], eyes[0], third[0]), (0x81, 0x60, 0))
 
-    def test_the_third_colour_is_the_missiles_in_aligned_pairs(self) -> None:
-        # cell k (columns 2k, 2k+1) is missile k: M0 bits 1-0, M1 bits 3-2, M2 bits 5-4, M3 bits 7-6
-        rows = ["oo......", "..oo....", "....oo..", "......oo", "oooooooo", "#eoo..e#"] + ["........"] * 10
+    def test_the_third_colour_is_the_missiles_one_pixel_each(self) -> None:
+        # column c is bit 2*(c//2) + 1 - c%2 of the missile byte: M0 bits 1-0, M1 bits 3-2, M2 bits 5-4, M3 bits 7-6
+        rows = ["o.......", ".o......", "..o.....", "......o.", ".......o", "oooooooo", "#eoo..e#", "oo......"] + ["........"] * 8
         self.p.write("assets/sprites.txt", "frame stand\n" + "\n".join(rows) + "\n")
         ((_name, body, eyes, third),) = ba.parse_sprite_frames(self.p.dir / "assets" / "sprites.txt")
-        self.assertEqual(third[:6], [0x03, 0x0C, 0x30, 0xC0, 0xFF, 0x0C])
-        self.assertEqual((body[5], eyes[5]), (0x81, 0x42), "an 'o' is its own pixel: never body or eye as well")
-        self.assertEqual([ba.third_pixels(b) for b in third[:6]], [0xC0, 0x30, 0x0C, 0x03, 0xFF, 0x30])
+        self.assertEqual(third[:8], [0x02, 0x01, 0x08, 0x80, 0x40, 0xFF, 0x0C, 0x03])
+        self.assertEqual((body[6], eyes[6]), (0x81, 0x42), "an 'o' is its own pixel: never body or eye as well")
+        self.assertEqual([ba.third_pixels(b) for b in third[:8]], [0x80, 0x40, 0x20, 0x02, 0x01, 0xFF, 0x30, 0xC0])
+        for byte in range(256):
+            self.assertEqual(ba.third_cells("".join("o" if ba.third_pixels(byte) & (0x80 >> c) else "." for c in range(8))), byte)
         out = self.p.build().joinpath("sprites.inc").read_text()
         self.assertIn("spr_third:", out)
-        self.assertIn("$03,$0C,$30,$C0,$FF,$0C", out)
+        self.assertIn("$02,$01,$08,$80,$40,$FF,$0C,$03", out)
 
-    def test_a_lone_third_colour_pixel_is_refused(self) -> None:
-        for bad in ("o.......", ".o......", "..o.oo..", "#.oo.o.."):
-            with self.subTest(bad):
-                self.p.write("assets/sprites.txt", "frame stand\n" + "\n".join([bad] + ["#......#"] * 15) + "\n")
-                with self.assertRaises(ba.AssetError) as cm:
-                    ba.parse_sprite_frames(self.p.dir / "assets" / "sprites.txt")
-                self.assertIn("pairs of pixels", str(cm.exception))
+    def test_only_sprite_characters_are_accepted(self) -> None:
         self.rejects("assets/sprites.txt", "frame stand\n" + "\n".join(["x......."] + ["#......#"] * 15) + "\n", "'#', 'e', 'o' and '.'")
 
     def test_the_players_colours_come_from_the_palette_file(self) -> None:

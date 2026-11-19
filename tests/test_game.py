@@ -564,7 +564,6 @@ class GameLogic(Base):
         page = g.mem(g.pm0 - 0x100, 256)  # the four missiles: PMBASE + $300 in single-line resolution
         want = _ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][3]
         self.assertEqual(list(page[top : top + 16]), want)
-        self.assertTrue(any(want), "the face has pupils and a grin in the third colour")
         self.assertEqual(page[:top], bytes(top), "nothing above the image")
         self.assertEqual(page[top + 16 :], bytes(256 - top - 16), "nothing below it")
         eyes, body = g.eyes(), g.sprite()

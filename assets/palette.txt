@@ -25,5 +25,5 @@ white      0E
 ice        8A        # also Mr. Bubble's third colour (see above)
 hud        2A
 background 00
-player     4E
+player     4C
 eyes       0E

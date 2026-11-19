@@ -511,23 +511,20 @@ def parse_sprites(path: Path) -> list[tuple[str, list[int]]]:
 
 
 def third_cells(text: str) -> int:
-    """The missile byte of one row's third layer. The row's 8 pixels are 4 cells of 2 pixels (columns 0-1, 2-3, 4-5,
-    6-7); a cell is 'oo' (lit) or has no 'o' at all. Cell k is missile k (HPOSM0..3 sit at HPOS, +2, +4, +6, each 2
-    clocks wide), which reads bits 2k+1 and 2k of a byte of the missile page: M0 bits 1-0, M1 bits 3-2, M2 bits 5-4,
-    M3 bits 7-6. Raises ValueError for a cell with a lone 'o'."""
+    """The missile byte of one row's third layer. A missile is a 2-bit-wide 'player' (one colour clock per bit at
+    SIZEM=0), its bits shifted out with the high bit on the left. Missile k (HPOSM0..3 sit at HPOS, +2, +4, +6) reads
+    bits 2k+1 and 2k of a byte of the missile page (M0 bits 1-0, M1 bits 3-2, M2 bits 5-4, M3 bits 7-6), so column c
+    is bit 2*(c//2) + 1 - (c%2): every single pixel can be 'o'."""
     out = 0
-    for k in range(SPRITE_W // 2):
-        pair = text[2 * k : 2 * k + 2]
-        if pair == "oo":
-            out |= 3 << (2 * k)
-        elif "o" in pair:
-            raise ValueError(f"the third colour 'o' comes in pairs of pixels (columns {2 * k}-{2 * k + 1}), got {pair!r}")
+    for c, ch in enumerate(text[:SPRITE_W]):
+        if ch == "o":
+            out |= 1 << (2 * (c // 2) + 1 - c % 2)
     return out
 
 
 def third_pixels(byte: int) -> int:
     """A missile byte of a third layer (see third_cells) as a row of pixels, leftmost pixel in bit 7, like the body."""
-    return sum(0xC0 >> (2 * k) for k in range(SPRITE_W // 2) if byte >> (2 * k) & 3)
+    return sum(0x80 >> c for c in range(SPRITE_W) if byte >> (2 * (c // 2) + 1 - c % 2) & 1)
 
 
 def parse_sprite_frames(path: Path) -> list[tuple[str, list[int], list[int], list[int]]]:
@@ -537,8 +534,8 @@ def parse_sprite_frames(path: Path) -> list[tuple[str, list[int], list[int], lis
       'e'  a pixel of an eye (Player 3, colour ``eyes``; it sits behind the body, so it shows only where the body has none)
       'o'  a pixel of the third colour: the four missiles, used as a fifth 8-clock-wide sprite whose colour is the
            playfield colour 3 (``ice`` in the palette file). It sits behind the body and the eyes, so it shows through
-           their holes (and in front of the background), but each missile is two clocks wide: 'o' comes in aligned
-           pairs (columns 0-1, 2-3, 4-5 or 6-7), checked here
+           their holes (and in front of the background). Every single pixel can be 'o' (a missile is a 2-bit-wide
+           player; see third_cells)
       '.'  nothing (the playfield shows through)
 
     A pixel is one character, so it is one of these (no pixel is both body and third): where a frame wants the third
@@ -567,10 +564,7 @@ def parse_sprite_frames(path: Path) -> list[tuple[str, list[int], list[int], lis
             raise AssetError(f"{path}:{n}: sprite rows are {SPRITE_W} characters of '#', 'e', 'o' and '.', got {text!r}")
         if name is None:
             raise AssetError(f"{path}:{n}: sprite row before any 'frame' line")
-        try:
-            third.append(third_cells(text))
-        except ValueError as exc:
-            raise AssetError(f"{path}:{n}: {exc}") from None
+        third.append(third_cells(text))
         rows.append(sum(0x80 >> i for i, c in enumerate(text) if c == "#"))
         eyes.append(sum(0x80 >> i for i, c in enumerate(text) if c == "e"))
     close(last)

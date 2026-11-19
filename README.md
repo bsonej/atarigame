@@ -46,8 +46,7 @@ ATTRACT: an AI plays for 30 s, then back to TITLE; fire starts a real game
   (`COLPF3`), which is the ice colour (the ice tiles and the exit door's blue), hence the coupling: changing `ice` changes
   his pupils too. Its priority is that of playfield colour 3, so it sits **behind the body and the eyes** (it shows through
   their holes, which is what the pupils and the grin are) and in front of the background, but behind playfield colours 0-2
-  (so over a platform or a ladder pixel his pupils are hidden). Because a missile is 2 pixels wide, `o` comes in aligned
-  pairs (columns 0-1, 2-3, 4-5, 6-7); a pixel is one character, so there is no pixel that is body and third at once.
+  (so over a platform or a ladder pixel his pupils are hidden). Each `o` pixel is free (a missile is a 2-bit-wide player, one pixel per bit); a pixel is one character, so there is no pixel that is body and third at once.
 - **Death animation**: red flash, the player hops, tumbles off the bottom of the screen, a falling tone.
 - **Come to life animation**: at every start and respawn the player is drawn line by line from the top, then blinks, in
   cycling colours with a rising tone. You cannot move until it ends.
@@ -100,7 +99,7 @@ In the emulator: F5 warm reset, F9 quit.
 | `assets/tiles.txt` | 4x8 tiles, four colours, with the character each one has in level maps and what it does (`solid`, `oneway`, `alt`). The header documents the format. |
 | `assets/palette.txt` | The row hues, grey, white, ice blue, score row and background colours as Atari colour bytes, and Mr. Bubble's `player` and `eyes` colours (his third colour is `ice`). Generates `src/gen/palette.inc` (`PAL_PLAYER`, `PAL_EYES`, `PAL_ICE`); the editor gets them through `/api/tiles`. |
 | `assets/font.txt` | 3x5 text font (A-Z, 0-9, `- ! ? :`). Ids: digits 16-25, letters 32-57, others from 58. |
-| `assets/sprites.txt` | Mr. Bubble's 13 frames (8x16): stand (front, looking right, looking left), lean right and left, squash (front, right, left), stretch (front, right, left) and two pop frames. `#` is body (Player 0, pink), `e` is an eye (Player 3, white, shown only where the body has no pixel), `o` is the third colour (the four missiles as a fifth sprite, behind both, so it shows through their holes; 2 pixels wide, so in aligned pairs: the pupils and the grin). `.` is nothing. |
+| `assets/sprites.txt` | Mr. Bubble's 13 frames (8x16): stand (front, looking right, looking left), lean right and left, squash (front, right, left), stretch (front, right, left) and two pop frames. `#` is body (Player 0, pink), `e` is an eye (Player 3, white, shown only where the body has no pixel), `o` is the third colour (the four missiles as a fifth sprite, behind both, so it shows through their holes; any single pixel: the pupils and the grin). `.` is nothing. |
 | `assets/levels/*.txt` | 40x24 maps, played in name order. `#` platform, `W` wall, `H` ladder, `*` item, `^` spike, `D` exit door, `@` start, `p` peg, plus the factory parts below. Row 0 is the score row. |
 | `assets/screens/*.txt` | Full-screen text maps (`title`, `gameover`). Letters/digits come from the font; a lowercase letter is the same glyph in the second text colour; `#` `*` `^` are tiles. Comments start with `#!`. |
 | `tools/build_assets.py` | Validates the assets and generates `src/gen/*.inc` (charset with the font merged in, `.charmap` so `.byte "TEXT"` works, the tile flags table, the chutes' thread, sprites, levels with their pegs and level tables, screens). |
@@ -266,8 +265,7 @@ It edits `assets/sprites.txt`, Mr. Bubble's 13 frames of 8x16 pixels:
 - **Frames** on the left, each with a thumbnail and the name it has in `sprites.txt`; a dot marks frames that differ from
   what is saved. The big grid edits the selected frame: left button paints with the selected tool (**Body** `B`/`1`: pink,
   Player 0; **Eye** `E`/`2`: white, Player 3, which sits behind the body and shows only where the body has no pixel;
-  **Third** `O`/`3`: the third colour (missiles, behind both), painted **two pixels at a time** (an aligned pair; painting
-  something else on half a pair clears the other half); **Erase** `X`/`4`), the right button erases, and a fast drag fills every cell in between. Zoom, a grid, a 2:1 "TV shape"
+  **Third** `O`/`3`: the third colour (missiles, behind both), painted one pixel at a time like the others; **Erase** `X`/`4`), the right button erases, and a fast drag fills every cell in between. Zoom, a grid, a 2:1 "TV shape"
   for the pixels, and guides (the 4 pixel wide physics box he collides with, and the line `PLAYER_FLOAT` lines above his
   feet) are options under the grid.
 - **Colours**: the three colours as swatches (body = `player`, eyes, third = `ice`, which the ice tiles and the exit door
@@ -279,13 +277,13 @@ It edits `assets/sprites.txt`, Mr. Bubble's 13 frames of 8x16 pixels:
   walk right and left (stand, lean), jump (squash, stretch, land, with the rise of the game's jump table), jump right and
   left, look around and the death pop. Play/pause (`Space`), speed and size are options.
 - **Frame tools**: copy and paste a frame (`Cmd/Ctrl+C`/`V`), clear, revert to what is saved, flip (`H`), nudge the picture a
-  pixel (`Shift`+arrows; the third colour moves in whole pairs, so it stays where it is for a sideways nudge), and **Mirror to the other side** (`M`), which overwrites the right/left counterpart of the
+  pixel (`Shift`+arrows; all three colours move together), and **Mirror to the other side** (`M`), which overwrites the right/left counterpart of the
   selected frame (`stand_right` <-> `stand_left`, `lean_*`, `squash_*`, `stretch_*`) with its mirror image. Undo/redo
   (`Cmd/Ctrl+Z`, `Shift+Cmd/Ctrl+Z`) cover every stroke and every frame operation.
 - **Save to game** (`Cmd/Ctrl+S`) sends the frames to `PUT /api/sprites`, which writes the pixel rows into
   `assets/sprites.txt` and leaves everything else in the file (the header comment, blank lines, the `frame` lines)
   exactly as it was. The server refuses, with a message that says which frame and row, anything `tools/build_assets.py`
-  would refuse (rows of 8 characters of `#`, `.`, `e` and `o`, with `o` in aligned pairs; exactly 16 rows) and what the game relies on: the same number of
+  would refuse (rows of 8 characters of `#`, `.`, `e` and `o`, with `o` free to be any pixel; exactly 16 rows) and what the game relies on: the same number of
   frames with the same names in the same order (`main.s` picks a frame by its place in the list), (rows may be empty). Then `task build` / `task run`. The level editor
   re-reads the frames whenever its page comes back to the front, so its test play and start marker show the saved ones.
   Unsaved sprite work is kept in the browser like unsaved levels; **Download .txt** and **Reload from game** are there too.

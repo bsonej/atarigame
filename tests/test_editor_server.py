@@ -307,27 +307,24 @@ class Sprites(ServerCase):
         frames[0]["rows"][7] = "........"
         self.assertEqual(self.put(frames)[0], 200)
 
-    def test_the_third_colour_is_saved_and_must_come_in_pairs(self) -> None:
+    def test_the_third_colour_is_saved_one_pixel_at_a_time(self) -> None:
         import build_assets as ba
 
         frames = self.frames()
-        frames[1]["rows"][0] = "oo.##.oo"
+        frames[1]["rows"][0] = "o.##.o.o"
         self.assertEqual(self.put(frames)[0], 200)
-        self.assertEqual(ba.parse_sprite_frames(self.sprites_path())[1][3][0], 0x03 | 0xC0)
-        before = self.sprites_path().read_text()
-        for bad in ("o.......", ".oo.....", "#.o.#.o."):
-            with self.subTest(bad):
-                frames[2]["rows"][0] = bad
-                status, res = self.put(frames)
-                self.assertEqual(status, 400, res)
-                self.assertIn("pairs of pixels", res["error"])
-                self.assertEqual(self.sprites_path().read_text(), before)
+        self.assertEqual(ba.parse_sprite_frames(self.sprites_path())[1][3][0], 0x02 | 0x10 | 0x40)
+        status, res = self.req("GET", "/api/sprites")
+        self.assertEqual(res["frames"][1]["thirdPx"][0], 0x80 | 0x04 | 0x01)
+        frames[2]["rows"][0] = "x......."
+        status, res = self.put(frames)
+        self.assertEqual(status, 400, res)
 
     def test_the_players_colours_are_read_and_saved_keeping_the_comments(self) -> None:
         import build_assets as ba
 
         status, res = self.req("GET", "/api/palette")
-        self.assertEqual((status, res["player"], res["eyes"], res["third"]), (200, 0x4E, 0x0E, 0x8A))
+        self.assertEqual((status, res["player"], res["eyes"], res["third"]), (200, 0x4C, 0x0E, 0x8A))
         path = self.tmp / "assets" / "palette.txt"
         before = path.read_text().splitlines()
         status, res = self.req("PUT", "/api/palette", {"player": 0x36, "eyes": 0x1E, "ice": 0xAC})
@@ -352,7 +349,7 @@ class Sprites(ServerCase):
                 self.assertEqual(path.read_text(), before)
         self.assertEqual(self.req("PUT", "/api/palette", {"player": 0x36}, editor=False)[0], 403)
         self.assertEqual(path.read_text(), before)
-        self.assertEqual((ROOT / "assets" / "palette.txt").read_text().count("player     4E"), 1, "the real file is not touched")
+        self.assertEqual((ROOT / "assets" / "palette.txt").read_text().count("player     4C"), 1, "the real file is not touched")
 
     def test_the_body_must_be_a_list_of_frames(self) -> None:
         for body in ({"frames": "no"}, {"frames": [1, 2]}, {}, {"frames": None}):

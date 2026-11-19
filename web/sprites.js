@@ -118,9 +118,7 @@ function drawGrid() {
   if (S.hover) {
     g.strokeStyle = '#fff';
     g.lineWidth = 2;
-    const pair = S.tool === 'third' && !stroke?.erase; // the third colour is painted two pixels at a time
-    const x0 = pair ? S.hover[0] & ~1 : S.hover[0];
-    g.strokeRect(x0 * cw + 1, S.hover[1] * ch + 1, (pair ? 2 : 1) * cw - 2, ch - 2);
+    g.strokeRect(S.hover[0] * cw + 1, S.hover[1] * ch + 1, cw - 2, ch - 2);
   }
 }
 
@@ -319,7 +317,7 @@ canvas.addEventListener('pointerleave', () => {
   drawGrid();
 });
 
-const describe = (ch) => (ch === BODY ? 'body' : ch === EYE ? 'eye' : ch === THIRD ? 'third colour (a pair of pixels)' : 'empty');
+const describe = (ch) => (ch === BODY ? 'body' : ch === EYE ? 'eye' : ch === THIRD ? 'third colour' : 'empty');
 
 // ------------------------------------------------------------------------------------------------
 // actions
