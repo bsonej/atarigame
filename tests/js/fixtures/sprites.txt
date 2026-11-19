@@ -1,0 +1,259 @@
+# The player: Mr. Bubble, a round pink bubble with goggle eyes and a grin. Each frame is 16 rows of 8 pixels (one
+# pixel = one colour clock, half a tile wide; a row is one scan line, so he is two tiles tall and, since a pixel is
+# twice as wide as a row is tall, a circle). The hardware player is exactly 8 pixels wide. The physics box is only 4
+# wide (a tile): the game draws him centred on it, 2 pixels to either side, and, being a bubble, 2 scan lines above
+# the surface he stands on (src/main.s, draw_player and PLAYER_FLOAT), so a frame needs no empty rows at the bottom
+# to hover. The web sprite editor (web/sprites.html) edits this file and keeps these comments.
+#
+# He has three colours, all set in assets/palette.txt (the sprite editor has a colour panel for them):
+#
+#   #  body: hardware Player 0 (palette "player", pink)
+#   e  eye: hardware Player 3 (palette "eyes", white). It sits behind the body, so it shows only where the body has no pixel
+#   o  third colour (the pupils and the grin): the four hardware MISSILES used as a fifth sprite (GTIA PRIOR bit 4).
+#      The hardware gives missiles the colour of playfield colour 3, so this colour is the palette's "ice" entry (the
+#      ice tiles and the exit door's blue change with it). The fifth sprite sits BEHIND the body and the eyes (and in
+#      front of the background), so it shows only where neither has a pixel, i.e. in the holes of the frame: a pixel is
+#      one character, so a pixel is never two of these. Each missile is 2 pixels wide, so 'o' comes in aligned pairs:
+#      columns 0-1, 2-3, 4-5 or 6-7 of a row (the build refuses a lone 'o'). A row has 4 such cells.
+#   .  nothing (the playfield shows through)
+#
+# Frame order matters: the game picks a frame as (family base + which way he looks), see choose_frame in main.s.
+#   0-2   stand: looking at you, right, left            3-4   lean: right, left (walking, climbing)
+#   5-7   squash: front, right, left (taking off, landing)    8-10  stretch: front, right, left (in the air)
+#   11-12 pop A and B (the death animation alternates between these two)
+# The first frame must have a pixel in every row (the spawn animation reveals it a line at a time and the tests
+# check each line is lit).
+
+frame stand
+..####..
+.######.
+.######.
+.eeeeee.
+eeooooee
+eeooooee
+eeeeeeee
+########
+########
+########
+########
+##oooo##
+.######.
+.######.
+.######.
+..####..
+
+frame stand_right
+..####..
+.######.
+.######.
+.eeeeee.
+eeooeeoo
+eeooeeoo
+eeeeeeee
+########
+########
+########
+########
+##oooo##
+.######.
+.######.
+.######.
+..####..
+
+frame stand_left
+..####..
+.######.
+.######.
+.eeeeee.
+ooeeooee
+ooeeooee
+eeeeeeee
+########
+########
+########
+########
+##oooo##
+.######.
+.######.
+.######.
+..####..
+
+frame lean_right
+...####.
+..######
+..######
+..eeeeee
+.eooeeoo
+.eooeeoo
+.eeeeeee
+.#######
+########
+########
+########
+##oooo##
+.######.
+.######.
+.######.
+..####..
+
+frame lean_left
+.####...
+######..
+######..
+eeeeee..
+ooeeooe.
+ooeeooe.
+eeeeeee.
+#######.
+########
+########
+########
+##oooo##
+.######.
+.######.
+.######.
+..####..
+
+frame squash
+........
+........
+........
+........
+..####..
+.######.
+eeeeeeee
+eeooooee
+eeeeeeee
+########
+########
+########
+##oooo##
+########
+.######.
+..####..
+
+frame squash_right
+........
+........
+........
+........
+..####..
+.######.
+eeeeeeee
+eeooeeoo
+eeeeeeee
+########
+########
+########
+##oooo##
+########
+.######.
+..####..
+
+frame squash_left
+........
+........
+........
+........
+..####..
+.######.
+eeeeeeee
+ooeeooee
+eeeeeeee
+########
+########
+########
+##oooo##
+########
+.######.
+..####..
+
+frame stretch
+...##...
+..####..
+..####..
+.eeeeee.
+.eooooe.
+.eooooe.
+.eeeeee.
+.######.
+.######.
+.######.
+.######.
+.#oooo#.
+.######.
+..####..
+..####..
+...##...
+
+frame stretch_right
+...##...
+..####..
+..####..
+.eeeeee.
+.eeeooe.
+.eeeooe.
+.eeeeee.
+.######.
+.######.
+.######.
+.######.
+.#oooo#.
+.######.
+..####..
+..####..
+...##...
+
+frame stretch_left
+...##...
+..####..
+..####..
+.eeeeee.
+.eooeee.
+.eooeee.
+.eeeeee.
+.######.
+.######.
+.######.
+.######.
+.#oooo#.
+.######.
+..####..
+..####..
+...##...
+
+frame pop_a
+........
+........
+........
+........
+..####..
+.######.
+eeeeeeee
+eeooooee
+eeeeeeee
+########
+##oooo##
+##oooo##
+########
+########
+.######.
+..####..
+
+frame pop_b
+........
+........
+........
+........
+........
+........
+..#..#..
+.#....#.
+#..##..#
+..#..#..
+.#.##.#.
+#.oooo.#
+.#.##.#.
+#..#..#.
+..#..#..
+.#....#.

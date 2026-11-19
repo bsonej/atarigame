@@ -302,13 +302,9 @@ class Sprites(ServerCase):
                 self.assertIn("cannot be renamed or reordered", res["error"])
         self.assertEqual(self.sprites_path().read_text(), before)
 
-    def test_the_first_frame_needs_a_pixel_on_every_row(self) -> None:
+    def test_a_row_may_be_blank_even_in_the_first_frame(self) -> None:
         frames = self.frames()
         frames[0]["rows"][7] = "........"
-        status, res = self.put(frames)
-        self.assertEqual(status, 400)
-        self.assertIn("row 7", res["error"])
-        frames[0]["rows"][7] = "..oo...."  # the third colour lights the line too
         self.assertEqual(self.put(frames)[0], 200)
 
     def test_the_third_colour_is_saved_and_must_come_in_pairs(self) -> None:

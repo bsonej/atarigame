@@ -1,5 +1,5 @@
 // The sprite editor's model (web/spritemodel.js): parsing and writing sprites.txt, validation, undo, mirroring, the
-// preview cycles. The real assets/sprites.txt is only ever read here.
+// preview cycles. The real assets/sprites.txt is only ever read here (and only checked to parse).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,11 +11,14 @@ import {
 } from '../../web/spritemodel.js';
 import { api, ROOT } from './helpers.mjs';
 
-const TEXT = fs.readFileSync(path.join(ROOT, 'assets/sprites.txt'), 'utf8');
+const REAL = fs.readFileSync(path.join(ROOT, 'assets/sprites.txt'), 'utf8');
+// the tests that rely on the particular art (mirror images, pairs, pixel positions) use a frozen copy, so that
+// redrawing the player in the sprite editor never breaks them
+const TEXT = fs.readFileSync(path.join(ROOT, 'tests/js/fixtures/sprites.txt'), 'utf8');
 const frames = () => parseSprites(TEXT);
 
 test('the real sprites.txt parses into 13 frames of 16 rows of 8', () => {
-  const f = frames();
+  const f = parseSprites(REAL);
   assert.equal(f.length, 13);
   assert.deepEqual(f.map((x) => x.name).slice(0, 5), ['stand', 'stand_right', 'stand_left', 'lean_right', 'lean_left']);
   for (const x of f) {
@@ -26,7 +29,7 @@ test('the real sprites.txt parses into 13 frames of 16 rows of 8', () => {
 });
 
 test('the bytes agree with what the asset tool made (the editor server sends them)', () => {
-  const f = frames();
+  const f = parseSprites(REAL);
   assert.equal(api.sprites.length, f.length);
   f.forEach((x, i) => {
     const b = toBytes(x.rows);
@@ -88,7 +91,6 @@ test('checkFrames: count, names, order, rows and the first frame', () => {
   bad((g) => g[1].rows.pop(), /15 rows, needs 16/);
   bad((g) => (g[1].rows[3] = '..##'), /frame stand_right row 3/);
   bad((g) => (g[1].rows[3] = '..##x###'), /frame stand_right row 3/);
-  bad((g) => (g[0].rows[9] = '........'), /first frame \(stand\) needs a pixel in every row.*row 9/);
   bad((g) => (g[0].name = '9bad'), /usable name/, false);
   assert.deepEqual(checkFrames(f, null), []);
   assert.deepEqual(checkFrames('no'), ['frames must be a list']);
@@ -221,7 +223,7 @@ test('saved, restored and reset', () => {
   assert.ok(!doc.dirty());
   assert.deepEqual(doc.problems(frames().map((f) => f.name)), []);
   doc.clear(0);
-  assert.match(doc.problems()[0], /first frame/);
+  assert.deepEqual(doc.problems(), [], 'a blank frame is allowed');
 });
 
 test('the preview cycles only use frames the file has, and the jump comes back to the ground', () => {

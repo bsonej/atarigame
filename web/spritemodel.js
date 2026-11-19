@@ -80,10 +80,6 @@ export function checkFrames(frames, names = null) {
       else if (pairProblem(row)) errors.push(`frame ${label} row ${y}: ${pairProblem(row)}`);
     });
   });
-  if (!errors.length && frames.length) {
-    const hole = frames[0].rows.findIndex((r) => r === NONE.repeat(W));
-    if (hole >= 0) errors.push(`the first frame (${frames[0].name}) needs a pixel in every row (the spawn animation reveals it a line at a time); row ${hole} has none`);
-  }
   return errors;
 }
 

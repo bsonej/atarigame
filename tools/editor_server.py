@@ -176,9 +176,6 @@ class Project:
                     ba.third_cells(row)
                 except ValueError as e:
                     raise ApiError(400, f"frame {name} row {y}: {e}") from None
-        for y, row in enumerate(frames[0]["rows"]):
-            if row == "." * ba.SPRITE_W:
-                raise ApiError(400, f"the first frame ({frames[0]['name']}) needs a pixel in every row (the spawn animation reveals it a line at a time); row {y} has none")
         for new, old in zip(frames, have):
             for line, row in zip(old["at"], new["rows"]):
                 lines[line] = row

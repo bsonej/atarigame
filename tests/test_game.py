@@ -227,8 +227,9 @@ class Spawn(Base):
         lines = g.drawn
         self.assertTrue(0 < lines < 16)
         sprite = g.sprite()
+        want = [a | b | c for a, b, c in zip(*_ba.parse_sprite_frames(ROOT / "assets" / "sprites.txt")[g.frame][1:])]
         lit = [a | b | c for a, b, c in zip(sprite, g.eyes(), g.third())]
-        self.assertTrue(all(lit[:lines]), "the revealed lines are lit (body, eyes or the third colour)")
+        self.assertEqual(lit[:lines], want[:lines], "the revealed lines are the frame's own (blank rows stay blank)")
         for layer in (sprite, g.eyes(), g.third()):
             self.assertEqual(layer[lines:], bytes(16 - lines), "the rest is still empty, in every layer")
 

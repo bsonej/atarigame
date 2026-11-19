@@ -286,8 +286,7 @@ It edits `assets/sprites.txt`, Mr. Bubble's 13 frames of 8x16 pixels:
   `assets/sprites.txt` and leaves everything else in the file (the header comment, blank lines, the `frame` lines)
   exactly as it was. The server refuses, with a message that says which frame and row, anything `tools/build_assets.py`
   would refuse (rows of 8 characters of `#`, `.`, `e` and `o`, with `o` in aligned pairs; exactly 16 rows) and what the game relies on: the same number of
-  frames with the same names in the same order (`main.s` picks a frame by its place in the list), and a pixel (any of them) on every row of
-  the first frame (the spawn animation reveals it a line at a time). Then `task build` / `task run`. The level editor
+  frames with the same names in the same order (`main.s` picks a frame by its place in the list), (rows may be empty). Then `task build` / `task run`. The level editor
   re-reads the frames whenever its page comes back to the front, so its test play and start marker show the saved ones.
   Unsaved sprite work is kept in the browser like unsaved levels; **Download .txt** and **Reload from game** are there too.
 
