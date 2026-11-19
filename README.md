@@ -136,6 +136,7 @@ through it and can stand on it (a jump still rises through it: see "Jumping").
 | `[` `]` | accelerating belt, left / right | starts slow, gains speed every few frames up to fast, resets when you step off |
 | `~` | ice | solid; you speed up slowly, turn round slowly and slide a long way after letting go |
 | `o` | roller | solid; the same idea as ice with quicker grip, so you stop sooner. The longer the run of rollers under your feet, the harder it grips: it speeds you up by as many 1/16 pixels a frame as it is tiles long, up to 8 (a 1-tile roller is slower to get going than ice, an 8-tile one is almost instant) |
+| `T` | trampoline | solid, like a platform, with no dots: walking over it or standing on it does nothing. Land on it from the air (after a jump or a fall, any height) and it bounces you straight back up, no button needed, just high enough to land on the next surface above you (see "Trampolines"). Nothing above you in range: no bounce, an ordinary landing |
 | `X` | bomb block | step on it and it flashes for about 0.9 seconds, then explodes. The blast kills you if your feet are within one tile either side and between two tiles above the block and its bottom edge (so a bomb going off over your head, or beside your knees, does nothing), and sets off bomb blocks next to it. The block is gone afterwards |
 | `v` | vanishing block | step on it and it flickers for about 0.6 seconds, then goes (you fall); it comes back after about 3.6 seconds, waiting until you are out of the way |
 | `p` | peg | not a tile: marks where a peg starts. It sits on the platform under it and sweeps the whole platform there (see below), pausing at each end, at half a pixel a frame. It pushes you along ahead of it, all the way to the end of the platform and off it, if it is beside your feet; jump over it. A peg on a block above you does not touch you. At most 2 per map, each needs a platform at least 2 tiles wide |
@@ -187,6 +188,28 @@ stack, the up chute's travels up. `build_assets.py` writes the thread to `src/ge
 changing the art in `tiles.txt` is all it takes); `web/render.js` (`chuteFrame(helix, tick, up)`), `tools/render_level.py --tick N` and
 `build_assets.chute_frame(helix, tick, up)` do the same sum, and the tests check they agree.
 
+### Trampolines
+
+A trampoline (`T`, `TRAMPOLINE`) is a solid platform with art of a taut mat on a spring (ids 26-29: the tile and its three end caps; no dot version, so no dots). Walking, standing and jumping off it are as on any platform. The
+bounce happens on the air-to-ground transition (`try_bounce` in `src/main.s`, `tryBounce` in `web/engine.js`): when
+`air_fall` lands him and the tile under the middle of his feet, else under either foot (the belt probe order), is a
+trampoline, it looks up from that tile row by row, at most `BOUNCE_ROWS` (14) rows and never above pixel line 24 (tile
+row 3: a surface higher could not be landed on, because the score row is the ceiling). In each row it tries `px+2`,
+`px` and `px+3` with `tile_standable`, so the target is the first thing he could land on: a solid tile of any kind
+(brick, wall, ice, roller, belt, bomb or vanishing block, another trampoline), the top of a one-way platform or step or
+of a ladder. If there is one, `k` rows up, he is thrown up with a rise of at least `8k + 8` pixels, so the apex clears
+the target's top by a tile (8 to 10 pixels): that is the end of an ordinary jump (`jump_dy` from index 3: 17 pixels)
+preceded by `bounce_n[k]` extra frames of 3 pixels (`bn`, a new zero-page byte; `jt` stays at 3 meanwhile), and the
+table is `ceil((8k - 9) / 3)`. As in every jump, rising ignores everything above him and the joystick steers freely;
+on the way down he lands on the first surface, which is the target (a surface directly stacked above the target
+within the 8-10 pixel margin may be landed on instead). He is caught however far he fell: the fall that would kill him
+(more than 64 pixels) does not when a bounce follows, but with nothing above him it is an ordinary landing, so the
+usual rule applies. If he is steered back onto a trampoline, or lands on one on the upper level, it bounces him again.
+Range and rows are constants: `BOUNCE_ROWS`, `BOUNCE_TOP` (`web/engine.js` has the same, and `bounce_n` / `BOUNCE_N`).
+`tools/levelcheck.py` treats a landing cell on a trampoline as reaching the first surface above it (cells on that row
+within the bounce's air time), and does not claim anything more. The attract AI knows nothing of trampolines (it
+ignores them); no shipped map has one yet.
+
 ### Jumping
 
 A jump rises 26 pixels (`jump_dy` in `src/main.s`, `JUMP_DY` in `web/engine.js` and `web/spritemodel.js`; three tiles up
@@ -223,7 +246,7 @@ Notes for map builders:
   shorter on NTSC.
 - Durations and speeds are constants at the top of `src/main.s` (`FUSE_EXPL`, `FUSE_VANISH`, `VANISH_BACK`, `PEG_WAIT`,
   `SLICK_MAX`, and the belt tables `conv_spd`, `slick_acc`...).
-- To add a tile, add it to `assets/tiles.txt` (ids 0-15, 64-124 are mostly in use, see the header of that file; an alt-colour tile is stored with bit 7
+- To add a tile, add it to `assets/tiles.txt` (ids 0-15, 26-29, 64-124 are mostly in use; 30, 31, 62, 63 and 125-127 are free, see the header of that file; an alt-colour tile is stored with bit 7
   set, so its map byte is its id plus 128) and give it behaviour in `main.s` if it needs any; flags alone make it solid
   or one-way.
 
@@ -247,7 +270,7 @@ task editor        # starts tools/editor_server.py and opens http://localhost:87
 
 Build a level by dragging parts from the palette onto the board (or click a part, then click or drag on the board):
 
-- **Palette** (each swatch is a little scene compiled and drawn like the playfield: capsule ends, dots, the row's colours, the whole 2x3 door): platforms, belts (left and right, four speeds), ice, rollers, ladders, stairs, chutes, spikes, bomb and
+- **Palette** (each swatch is a little scene compiled and drawn like the playfield: capsule ends, dots, the row's colours, the whole 2x3 door): platforms, belts (left and right, four speeds), ice, rollers, trampolines, ladders, stairs, chutes, spikes, bomb and
   vanishing blocks, pegs, items and the player start, plus ready-made **stamps** (a belt run, a flight of stairs, a block
   with a peg already on it). `Shift`+drag fills a rectangle, the right mouse button erases, `V` is a select tool (drag a
   selection to move it, `Alt`+drag or `Cmd/Ctrl+C` to copy, `Delete` to clear). `Cmd/Ctrl+Z` undoes. Row 0 belongs to the
@@ -319,7 +342,7 @@ starts atari800 with its monitor on a pipe and a breakpoint on the `frame_end` l
 one frame (and `Game.run(n)` pipelines many). Tests inject joystick state, then read the game's variables and the
 screen and sprite memory. They cover the physics, the title, the spawn/death/clear animations, lives, game over,
 hi-score, the score row, dots and the door, the 30-second attract run, and the AI clearing maps 1-3 (dots, items, door) without dying. `test_engine.py` also checks that the colour tables the game's display-list interrupt loads are the editor's colours for every level, and that the interrupt fires once per row, every frame. `test_factory.py` builds small arenas
-by poking tiles into screen RAM and checks each part (platform jump-through, stairs as ledges you walk past and jump onto, chutes that carry you down and up (and are walked and jumped through otherwise), jumps that rise through blocks, belt speeds and
+by poking tiles into screen RAM and checks each part (platform jump-through, stairs as ledges you walk past and jump onto, chutes that carry you down and up (and are walked and jumped through otherwise), jumps that rise through blocks, trampoline bounces (walking over, landing, nothing above, long falls, repeat), belt speeds and
 direction, acceleration and reset, ice and roller glide, the thread of the chutes in the character set turning one row at a time, down for one chute and up for the other, vanishing and bomb timing and chain reaction, peg
 start/sweep/push/jump-over) and that maps 4 and 5 load. They are skipped if
 atari800 or the test build is missing. `test_engine.py` (see "Level editor") replays scripted input on both the game and the

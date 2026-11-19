@@ -16,7 +16,7 @@
         .setcpu "6502"
         .export start
         .export frame_end                       ; breakpoint target for tools/headless.py
-        .exportzp px, py, state, jt, hop, hdir, rkind, fall, score, hiscore, left, lives, level, lvlidx
+        .exportzp px, py, state, jt, bn, hop, hdir, rkind, fall, score, hiscore, left, lives, level, lvlidx
         .exportzp mode, demo, demo_n, timer, mtimer, frame, drawn, deaths, joy, anim, moved, flash
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
         .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir, pfloat
@@ -108,6 +108,9 @@ FR_DIE_B   = 12
 HOP_JT      = 8         ; the hop out of the top of an up chute starts this far into the jump table (5 pixels up) ...
 HOP_FRAMES  = 4         ; ... and drifts sideways this many pixels (enough to leave the chute's column)
 LAND_FRAMES = 4         ; how long he stays squashed after landing
+BOUNCE_ROWS = 14        ; a trampoline looks this many tile rows up his column for something to bounce him to ...
+BOUNCE_TOP  = 24        ; ... but not above this line (pixel row 24 = tile row 3: a surface higher could not be landed on)
+BOUNCE_JT   = 3         ; a bounce is the jump's last 17 pixels (jump_dy from index 3) after bn frames of 3 pixels each
 
 JOY_UP    = $01
 JOY_DOWN  = $02
@@ -167,6 +170,7 @@ oldpy:    .res 1
 pfloat:   .res 1        ; lines he floated above his box the last time he was drawn (PLAYER_FLOAT +/- the bob)
 state:    .res 1
 jt:       .res 1        ; index into jump_dy, $FF = not rising
+bn:       .res 1        ; a trampoline bounce: frames of full-speed rise (3 pixels) still to go before the usual slowing tail
 cx:       .res 1        ; the pixel column of the edge he is on while stepping (see step_to)
 hop:      .res 1        ; frames of forced sideways drift left (the hop out of the top of an up chute)
 hdir:     .res 1        ; which way that drift goes (the way he faced when the ride ended): 2 = left, else right
@@ -1151,6 +1155,7 @@ start_climb:
         lda #0
         sta fall
         sta hop
+        sta bn
         rts
 
 ; ---- airborne ---------------------------------------------------------------
@@ -1177,10 +1182,16 @@ up_air:
         cmp #$FF
         beq air_fall
 
-        tax                     ; rising: jump_dy[jt] pixels this frame. Nothing above him matters while he rises:
+        lda bn
+        beq @table
+        dec bn                  ; a trampoline bounce: bn frames at full speed first (jt stays where it is: the
+        dec jt                  ; inc below undoes this), then the usual slowing tail of the jump
+        lda #3
+        bne @have               ; (always)
+@table: ldx jt                  ; rising: jump_dy[jt] pixels this frame. Nothing above him matters while he rises:
         lda jump_dy,x           ; no head bumps, he just overlays blocks, bombs, platforms and chutes (only the
         beq @apex               ; score row is a ceiling)
-        sta tmp2
+@have:  sta tmp2
 @rise:  lda py
         cmp #9
         bcc @apex
@@ -1191,6 +1202,8 @@ up_air:
         rts
 @apex:  lda #$FF
         sta jt
+        lda #0
+        sta bn
         rts
 
 ; Falling: 2 pixels a frame, one at a time. He lands on the first surface under his feet, but never inside a solid:
@@ -1208,7 +1221,9 @@ air_fall:
         dec tmp2
         bne @step
         rts
-@land:  lda fall
+@land:  jsr try_bounce          ; a trampoline under his feet catches him, however far he fell
+        bcs @bounced
+        lda fall
         cmp #MAX_FALL+1
         bcc @safe
         jmp die
@@ -1216,6 +1231,83 @@ air_fall:
         sta state
         lda #0
         sta fall
+@bounced:
+        rts
+
+; Landing on a trampoline (the tile under the middle of his feet, else under either foot, like belts): if there is
+; anything he could land on in his column above it, he is thrown straight up, joystick free, and falls onto it.
+; Looking up from the trampoline tile by tile (BOUNCE_ROWS of them at most, never above BOUNCE_TOP), the first row
+; where the middle (px+2) or either foot column (px, px+3) has a surface (tile_standable: a solid tile of any kind,
+; the top of a one-way platform or step, or of a ladder) is the target, k tiles up. The bounce is the end of an
+; ordinary jump (BOUNCE_JT: the last 17 pixels of jump_dy) after bounce_n[k] extra frames of 3 pixels, so it rises
+; 17 + 3*bounce_n[k] pixels >= 8*k + 8: his feet clear the target's top by a tile (8 to 10 pixels), and he lands on it
+; on the way down (rising ignores everything above). Nothing in range: no bounce, an ordinary landing.
+; C set (the bounce begun, state still S_AIR) if he bounced.
+try_bounce:
+        ldx #0
+@find:  stx tt_j
+        lda px
+        clc
+        adc probe_dx,x
+        sta tx
+        lda py
+        clc
+        adc #SPR_H
+        sta ty
+        jsr get_tile
+        cmp #T_TRAMPOLINE
+        beq @tramp
+        ldx tt_j
+        inx
+        cpx #3
+        bcc @find
+        clc
+        rts
+@tramp: lda py
+        clc
+        adc #SPR_H
+        and #$F8
+        sta tt_c                ; the top of the trampoline tile
+        lda #1
+        sta tt_k                ; k: how many tiles up
+@up:    lda tt_c
+        sec
+        sbc #8
+        sta tt_c
+        cmp #BOUNCE_TOP
+        bcc @none
+        ldx #0
+@col:   stx tt_j
+        lda px
+        clc
+        adc probe_dx,x
+        sta tx
+        lda tt_c
+        sta ty
+        jsr tile_standable
+        bcs @found
+        ldx tt_j
+        inx
+        cpx #3
+        bcc @col
+        inc tt_k
+        lda tt_k
+        cmp #BOUNCE_ROWS+1
+        bcc @up
+@none:  clc
+        rts
+@found: ldx tt_k
+        lda bounce_n,x
+        sta bn
+        lda #BOUNCE_JT
+        sta jt
+        lda #0
+        sta fall
+        lda #6                  ; a short "boing"
+        sta snd
+        lda #$50
+        sta sndf
+        sec
         rts
 
 ; C set if neither foot column has a solid tile at the lowest row of the body (py+15). (At the bottom of the screen
@@ -2026,6 +2118,7 @@ begin_level:
         lda #0
         sta fall
         sta hop
+        sta bn
         sta hdir
         sta rkind
         sta anim
@@ -3464,6 +3557,10 @@ pow_hi: .byte >10000, >1000, >100, >10, >1
 
 ; Pixels the player rises on each frame of a jump (0 ends the rise).
 jump_dy: .byte 3,3,3,3,3,2,2,2,2,1,1,1,0
+
+; Extra full-speed frames of a trampoline bounce to clear a surface k tiles up (index k, 1..BOUNCE_ROWS):
+; the smallest n with 17 + 3n >= 8k + 8, i.e. ceil((8k - 9) / 3), at least 0.
+bounce_n: .byte 0,0,3,5,8,11,13,16,19,21,24,27,29,32,35
 
 ; Lines he floats above his box on each of 64 frames (index RTCLOK+2 and 63): 2 + round(sin), so 1 to 3.
 bob_float:

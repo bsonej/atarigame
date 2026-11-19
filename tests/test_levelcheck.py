@@ -45,6 +45,15 @@ class LevelCheck(unittest.TestCase):
         self.assertIn("column 20, row 12", items[0])
         self.assertTrue(all("dot" in p for p in problems if p not in items), "the ledge's dots can't be reached either")
 
+    def test_a_trampoline_makes_a_high_ledge_reachable_but_not_one_out_of_range(self) -> None:
+        ledge = lambda row: {(c, row): "#" for c in range(9, 15)}  # noqa: E731
+        plain = {(11, 15): "*", **ledge(16)}  # 7 tiles above the floor: more than a jump
+        self.assertTrue([p for p in lc.check(make(plain)) if p.startswith("item")])
+        bounce = {**plain, **{(c, 23): "T" for c in (10, 11, 12)}}
+        self.assertEqual(lc.check(make(bounce)), [])
+        far = {(11, 7): "*", **ledge(8), **{(c, 23): "T" for c in (10, 11, 12)}}  # 15 tiles up
+        self.assertTrue([p for p in lc.check(make(far)) if p.startswith("item")])
+
     def test_a_ladder_makes_the_ledge_reachable(self) -> None:
         edits = {(20, 12): "*", **{(c, 13): "#" for c in range(18, 23)}}
         edits.update({(10, r): "H" for r in range(13, 23)})

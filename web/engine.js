@@ -17,6 +17,9 @@ export const FRAME = { STAND: 0, LEAN: 3, SQUASH: 5, STRETCH: 8, DIE_A: 11, DIE_
 const LAND_FRAMES = 4; // how long he stays squashed after landing
 const HOP_JT = 8; // the hop out of the top of an up chute starts this far into the jump table (5 pixels up) ...
 const HOP_FRAMES = 4; // ... and drifts sideways this many pixels (enough to leave the chute's column)
+const BOUNCE_ROWS = 14; // a trampoline looks this many tile rows up his column for something to bounce him to ...
+const BOUNCE_TOP = 24; // ... but not above this pixel line (tile row 3: a surface higher could not be landed on)
+const BOUNCE_JT = 3; // a bounce is the jump's last 17 pixels (JUMP_DY from index 3) after bn frames of 3 pixels each
 
 const KIND_EXPL = 0;
 const KIND_VANISH = 1;
@@ -44,6 +47,8 @@ export const DIE_FRAMES = 80;
 export const CLEAR_FRAMES = 60;
 
 const JUMP_DY = [3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 0];
+// Extra full-speed frames of a bounce to clear a surface k tiles up (index k): the smallest n with 17 + 3n >= 8k + 8.
+export const BOUNCE_N = [0, 0, 3, 5, 8, 11, 13, 16, 19, 21, 24, 27, 29, 32, 35];
 const DIE_DY = [0xfc, 0xfc, 0xfd, 0xfd, 0xfe, 0xfe, 0xff, 0xff, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
 const CONV_DIR = [0, 0, 0, 0, 1, 1, 1, 1];
 const CONV_SPD = [8, 16, 32, 0, 8, 16, 32, 0];
@@ -105,6 +110,7 @@ export class Game {
     this.left = lv.items;
     this.state = STATE.GROUND;
     this.jt = 0xff;
+    this.bn = 0; // trampoline bounce: frames of full-speed rise still to go
     this.hop = 0; // frames of forced sideways drift left (the hop out of an up chute)
     this.hdir = 0; // which way that drift goes (the way he faced when the ride ended): 2 = left, else right
     this.rkind = 0; // which chute he rides: 0 down, 1 up
@@ -129,7 +135,7 @@ export class Game {
   snapshot() {
     return {
       mode: this.mode, px: this.px, py: this.py, state: this.state, left: this.left, lives: this.lives,
-      score: this.score, jt: this.jt, fall: this.fall, vx: this.vx, vfrac: this.vfrac, under: this.under,
+      score: this.score, jt: this.jt, bn: this.bn, fall: this.fall, vx: this.vx, vfrac: this.vfrac, under: this.under,
       cacc: this.cacc, mtimer: this.mtimer, frame: this.frame, face: this.face, hop: this.hop,
       doorOpen: this.doorOpen, doorDir: u8(this.doorDir), doorPhase: this.doorPhase,
     };
@@ -405,6 +411,7 @@ export class Game {
     this.jt = 0xff;
     this.fall = 0;
     this.hop = 0;
+    this.bn = 0;
   }
 
   upAir() {
@@ -416,20 +423,54 @@ export class Game {
     } else this.doHoriz();
     if (this.jt === 0xff) return this.airFall();
     // Rising: nothing above him matters (no head bumps: he overlays blocks, bombs, platforms, chutes); only the score row is a ceiling.
-    let n = JUMP_DY[this.jt];
+    let n;
+    if (this.bn) {
+      this.bn--; // a trampoline bounce: bn frames at full speed first (jt stays where it is), then the usual slowing tail
+      this.jt--;
+      n = 3;
+    } else n = JUMP_DY[this.jt];
     if (n === 0) {
       this.jt = 0xff;
+      this.bn = 0;
       return;
     }
     while (n > 0) {
       if (this.py < 9) {
         this.jt = 0xff;
+        this.bn = 0;
         return;
       }
       this.py = u8(this.py - 1);
       n--;
     }
     this.jt++;
+  }
+
+  /**
+   * Landing on a trampoline (the tile under the middle of his feet, else under either foot, like belts): if there is
+   * anything he could land on in his column above it, he is thrown straight up and falls onto it. Looking up from the
+   * trampoline tile by tile (BOUNCE_ROWS at most, never above BOUNCE_TOP), the first row where the middle (px+2) or either
+   * foot column (px, px+3) has a surface (tileStandable) is the target, k tiles up. The bounce is the end of an ordinary
+   * jump (BOUNCE_JT) after BOUNCE_N[k] frames of 3 pixels: it rises 17 + 3*BOUNCE_N[k] >= 8k + 8 pixels, so his feet clear the
+   * target's top by a tile (8 to 10 pixels) and he lands on it on the way down. Nothing in range: an ordinary landing.
+   * True if he bounced.
+   */
+  tryBounce() {
+    const feet = u8(this.py + SPR_H);
+    if (!PROBE_DX.some((dx) => this.getTile(u8(this.px + dx), feet) === this.T.TRAMPOLINE)) return false;
+    let y = feet & 0xf8;
+    for (let k = 1; k <= BOUNCE_ROWS; k++) {
+      y = u8(y - 8);
+      if (y < BOUNCE_TOP) return false;
+      if (PROBE_DX.some((dx) => this.tileStandable(u8(this.px + dx), y))) {
+        this.bn = BOUNCE_N[k];
+        this.jt = BOUNCE_JT;
+        this.fall = 0;
+        this.events.push('bounce');
+        return true;
+      }
+    }
+    return false;
   }
 
   /** No solid in either foot column at the lowest row of the body (py+15); at the bottom of the screen the floor is the edge. */
@@ -443,6 +484,7 @@ export class Game {
   airFall() {
     for (let i = 0; i < 2; i++) {
       if (this.groundBelow() && this.feetClear()) {
+        if (this.tryBounce()) return; // a trampoline catches him, however far he fell
         if (this.fall > MAX_FALL) return this.die();
         this.state = STATE.GROUND;
         this.fall = 0;

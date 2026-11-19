@@ -804,7 +804,7 @@ class RealAssets(unittest.TestCase):
         tiles = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
         caps = ba.cap_families(tiles)
         by_char = {t["char"]: t for t in tiles if t["char"]}
-        for ch in "#=~oXv}>)]{<([":
+        for ch in "#=~oXvT}>)]{<([":
             with self.subTest(ch):
                 self.assertEqual(set(caps[by_char[ch]["byte"]]), {"L", "R", "LR"}, f"{by_char[ch]['name']} needs both ends")
         for ch in "HS\\/":  # ladders, stairs and chutes have no ends
@@ -812,6 +812,17 @@ class RealAssets(unittest.TestCase):
         ids = [t["id"] for t in tiles]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertLess(max(ids), 128)
+
+    def test_the_trampoline_is_a_solid_tile_with_ends_and_no_dots(self) -> None:
+        tiles = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
+        by_name = {t["name"]: t for t in tiles}
+        tramp = by_name["TRAMPOLINE"]
+        self.assertEqual((tramp["char"], tramp["solid"], tramp["oneway"], tramp["byte"]), ("T", True, False, 26))
+        self.assertEqual([by_name[f"TRAMPOLINE_{k}"]["id"] for k in ("L", "R", "LR")], [27, 28, 29])
+        self.assertNotIn(tramp["byte"], ba.dot_families(tiles), "no dots on a trampoline")
+        flags, canon = ba.tile_tables(tiles)
+        self.assertEqual(flags[26], ba.F_SOLID)
+        self.assertEqual([canon[b] for b in (27, 28, 29)], [26, 26, 26], "the game treats an end cap as the plain tile")
 
     def test_belt_caps_sit_at_the_ids_the_game_animates(self) -> None:
         by_name = {t["name"]: t["id"] for t in ba.parse_tiles(ROOT / "assets" / "tiles.txt")}

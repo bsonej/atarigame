@@ -2,7 +2,7 @@
 // input on the 6502 code and on this engine and compares them.) Run with: node --test tests/js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { JOY, MODE, STATE, FRAME } from '../../web/engine.js';
+import { JOY, MODE, STATE, FRAME, BOUNCE_N } from '../../web/engine.js';
 import { room, play, run, tables, vertical } from './helpers.mjs';
 
 const T = tables.T;
@@ -556,4 +556,111 @@ test('pushed over a spike he still dies of it (the push does not make him immune
   g.state = STATE.GROUND;
   for (let i = 0; i < 400 && g.mode === MODE.PLAY; i++) g.step(0);
   assert.equal(g.mode, MODE.DYING);
+});
+
+// ---- trampolines -------------------------------------------------------------------------------------------------
+// A trampoline is a solid platform. Landing on it from the air throws him straight up, just high enough to land on the
+// next surface above him in his column (up to 14 tiles), see tryBounce in web/engine.js and try_bounce in main.s.
+
+/** Jump on the spot (at pixel column px) and report the highest point (smallest py) and where he ends up. */
+function jumpOn(g, frames = 150) {
+  g.step(JOY.FIRE);
+  let top = g.py;
+  for (let i = 0; i < frames; i++) {
+    g.step(0);
+    top = Math.min(top, g.py);
+  }
+  return { top, py: g.py, state: g.state };
+}
+
+test('walking over a trampoline does nothing', () => {
+  const g = play(room({ '23,10': 'TTTT', '18,8': '#######' }));
+  g.px = 32;
+  for (let i = 0; i < 40; i++) {
+    g.step(JOY.RIGHT);
+    assert.deepEqual([g.py, g.state], [FLOOR_Y, STATE.GROUND], `frame ${i}`);
+  }
+  assert.ok(g.px >= 70, 'walked right across it');
+  run(g, 30);
+  assert.deepEqual([g.py, g.state, g.jt], [FLOOR_Y, STATE.GROUND, 0xff]);
+  assert.equal(g.map[23 * 40 + 11], T.TRAMPOLINE, 'no dots on it');
+});
+
+test('landing from a jump on a trampoline bounces him up to the platform above', () => {
+  const g = play(room({ '23,10': 'TTTT', '18,8': '#######' })); // the platform's top is 5 tiles above the trampoline's
+  g.px = 11 * 4;
+  const r = jumpOn(g);
+  assert.equal(FLOOR_Y - r.top, 17 + 3 * 11, 'rose 50 pixels: 8*5+8=48 rounded up to the 3 pixel steps');
+  assert.ok(r.top < 18 * 8 - 16 - 8, 'the apex clears the platform by more than a tile');
+  assert.deepEqual([r.py, r.state], [18 * 8 - 16, STATE.GROUND], 'then lands on it');
+});
+
+test('a bounce is automatic: a long fall onto a trampoline does not hurt and bounces him up to the ledge above', () => {
+  const g = play(room({ '23,10': 'TTTT', '12,8': '#######' }));
+  g.px = 11 * 4;
+  g.py = 100; // (a fall of 68 pixels, more than MAX_FALL: fatal on any other floor); the ledge's top is above his feet
+  g.state = STATE.AIR;
+  g.jt = 0xff;
+  run(g, 200);
+  assert.equal(g.deaths, 0);
+  assert.deepEqual([g.py, g.state], [12 * 8 - 16, STATE.GROUND]);
+  const hard = play(room({ '23,10': 'WWWW' }));
+  hard.px = 11 * 4;
+  hard.py = 100;
+  hard.state = STATE.AIR;
+  hard.jt = 0xff;
+  run(hard, 60);
+  assert.equal(hard.mode, MODE.DYING, 'the same fall onto a plain floor kills');
+});
+
+test('nothing above him means no bounce', () => {
+  const g = play(room({ '23,10': 'TTTT' }));
+  g.px = 11 * 4;
+  const r = jumpOn(g);
+  assert.equal(FLOOR_Y - r.top, 26, 'an ordinary jump');
+  assert.deepEqual([r.py, r.state, g.jt, g.bn], [FLOOR_Y, STATE.GROUND, 0xff, 0]);
+});
+
+test('a surface 14 tiles up is reached, 15 is not', () => {
+  const far = play(room({ '23,10': 'TTTT', '9,8': '#######' })); // 14 tiles up: rows 22 .. 9
+  far.px = 11 * 4;
+  assert.equal(jumpOn(far).py, 9 * 8 - 16);
+  const none = play(room({ '23,10': 'TTTT', '8,8': '#######' }));
+  none.px = 11 * 4;
+  const r = jumpOn(none);
+  assert.deepEqual([r.py, FLOOR_Y - r.top], [FLOOR_Y, 26], 'out of range: no bounce');
+});
+
+test('every height from 2 to 14 tiles lands on the surface (one-way, too) and clears it by a tile', () => {
+  for (let k = 2; k <= 14; k++) {
+    const row = 23 - k; // (one tile up would be inside his body)
+    const g = play(room({ '23,10': 'TTTT', [`${row},8`]: '=======' }));
+    g.px = 11 * 4;
+    g.py = FLOOR_Y - 10; // dropped onto the trampoline from just above it
+    g.state = STATE.AIR;
+    g.jt = 0xff;
+    let top = g.py;
+    for (let i = 0; i < 200; i++) {
+      g.step(0);
+      top = Math.min(top, g.py);
+    }
+    assert.deepEqual([k, g.py, g.state], [k, row * 8 - 16, STATE.GROUND]);
+    const clear = row * 8 - 16 - top;
+    assert.ok(clear >= 8 && clear <= 10, `k=${k}: the apex is ${clear} pixels above the standing height`);
+  }
+});
+
+test('a bounce can be repeated: landing on a trampoline on the upper level bounces again', () => {
+  const g = play(room({ '23,10': 'TTTT', '18,8': 'TTTTTTT', '12,8': '#######' }));
+  g.px = 11 * 4;
+  const r = jumpOn(g, 300);
+  assert.deepEqual([r.py, r.state], [12 * 8 - 16, STATE.GROUND], 'up to the first trampoline, then to the ledge above it');
+});
+
+test('the table of bounce lengths gives the least rise that clears the surface by a tile', () => {
+  for (let k = 1; k <= 14; k++) {
+    const rise = 17 + 3 * BOUNCE_N[k];
+    assert.ok(rise >= 8 * k + 8, `k=${k}`);
+    if (BOUNCE_N[k] > 0) assert.ok(rise - 3 < 8 * k + 8, `k=${k} is not higher than it needs to be`);
+  }
 });

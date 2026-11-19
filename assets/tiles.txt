@@ -460,6 +460,48 @@ twin 124 SLIDE_L
 0220
 0220
 
+# A trampoline: a solid platform you walk over like any other (no dots in it), but land on it from the air and it
+# bounces you straight back up, just high enough to land on the next thing above you (see try_bounce in main.s).
+tile 26 TRAMPOLINE T solid
+1111
+1111
+0220
+0330
+0220
+0330
+0220
+2222
+
+cap 27 TRAMPOLINE L
+0111
+1111
+0220
+0330
+0220
+0330
+0220
+0222
+
+cap 28 TRAMPOLINE R
+1110
+1111
+0220
+0330
+0220
+0330
+0220
+2220
+
+cap 29 TRAMPOLINE LR
+0110
+1111
+0220
+0330
+0220
+0330
+0220
+0220
+
 # Conveyor belts (ids 64-71). The two top rows are redrawn by the game to make the belt move.
 tile 64 CONV_R_SLOW } solid
 3222

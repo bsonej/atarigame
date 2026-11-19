@@ -13,6 +13,7 @@ export const GROUPS = [
       { kind: 'tile', name: 'PLATFORM', tip: 'Thin platform: one-way. Jump up through it, land on top. Has dots too' },
       { kind: 'tile', name: 'ICE', tip: 'Ice: slow to start, slow to stop, slides far' },
       { kind: 'tile', name: 'ROLLER', tip: 'Roller: like ice, but grips sooner' },
+      { kind: 'tile', name: 'TRAMPOLINE', tip: 'Trampoline: walk over it as over any platform (no dots), but land on it from a jump or fall and it bounces you straight up, just high enough to land on the next surface above you in your column (up to 14 tiles; nothing there, no bounce)' },
     ],
   },
   {
@@ -77,6 +78,7 @@ export const STAMPS = [
   { label: 'Belt left', cells: row('CONV_L', 8), tip: '8 belt tiles moving left' },
   { label: 'Ice', cells: row('ICE', 8), tip: '8 ice tiles' },
   { label: 'Roller', cells: row('ROLLER', 8), tip: '8 roller tiles' },
+  { label: 'Trampoline', cells: row('TRAMPOLINE', 3), tip: '3 trampoline tiles: land on them and they bounce you up to the platform above' },
   { label: 'Bombs', cells: row('EXPLOSIVE', 4), tip: '4 bomb blocks: setting one off chains to its neighbours' },
   { label: 'Vanishing', cells: row('VANISH', 4), tip: '4 vanishing blocks' },
   { label: 'Ladder', cells: Array.from({ length: 5 }, (_, i) => [0, i, 'LADDER']), tip: 'A ladder 5 tiles tall' },

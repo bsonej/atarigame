@@ -549,6 +549,82 @@ class JumpingThroughThings(Arena):
 
 
 @needs_emulator
+class Trampolines(Arena):
+    """A trampoline is a platform to walk on; landing on it from the air bounces him up to the next surface above him."""
+
+    def build(self, ledge_row: int | None = None, tile: str = "BRICK") -> None:
+        self.arena()
+        g = self.g
+        g.put_tiles(10, 23, [T["TRAMPOLINE_L"], T["TRAMPOLINE"], T["TRAMPOLINE"], T["TRAMPOLINE_R"]])  # (with its end caps)
+        if ledge_row is not None:
+            g.put_tiles(8, ledge_row, [T[tile]] * 8)
+
+    def jump(self, px: int = 44) -> tuple[int, int]:
+        """Jump on the spot, and return the highest point (smallest py) and the frames spent off the ground."""
+        g = self.g
+        self.stand(px)
+        g.step(FIRE)
+        top, air = g.py, 1
+        for _ in range(150):
+            g.step()
+            top = min(top, g.py)
+            air += g.state == AIR
+        return top, air
+
+    def test_walking_over_it_does_nothing(self) -> None:
+        g = self.g
+        self.build(18)
+        self.stand(30)
+        for _ in range(40):
+            g.step(RIGHT)
+            self.assertEqual((g.py, g.state), (FLOOR_Y, GROUND))
+        self.assertGreater(g.px, 66)
+        self.assertEqual(g.tile(11, 23), T["TRAMPOLINE"], "nothing was eaten or changed")
+
+    def test_landing_on_it_from_a_jump_bounces_him_up_to_the_platform_above(self) -> None:
+        g = self.g
+        self.build(18)  # the ledge's top is 5 tiles above the trampoline's
+        top, _ = self.jump()
+        self.assertEqual(FLOOR_Y - top, 17 + 3 * 11, "rose 50 pixels: 8*5+8, in steps of 3")
+        self.assertEqual((g.py, g.state), (18 * 8 - 16, GROUND), "then fell onto the ledge")
+
+    def test_a_one_way_platform_above_is_a_target_too_and_a_far_one_is_reached(self) -> None:
+        g = self.g
+        self.build(9, "PLATFORM")  # 14 tiles up: the farthest
+        self.jump()
+        self.assertEqual((g.py, g.state), (9 * 8 - 16, GROUND))
+
+    def test_nothing_above_him_means_no_bounce(self) -> None:
+        g = self.g
+        self.build(None)
+        top, _ = self.jump()
+        self.assertEqual(FLOOR_Y - top, 26, "an ordinary jump")
+        self.assertEqual((g.py, g.state, g.jt, g.bn), (FLOOR_Y, GROUND, 0xFF, 0))
+        self.build(8)  # 15 tiles up: out of range
+        top, _ = self.jump()
+        self.assertEqual(FLOOR_Y - top, 26)
+        self.assertEqual((g.py, g.state), (FLOOR_Y, GROUND))
+
+    def test_a_long_fall_onto_it_bounces_instead_of_killing(self) -> None:
+        g = self.g
+        self.build(12)
+        self.stand(44, 100)  # 68 pixels above the floor: more than MAX_FALL
+        g.poke("state", AIR)
+        g.poke("jt", 0xFF)
+        g.run(200)
+        self.assertEqual((g.py, g.state, g.deaths), (12 * 8 - 16, GROUND, 0))
+
+    def test_he_bounces_again_off_a_trampoline_on_the_upper_level(self) -> None:
+        g = self.g
+        self.build(12)
+        g.put_tiles(8, 18, [T["TRAMPOLINE"]] * 8)
+        self.stand(44)
+        g.step(FIRE)
+        g.run(250)
+        self.assertEqual((g.py, g.state), (12 * 8 - 16, GROUND), "first to the upper trampoline, then on to the ledge above it")
+
+
+@needs_emulator
 class VanishingBlocks(Arena):
     def build(self) -> None:
         self.arena()

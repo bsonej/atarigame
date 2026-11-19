@@ -52,7 +52,7 @@ def compile_level(path: Path, text: str | None = None) -> dict:
 LEVELS = sorted((ROOT / "assets" / "levels").glob("*.txt"), key=ba.natural_key)
 
 BELTS = [n for n in CHAR if n.startswith("CONV_")]
-PLATFORMS = ["BRICK", "BRICK", "PLATFORM", "ICE", "ICE", "ROLLER", "ROLLER", "EXPLOSIVE", "VANISH"] + BELTS
+PLATFORMS = ["BRICK", "BRICK", "PLATFORM", "ICE", "ICE", "ROLLER", "ROLLER", "EXPLOSIVE", "VANISH", "TRAMPOLINE", "TRAMPOLINE"] + BELTS
 
 
 def node_trace(spec: dict) -> dict:
@@ -180,7 +180,7 @@ class CompileParity(unittest.TestCase):
                 self.assertIn("error", node_trace({"text": text, "segments": []}))
 
 
-FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "fall", "vx", "vfrac", "frame", "hop"]
+FIELDS = ["mode", "px", "py", "state", "left", "lives", "score", "jt", "bn", "fall", "vx", "vfrac", "frame", "hop"]
 DOOR_FIELDS = {"doorOpen": "door_open", "doorDir": "door_dir", "doorPhase": "door_phase", "face": "face"}  # engine name -> game variable
 
 
@@ -258,7 +258,7 @@ class EngineMatchesGame(Arena):
         lv = compile_level(Path("x.txt"), text)
         g.poke_bytes(g.screen_addr + 40, lv["data"][40:960])
         for name, value in dict(
-            px=lv["spawn"][0] * 4, py=lv["spawn"][1] * 8, state=0, jt=0xFF, hop=0, fall=0, vx=0, vfrac=0, cfrac=0, fcount=0,
+            px=lv["spawn"][0] * 4, py=lv["spawn"][1] * 8, state=0, jt=0xFF, bn=0, hop=0, fall=0, vx=0, vfrac=0, cfrac=0, fcount=0,
             gtick=0, cacc_t=0, cacc=4, anim=0, moved=0, joy=0, joyprev=0, left=lv["items"], lives=1, pg_n=0,
         ).items():
             g.poke(name, value)
