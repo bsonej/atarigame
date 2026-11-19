@@ -44,6 +44,7 @@ CAPS = ba.cap_families(TILES)
 DOTS = ba.dot_families(TILES)
 TWINS = ba.twin_families(TILES)
 DOOR = ba.door_bytes(TILES)
+TILES_BY_NAME = {t["name"]: t["byte"] for t in TILES}
 
 
 def compile_level(path: Path, text: str | None = None) -> dict:
@@ -273,6 +274,30 @@ class EngineMatchesGame(Arena):
                 self.fresh()
                 segs = random_segments(seed)
                 self.check(lambda: self.load_random_level(text), {"text": text, "lives": 1, "segments": segs})
+
+    def test_the_trampoline_rubber_band_frame_by_frame(self) -> None:
+        """A run of trampolines (a second one beside it) bounced on under a ledge: the screen map, with the mat's sag
+        frames swapped in, is the same on the game and the engine at every one of the frames of the wobble."""
+        grid = [["."] * 40 for _ in range(24)]
+        for r in range(1, 24):
+            grid[r][0] = grid[r][39] = "W"
+        grid[23] = ["#"] * 40
+        for c in range(8, 17):
+            grid[23][c] = "T"
+        for c in range(24, 28):
+            grid[23][c] = "T"
+        for c in range(6, 20):
+            grid[18][c] = "#"
+        grid[21][11] = "@"
+        grid[22][30] = "*"
+        grid[22][34] = "D"
+        text = "# Level 99. 40 columns x 24 rows.\n" + "\n".join("".join(row) for row in grid) + "\n"
+        segs = [[0, 2], [FIRE, 1]] + [[0, 1]] * 70 + [[RIGHT, 1]] * 6 + [[FIRE | RIGHT, 1]] + [[RIGHT, 1]] * 60
+        self.fresh()
+        self.check(lambda: self.load_random_level(text), {"text": text, "lives": 1, "segments": segs})
+        mats = {TILES_BY_NAME[n] for n in ("TRAMPOLINE_S1", "TRAMPOLINE_S2", "TRAMPOLINE_S3", "TRAMPOLINE_TAUT")}
+        self.assertEqual(self.g.tr_t, 0, "the wobble is over")
+        self.assertFalse(mats & set(self.read_map()), "and the plain tiles are back")
 
     # ---- the shipped levels ------------------------------------------------------------------
     def standing_places(self, path: Path) -> list[tuple[int, int]]:

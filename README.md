@@ -190,7 +190,7 @@ changing the art in `tiles.txt` is all it takes); `web/render.js` (`chuteFrame(h
 
 ### Trampolines
 
-A trampoline (`T`, `TRAMPOLINE`) is a solid platform with art of a taut mat on a spring (ids 26-29: the tile and its three end caps; no dot version, so no dots). Walking, standing and jumping off it are as on any platform. The
+A trampoline (`T`, `TRAMPOLINE`) is a solid platform whose middle tiles are just the mat (a two line thick rubber band at the top of the tile, nothing below) and whose end caps are the posts it is anchored to, with the spring legs (ids 26-29: the tile and its three end caps; no dot version, so no dots). Walking, standing and jumping off it are as on any platform. The
 bounce happens on the air-to-ground transition (`try_bounce` in `src/main.s`, `tryBounce` in `web/engine.js`): when
 `air_fall` lands him and the tile under the middle of his feet, else under either foot (the belt probe order), is a
 trampoline, it looks up from that tile row by row, at most `BOUNCE_ROWS` (14) rows and never above pixel line 24 (tile
@@ -205,7 +205,23 @@ on the way down he lands on the first surface, which is the target (a surface di
 within the 8-10 pixel margin may be landed on instead). He is caught however far he fell: the fall that would kill him
 (more than 64 pixels) does not when a bounce follows, but with nothing above him it is an ordinary landing, so the
 usual rule applies. If he is steered back onto a trampoline, or lands on one on the upper level, it bounces him again.
-Range and rows are constants: `BOUNCE_ROWS`, `BOUNCE_TOP` (`web/engine.js` has the same, and `bounce_n` / `BOUNCE_N`).
+Range and rows are constants: `BOUNCE_ROWS`, `BOUNCE_TOP` (`web/engine.js` has the same, and `bounce_n` / `BOUNCE_N`). The bounce only decides how far he rises; the way down is the usual slow fall (see "Jumping").
+
+**The rubber band.** When a bounce starts, the mat of the whole connected run he landed on (the trampoline tiles on that row
+either side of the one under him, caps counted) animates like a stretched rubber band: `tramp_start` finds the run's ends and
+the column he landed in, and `tramp_anim` (every frame of play, after `update_timed`; `trampAnim` in `web/engine.js`) steps
+through `tramp_amp` (`TRAMP_AMP`), two frames per step, 26 frames in all: it sags 1, 2, 3 lines, holds, comes back up, springs
+past plain (the band stretched taut and thin), sags a little again, goes taut once more and settles (the last step is plain).
+The pictures are extra tiles, so only that run's *screen* tiles change (like a vanishing block): `TRAMPOLINE_S1`, `_S2`, `_S3` (the
+mat 1, 2, 3 lines lower; ids 30, 31, 62) and `TRAMPOLINE_TAUT` (id 63), `frame` lines in `assets/tiles.txt`. The sag of a middle
+tile is the smallest of the amplitude, one more than its distance from the end of the run (so it tapers to the posts) and
+3 minus half its distance from where he landed (deepest there, at least 1): `tramp_draw`. The end caps never change; a run of
+caps only (one or two tiles) has no mat to stretch and stays still. Other trampolines on the screen do not move; the game
+treats every picture as the trampoline (`tile_canon` maps a `frame` tile to its tile, like caps and dots), so `get_tile`,
+the bounce, `levelcheck` and the AI see `TRAMPOLINE` throughout, and gameplay is unchanged. A bounce on another run (or the
+same again) puts the old one back first; `timed_reset` (every level start and respawn) clears it, and the map is copied
+afresh anyway. The state is zero-page `tr_t` (0 = idle), `tr_row`, `tr_l`, `tr_r`, `tr_c`. The editor's test play shows it
+(it draws the engine's map); `tools/render_level.py` draws the plain art.
 `tools/levelcheck.py` treats a landing cell on a trampoline as reaching the first surface above it (cells on that row
 within the bounce's air time), and does not claim anything more. The attract AI knows nothing of trampolines (it
 ignores them); no shipped map has one yet.
@@ -213,7 +229,13 @@ ignores them); no shipped map has one yet.
 ### Jumping
 
 A jump rises 26 pixels (`jump_dy` in `src/main.s`, `JUMP_DY` in `web/engine.js` and `web/spritemodel.js`; three tiles up
-reach, `JUMP_REACH` in `tools/levelcheck.py`). While rising nothing above him matters: no head bump on bricks, walls, bombs,
+reach, `JUMP_REACH` in `tools/levelcheck.py`), and the way down is slower than the way up, so he floats back down
+(`air_fall`, `airFall`): the pixels a frame depend on `fall`, the pixels fallen since the apex: 1 a frame for the first
+`FALL_SLOW` (4) pixels, then the pattern 1, 1, 2 (`fall` bit 1 clear = 2 pixels) up to `FALL_FAST` (16), then 2 a frame as before.
+A 26 pixel jump takes 13 frames up and about 18 down (it was 13), and he drifts that much further sideways. `fall` still
+counts pixels, so the lethal distance (more than 64 pixels) is unchanged, and `tools/levelcheck.py` computes its
+jump reach (`JUMP_REACH`) and the bounce's from the same fall (`fall_frames`: one tile wider than before for a flat
+jump). The sprite editor's jump preview uses the same descent. While rising nothing above him matters: no head bump on bricks, walls, bombs,
 one-way platforms or chutes, he simply overlays them (only the score row is a ceiling). Sideways collisions stay as they were (a brick
 beside him blocks him), with one exception so he is never stuck: at a body row where he is already inside a solid on the
 edge he is on, he can slide on (he rose into a block and slides about in it and out of it). Falling, he lands on the first solid or one-way surface under his feet
@@ -241,12 +263,15 @@ Notes for map builders:
   at the end of its run it gives one more push the way it was going before it turns round, so he ends up off the end and
   not on its last pixel. A solid beside him (a wall) still stops him as it stops any walk, and what is under his feet still
   applies (a spike at his feet still kills: pushed over, not made immune; a gap in the floor still drops him).
+- A spike tile is two white-tipped needles on a solid base, drawn from the second line of the tile (7 lines; it used
+  to start at the third). It hurts from the line its tips are on down: only his feet count, as before, and the check
+  (`SPIKE_TOP` in `main.s` and `engine.js`, `check_tiles`) is that line, one pixel more height than the old rule.
 - A spike needs three clear tiles above it to be jumpable. `task check-levels` flags spikes that have not.
 - Fuses and rests are counted in frames, so the times above are for 50 Hz PAL (what atari800 runs here) and are a sixth
   shorter on NTSC.
 - Durations and speeds are constants at the top of `src/main.s` (`FUSE_EXPL`, `FUSE_VANISH`, `VANISH_BACK`, `PEG_WAIT`,
   `SLICK_MAX`, and the belt tables `conv_spd`, `slick_acc`...).
-- To add a tile, add it to `assets/tiles.txt` (ids 0-15, 26-29, 64-124 are mostly in use; 30, 31, 62, 63 and 125-127 are free, see the header of that file; an alt-colour tile is stored with bit 7
+- To add a tile, add it to `assets/tiles.txt` (ids 0-15, 26-31, 62-124 are mostly in use; only 125-127 are free, see the header of that file; a `frame` line adds a picture only the game puts on the screen, as the trampoline's rubber band does; an alt-colour tile is stored with bit 7
   set, so its map byte is its id plus 128) and give it behaviour in `main.s` if it needs any; flags alone make it solid
   or one-way.
 

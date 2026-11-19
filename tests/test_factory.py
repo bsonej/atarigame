@@ -22,6 +22,7 @@ from tools.headless import (  # noqa: E402
     AIR,
     CLEAR,
     CLEAR_FRAMES,
+    DIE_FRAMES,
     DYING,
     FIRE,
     GROUND,
@@ -549,6 +550,19 @@ class JumpingThroughThings(Arena):
 
 
 @needs_emulator
+class SlowFall(Arena):
+    def test_the_lethal_fall_is_still_64_pixels(self) -> None:
+        g = self.g
+        self.arena()
+        for dist, dies in ((64, False), (65, True)):
+            self.stand(60, FLOOR_Y - dist)
+            g.poke("state", AIR)
+            g.poke("jt", 0xFF)
+            g.run(80)
+            self.assertEqual((g.deaths, g.mode == DYING), (int(dies), dies), f"a fall of {dist} pixels")
+
+
+@needs_emulator
 class Trampolines(Arena):
     """A trampoline is a platform to walk on; landing on it from the air bounces him up to the next surface above him."""
 
@@ -613,6 +627,56 @@ class Trampolines(Arena):
         g.poke("jt", 0xFF)
         g.run(200)
         self.assertEqual((g.py, g.state, g.deaths), (12 * 8 - 16, GROUND, 0))
+
+    def test_the_whole_run_sags_like_a_rubber_band_and_ends_restored(self) -> None:
+        g = self.g
+        self.arena()
+        L, M, R = T["TRAMPOLINE_L"], T["TRAMPOLINE"], T["TRAMPOLINE_R"]
+        sags = [M, T["TRAMPOLINE_S1"], T["TRAMPOLINE_S2"], T["TRAMPOLINE_S3"]]
+        g.put_tiles(5, 23, [L] + [M] * 6 + [R])  # the run he bounces on: columns 5-12 (the posts at both ends)
+        g.put_tiles(20, 23, [L, M, M, R])  # a second one, which must not move
+        g.put_tiles(6, 18, [T["BRICK"]] * 8)  # the ledge he is thrown up to
+        self.stand(32)  # column 8
+        g.step(FIRE)
+        frames = []
+        for _ in range(110):
+            g.step()
+            row = list(g.mem(g.screen_addr + 23 * 40, 256))
+            frames.append((row[5:13], row[20:24], g.tr_t))
+        self.assertEqual((g.py, g.state), (18 * 8 - 16, GROUND), "he still bounced up onto the ledge")
+        self.assertTrue(all(run[0] == L and run[-1] == R for run, _, _ in frames), "the end caps are the posts: never redrawn")
+        self.assertTrue(all(other == [L, M, M, R] for _, other, _ in frames), "another trampoline on the screen does not move")
+        moving = [i for i, (run, _, _) in enumerate(frames) if run != [L] + [M] * 6 + [R]]
+        self.assertTrue(20 <= len(moving) <= 30, f"the wobble lasts {len(moving)} frames")
+        self.assertEqual(moving, list(range(moving[0], moving[-1] + 1)), "in one go")
+        seen = {t for run, _, _ in frames for t in run[1:-1]}
+        self.assertEqual(seen, {*sags, T["TRAMPOLINE_TAUT"]}, "sags 1, 2, 3 and back up taut")
+        for col in range(1, 7):
+            self.assertTrue(any(run[col] != M for run, _, _ in frames), f"tile {col} of the run moves too")
+        deepest = next(run for run, _, _ in frames if run[3] == sags[3])  # (the middle of his feet: column 8)
+        self.assertTrue(sags.index(deepest[3]) > sags.index(deepest[1]) and sags.index(deepest[3]) > sags.index(deepest[6]),
+                        "deepest where he landed, tapering towards the ends")
+        self.assertEqual(frames[-1][0], [L] + [M] * 6 + [R], "plain again")
+        self.assertEqual((frames[-1][2], g.tr_t), (0, 0))
+
+    def test_a_restart_in_the_middle_of_the_wobble_puts_the_plain_tiles_back(self) -> None:
+        g = self.g
+        self.build(18)
+        self.stand(44)
+        g.step(FIRE)
+        g.run_until(lambda g: g.tr_t > 6, limit=60, every=1)
+        self.assertGreater(g.tr_t, 6)
+        g.poke("px", 100)  # (the brick floor) and a fall that kills
+        g.poke("py", 60)
+        g.poke("state", AIR)
+        g.poke("jt", 0xFF)
+        g.poke("bn", 0)
+        g.poke("fall", 100)
+        g.run_until(lambda g: g.mode == DYING, limit=100, every=1)
+        g.run_until(lambda g: g.mode == SPAWN, limit=DIE_FRAMES + 20, every=1)
+        self.assertEqual(g.tr_t, 0)
+        screen = g.mem(g.screen_addr, 1024)
+        self.assertFalse({T["TRAMPOLINE_S1"], T["TRAMPOLINE_S2"], T["TRAMPOLINE_S3"], T["TRAMPOLINE_TAUT"]} & set(screen))
 
     def test_he_bounces_again_off_a_trampoline_on_the_upper_level(self) -> None:
         g = self.g

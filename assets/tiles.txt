@@ -34,6 +34,11 @@
 #           art that is 16 rows tall and has to line up from one tile to the one below it: a stack of the tile
 #           alternates plain, twin, plain, twin. You never put these in a map. The game treats a twin as the plain tile.
 #
+#   frame <id> <FAMILY> <SUFFIX>
+#           another picture of the tile (8 rows of art follow), named <FAMILY>_<SUFFIX>, that only the game puts on the
+#           screen, to animate it (the trampoline's rubber band sags and wobbles in them). You never put these in a map.
+#           The game treats a frame as the plain tile.
+#
 # Ids must be below 128. Ids 16-25 and 32-61 belong to the text font (assets/font.txt); the conveyor
 # belts must stay at 64-71 (the game animates those glyphs, and the order is fixed: right slow,
 # right, right fast, right accelerating, then the same for left) and their end caps at 72-79 (left
@@ -183,12 +188,14 @@ tile 3 ITEM *
 0000
 0000
 
+# Spikes: two needles a tile (one pixel wide, white-tipped, 7 lines tall) on a solid base. The game lets a spike hurt
+# from the line its tips are on (line 1 of the tile): keep that in step with the check in check_tiles (main.s).
 tile 4 SPIKE ^
 0000
-0000
-0220
-0220
-2332
+3030
+2020
+2020
+2222
 2332
 3333
 3333
@@ -462,15 +469,58 @@ twin 124 SLIDE_L
 
 # A trampoline: a solid platform you walk over like any other (no dots in it), but land on it from the air and it
 # bounces you straight back up, just high enough to land on the next thing above you (see try_bounce in main.s).
+# A middle tile is only the mat (a rubber band, two lines thick); the end caps are the posts it is anchored to, with
+# the spring legs. When he bounces the mat of the whole run sags and wobbles in the frames below (tramp_anim in main.s).
 tile 26 TRAMPOLINE T solid
 1111
 1111
-0220
-0330
-0220
-0330
-0220
-2222
+0000
+0000
+0000
+0000
+0000
+0000
+
+# The mat sagging 1, 2 and 3 lines, and stretched taut (thin) on the way back up.
+frame 30 TRAMPOLINE S1
+0000
+1111
+1111
+0000
+0000
+0000
+0000
+0000
+
+frame 31 TRAMPOLINE S2
+0000
+0000
+1111
+1111
+0000
+0000
+0000
+0000
+
+frame 62 TRAMPOLINE S3
+0000
+0000
+0000
+1111
+1111
+0000
+0000
+0000
+
+frame 63 TRAMPOLINE TAUT
+1111
+0000
+0000
+0000
+0000
+0000
+0000
+0000
 
 cap 27 TRAMPOLINE L
 0111

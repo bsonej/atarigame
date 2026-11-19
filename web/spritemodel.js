@@ -330,6 +330,8 @@ export class SpriteDoc {
 // the ground. The walk and the jump follow choose_frame in src/main.s and engine.js (updatePlayer).
 
 const JUMP_DY = [3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 0]; // rise per frame, the same as the game's jump table
+const FALL_SLOW = 4; // falling is slower: 1 pixel a frame for the first FALL_SLOW pixels, then 1, 1, 2 up to FALL_FAST, then 2
+const FALL_FAST = 16;
 
 const rep = (name, n, lift = 0) => Array.from({ length: n }, () => ({ name, lift }));
 
@@ -347,9 +349,11 @@ function jump(face) {
     y += dy;
     out.push({ name: (i < 3 ? 'squash' : 'stretch') + sfx, lift: y }); // squashed at take-off, then stretched
   });
-  for (let i = JUMP_DY.length - 1; i >= 0; i--) {
+  // the way down is slower: the pixels a frame depend on how far he has fallen (air_fall in main.s)
+  for (let fallen = 0; y > 0; ) {
     out.push({ name: `stretch${sfx}`, lift: y });
-    y -= JUMP_DY[i];
+    const speed = fallen >= FALL_FAST ? 2 : fallen < FALL_SLOW ? 1 : fallen & 2 ? 1 : 2;
+    for (let i = 0; i < speed && y > 0; i++, y--, fallen++);
   }
   out.push(...rep(`squash${sfx}`, 4), ...rep(`stand${sfx}`, 14));
   return out;

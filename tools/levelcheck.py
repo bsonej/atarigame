@@ -6,7 +6,8 @@
 The level is treated as a graph of "standing cells" (the tile under the player's feet). From each
 cell the player can walk, climb ladders (steps are jumped up onto), ride chutes (walking into a down chute
 carries him to its bottom, into an up chute to its top, where he hops out to the platform beside it), fall off
-edges (at most 8 tiles) and jump (up 3 tiles, over gaps up to 6 tiles wide; nothing above him stops a jump).
+edges (at most 8 tiles) and jump (up 3 tiles, over gaps up to 7 tiles wide; nothing above him stops a jump, and he
+floats down slower than he rises, which is where the reach comes from: see fall_frames).
 Landing on a trampoline (`T`) from a jump or a fall bounces him up to land on the first surface above it in his
 column or the neighbouring ones (up to 14 tiles, nothing above row 3), a longer reach than a jump; where there is
 nothing above him it is an ordinary landing (see the BOUNCE_* constants and try_bounce in main.s).
@@ -34,9 +35,23 @@ SOLID = set("#W ~oXvT>)]<([{}".replace(" ", ""))
 ONEWAY = set("=S")  # thin platforms and steps: stand on top, walk and jump up through
 CHUTE_DOWN, CHUTE_UP = "\\", "/"  # chutes are not solid and not standable: they carry a walker along their column
 MAX_FALL_TILES = 8  # 64 pixels
-# widest jump by number of tiles risen: up 0 / 1 / 2 / 3 tiles (the jump rises 26 pixels and takes 13 frames to the top,
-# then falls 2 pixels a frame; he walks 1 pixel a frame = a tile per 4 frames). Keep in step with jump_dy in main.s.
-JUMP_REACH = {0: 7, 1: 6, 2: 5, 3: 4}
+FALL_SLOW, FALL_FAST = 4, 16  # keep in step with FALL_SLOW and FALL_FAST in main.s (falling is slower than rising)
+RISE_FRAMES = 13  # the jump rises 26 pixels and takes 13 frames to the top (jump_dy in main.s)
+
+
+def fall_frames(pixels: int) -> int:
+    """Frames to fall `pixels` (air_fall in main.s): a pixel a frame for the first FALL_SLOW, then 1, 1, 2 (fall bit 1
+    clear = 2) up to FALL_FAST, then 2 a frame."""
+    fallen = frames = 0
+    while fallen < pixels:
+        fallen += 2 if fallen >= FALL_FAST or (fallen >= FALL_SLOW and not fallen & 2) else 1
+        frames += 1
+    return frames
+
+
+# widest jump by number of tiles risen: up 0 / 1 / 2 / 3 tiles (the rise, then the fall to the landing 26 - 8 * up pixels
+# lower than the top; he walks 1 pixel a frame = a tile per 4 frames, rounded up).
+JUMP_REACH = {up: -(-(RISE_FRAMES + fall_frames(26 - 8 * up)) // 4) for up in range(4)}
 CHUTE_NEAR = (-1, 1)
 TRAMPOLINE = "T"
 BOUNCE_ROWS = 14  # keep in step with BOUNCE_ROWS and BOUNCE_TOP in main.s
@@ -181,14 +196,14 @@ class Level:
     def bounces(self, c: int, r: int):
         """Standing on a trampoline at (c, r): the cells he can land on after the bounce. It carries him to the first surface
         above in the column (or a neighbour: his feet are two columns wide), which he falls back onto, and he can steer
-        sideways all the way: the bounce takes (extra frames + 9 up + about 4 down) frames at a pixel a frame. Only cells at
+        sideways all the way: the bounce takes (extra frames + 9 up + the fall of about 10 pixels) frames at a pixel a frame. Only cells at
         the target's own row count (a surface a row higher could also be reached; that is not claimed)."""
         for k in range(1, BOUNCE_ROWS + 1):
             rt = r - k
             if rt < BOUNCE_TOP_ROW:
                 break
             if any(self.standable(c + d, rt) for d in (-1, 0, 1)):
-                reach = (bounce_frames(k) + 9 + 4) // 4
+                reach = (bounce_frames(k) + 9 + fall_frames(10)) // 4
                 return [(c + dc, rt) for dc in range(-reach, reach + 1) if 0 < c + dc < COLS - 1 and self.valid(c + dc, rt)]
         return []
 

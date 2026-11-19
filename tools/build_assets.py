@@ -106,6 +106,9 @@ def parse_tiles(path: Path) -> list[dict]:
         elif text.startswith("twin "):
             cur = parse_twin(path, n, text, tiles)
             tiles.append(cur)
+        elif text.startswith("frame "):
+            cur = parse_frame(path, n, text, tiles)
+            tiles.append(cur)
         else:
             if cur is None:
                 raise AssetError(f"{path}:{n}: pixel row before any 'tile' line")
@@ -239,6 +242,39 @@ def parse_twin(path: Path, n: int, text: str, tiles: list[dict]) -> dict:
     }
 
 
+def parse_frame(path: Path, n: int, text: str, tiles: list[dict]) -> dict:
+    """``frame <id> <FAMILY> <SUFFIX>``: a picture of the tile that only the game puts on the screen, for an animation
+    (the trampoline's rubber band sagging). It is called <FAMILY>_<SUFFIX>; the game treats it as the plain tile (it takes
+    its flags and tile_canon maps it to it). The 8 rows of art follow."""
+    parts = text.split()
+    if len(parts) != 4 or not re.fullmatch(r"[A-Z][A-Z0-9_]*", parts[3]):
+        raise AssetError(f"{path}:{n}: expected 'frame <id> <FAMILY> <SUFFIX>' (the suffix UPPER_CASE)")
+    try:
+        tid = int(parts[1])
+    except ValueError:
+        raise AssetError(f"{path}:{n}: tile id must be a number")
+    if not 0 <= tid < GLYPHS:
+        raise AssetError(f"{path}:{n}: tile id {tid} must be 0-{GLYPHS - 1}")
+    if any(t["id"] == tid for t in tiles):
+        raise AssetError(f"{path}:{n}: duplicate tile id {tid}")
+    fam = next((t for t in tiles if t["name"] == parts[2] and not t.get("frame_of") and not t.get("dot_of") and not t.get("twin_of")), None)
+    if fam is None:
+        raise AssetError(f"{path}:{n}: frame of unknown tile {parts[2]!r} (define the tile first)")
+    name = f"{fam['name']}_{parts[3]}"
+    if any(t["name"] == name for t in tiles):
+        raise AssetError(f"{path}:{n}: {name} is defined twice")
+    return {
+        "id": tid,
+        "byte": tid | 0x80 if fam["byte"] & 0x80 else tid,
+        "name": name,
+        "char": None,
+        "solid": fam["solid"],
+        "oneway": fam["oneway"],
+        "rows": [],
+        "frame_of": fam["name"],
+    }
+
+
 def auto_cap(rows: list[str], cap: str, lo: int | None, hi: int | None, outline: int) -> list[str]:
     """Round off the end(s) of a tile: the outermost pixel column becomes a solid ``outline`` edge, and the
     corners are cut. ``lo``..``hi`` is the range of rows to change (default: the rows that have any art)."""
@@ -330,6 +366,9 @@ def tile_tables(tiles: list[dict]) -> tuple[list[int], list[int]]:
         canon[dotted] = fam_byte
     for fam_byte, twin in twin_families(tiles).items():
         canon[twin] = fam_byte
+    for t in tiles:
+        if t.get("frame_of"):  # an animation frame stands for its tile (or for the plain tile of the end cap it is a frame of)
+            canon[t["byte"]] = next(f for f in tiles if f["name"] == t["frame_of"])["byte"]
     return flags, canon
 
 

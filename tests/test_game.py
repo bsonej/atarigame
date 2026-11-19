@@ -393,6 +393,29 @@ class GameLogic(Base):
         self.assertEqual((g.py, g.state), (FLOOR_Y[8], GROUND))
         self.assertEqual(ys[apex:], sorted(ys[apex:]), "no bouncing after the apex")
 
+    def test_he_floats_down_slower_than_he_rises_and_the_fall_still_counts_pixels(self) -> None:
+        g = self.g
+        g.poke("px", 80)
+        g.poke("py", FLOOR_Y[8])
+        g.idle(2)
+        g.step(FIRE)
+        ys, falls = [g.py], [g.fall]
+        for _ in range(60):
+            g.idle()
+            ys.append(g.py)
+            falls.append(g.fall)
+            if g.state == GROUND:
+                break
+        apex = ys.index(min(ys))
+        down = ys[apex:]
+        steps = [b - a for a, b in zip(down, down[1:]) if b != a]  # (not the frame at the apex, nor the landing one)
+        self.assertEqual(sum(steps), 26)
+        self.assertTrue(set(steps) <= {1, 2} and steps[0] == 1, f"1 pixel a frame to begin with, never more than 2: {steps}")
+        self.assertEqual(steps[-1], 2, "full speed at the end of a fall of 26")
+        self.assertGreaterEqual(len(steps), apex + 4, f"the way down takes longer than the way up: {apex} frames up, {len(steps)} down")
+        self.assertEqual(falls[-1], 0, "`fall` counts the pixels fallen (the lethal distance is unchanged) and is zero on the ground")
+        self.assertEqual(max(falls), 26)
+
     def test_a_jump_goes_up_through_the_floor_overhead_on_lower_floors(self) -> None:
         g = self.g
         g.step(FIRE)
@@ -425,7 +448,7 @@ class GameLogic(Base):
         g = self.g
         self.walk_to(40)  # open floor under row 18 (the ladder at column 8 is behind us)
         g.step(FIRE)
-        top = min([g.py] + [(g.step(0) or g.py) for _ in range(30)])
+        top = min([g.py] + [(g.step(0) or g.py) for _ in range(50)])  # (the way down takes longer than the way up)
         self.assertEqual(top, FLOOR_Y[23] - 26)
         self.assertEqual((g.state, g.py), (GROUND, FLOOR_Y[23]), "fell back down through the floor above")
 
@@ -506,7 +529,7 @@ class GameLogic(Base):
         g.poke("py", FLOOR_Y[18])
         g.idle(2)
         self.assertEqual(g.state, GROUND)
-        g.step(RIGHT, 40)  # into the hole at columns 24-27
+        g.step(RIGHT, 60)  # into the hole at columns 24-27 (and the slow way down)
         self.assertEqual((g.state, g.py, g.mode), (GROUND, FLOOR_Y[23], PLAY))  # dropped one floor and survived
 
     def test_level_data_matches_the_source_file(self) -> None:

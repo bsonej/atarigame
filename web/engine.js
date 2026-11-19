@@ -20,6 +20,9 @@ const HOP_FRAMES = 4; // ... and drifts sideways this many pixels (enough to lea
 const BOUNCE_ROWS = 14; // a trampoline looks this many tile rows up his column for something to bounce him to ...
 const BOUNCE_TOP = 24; // ... but not above this pixel line (tile row 3: a surface higher could not be landed on)
 const BOUNCE_JT = 3; // a bounce is the jump's last 17 pixels (JUMP_DY from index 3) after bn frames of 3 pixels each
+export const FALL_SLOW = 4; // falling is slower than rising: the first FALL_SLOW pixels of a fall take a pixel a frame, then up to
+export const FALL_FAST = 16; // FALL_FAST it is 1, 1, 2 pixels on successive frames (a pixel and a third a frame), after that 2
+const SPIKE_TOP = 1; // a spike tile's tips are on this line of the tile (assets/tiles.txt): feet below it are hurt
 
 const KIND_EXPL = 0;
 const KIND_VANISH = 1;
@@ -49,6 +52,8 @@ export const CLEAR_FRAMES = 60;
 const JUMP_DY = [3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 0];
 // Extra full-speed frames of a bounce to clear a surface k tiles up (index k): the smallest n with 17 + 3n >= 8k + 8.
 export const BOUNCE_N = [0, 0, 3, 5, 8, 11, 13, 16, 19, 21, 24, 27, 29, 32, 35];
+// The trampoline's rubber band: the amplitude on each step (2 frames) of the animation, 0 plain, 1..3 sag, 4 taut (see trampDraw).
+export const TRAMP_AMP = [1, 2, 3, 3, 2, 1, 4, 4, 1, 2, 1, 4, 0];
 const DIE_DY = [0xfc, 0xfc, 0xfd, 0xfd, 0xfe, 0xfe, 0xff, 0xff, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
 const CONV_DIR = [0, 0, 0, 0, 1, 1, 1, 1];
 const CONV_SPD = [8, 16, 32, 0, 8, 16, 32, 0];
@@ -111,6 +116,7 @@ export class Game {
     this.state = STATE.GROUND;
     this.jt = 0xff;
     this.bn = 0; // trampoline bounce: frames of full-speed rise still to go
+    this.tr = { t: 0, row: 0, l: 0, r: 0, c: 0 }; // the trampoline's rubber-band animation (t 0 = none), see trampStart
     this.hop = 0; // frames of forced sideways drift left (the hop out of an up chute)
     this.hdir = 0; // which way that drift goes (the way he faced when the ride ended): 2 = left, else right
     this.rkind = 0; // which chute he rides: 0 down, 1 up
@@ -281,6 +287,7 @@ export class Game {
     this.armUnder();
     this.eatDots();
     this.updateTimed();
+    this.trampAnim();
     this.updatePegs();
     if (this.mode !== MODE.PLAY) return;
     this.chooseFrame();
@@ -457,7 +464,10 @@ export class Game {
    */
   tryBounce() {
     const feet = u8(this.py + SPR_H);
-    if (!PROBE_DX.some((dx) => this.getTile(u8(this.px + dx), feet) === this.T.TRAMPOLINE)) return false;
+    const hit = PROBE_DX.find((dx) => this.getTile(u8(this.px + dx), feet) === this.T.TRAMPOLINE);
+    if (hit === undefined) return false;
+    const landCol = u8(this.px + hit) >> 2;
+    const landRow = feet >> 3;
     let y = feet & 0xf8;
     for (let k = 1; k <= BOUNCE_ROWS; k++) {
       y = u8(y - 8);
@@ -466,11 +476,71 @@ export class Game {
         this.bn = BOUNCE_N[k];
         this.jt = BOUNCE_JT;
         this.fall = 0;
+        this.trampStart(landCol, landRow);
         this.events.push('bounce');
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * The trampoline's rubber band. When he bounces, the mat of the whole connected run he landed on (tiles of the trampoline
+   * family on that row, caps included in the count) sags like a stretched rubber band and wobbles back: every second frame
+   * the run's middle tiles are swapped for another picture (TRAMPOLINE_S1..S3, the mat 1 to 3 lines lower, or _TAUT, the band
+   * stretched thin), 26 frames in all, then the plain tiles go back. Only that run's screen tiles change, the game treats
+   * every picture as the trampoline (canon), the end caps (the posts it is anchored to) never change. A new bounce finishes
+   * the old animation first; a new level clears it.
+   */
+  trampStart(col, row) {
+    if (this.tr.t) this.trampRestore();
+    const tr = this.tr;
+    tr.row = row;
+    tr.c = col;
+    const same = (c) => this.canon[this.map[row * COLS + c]] === this.T.TRAMPOLINE;
+    let l = col;
+    while (l > 0 && same(l - 1)) l--;
+    let r = col;
+    while (r < COLS - 1 && same(r + 1)) r++;
+    tr.l = l;
+    tr.r = r;
+    tr.t = 1;
+  }
+
+  /** One frame of the animation (every frame of play). */
+  trampAnim() {
+    const tr = this.tr;
+    if (!tr.t) return;
+    const step = (tr.t - 1) >> 1;
+    if (step >= TRAMP_AMP.length) return this.trampRestore();
+    if (tr.t & 1) this.trampDraw(TRAMP_AMP[step]);
+    tr.t++;
+  }
+
+  trampRestore() {
+    this.trampDraw(0);
+    this.tr.t = 0;
+  }
+
+  /**
+   * Draw the run at amplitude a: 0 plain, 1..3 sagging, 4 taut. The sag of a tile is the smallest of: the amplitude, one more
+   * than its distance from the end of the run (tapering to the posts), and 3 - half its distance from the column he
+   * landed in (deepest there, at least 1). End caps are left alone.
+   */
+  trampDraw(a) {
+    const { row, l, r, c } = this.tr;
+    const T = this.T;
+    const caps = [T.TRAMPOLINE_L, T.TRAMPOLINE_R, T.TRAMPOLINE_LR];
+    const tile = [T.TRAMPOLINE, T.TRAMPOLINE_S1, T.TRAMPOLINE_S2, T.TRAMPOLINE_S3, T.TRAMPOLINE_TAUT];
+    for (let i = l; i <= r; i++) {
+      const at = row * COLS + i;
+      if (caps.includes(this.map[at])) continue;
+      let s = 4;
+      if (a < 4) {
+        s = Math.min(a, Math.min(i - l, r - i) + 1, Math.max(1, 3 - (Math.abs(i - c) >> 1)));
+      }
+      this.map[at] = tile[s];
+    }
   }
 
   /** No solid in either foot column at the lowest row of the body (py+15); at the bottom of the screen the floor is the edge. */
@@ -482,7 +552,11 @@ export class Game {
 
   /** Falling: lands on the first surface under the feet, but never inside a solid (he keeps falling until clear). */
   airFall() {
-    for (let i = 0; i < 2; i++) {
+    // Slower than rising, so he floats down: 1 pixel a frame for the first FALL_SLOW pixels fallen, then the pattern 1, 1, 2
+    // (fall bit 1 clear = 2) up to FALL_FAST, then 2. (`fall` counts pixels, so the lethal distance is unchanged.)
+    const f = this.fall;
+    const speed = f >= FALL_FAST ? 2 : f < FALL_SLOW ? 1 : f & 2 ? 1 : 2;
+    for (let i = 0; i < speed; i++) {
       if (this.groundBelow() && this.feetClear()) {
         if (this.tryBounce()) return; // a trampoline catches him, however far he fell
         if (this.fall > MAX_FALL) return this.die();
@@ -698,7 +772,7 @@ export class Game {
       }
     }
     const ty = u8(this.py + 15);
-    if ((ty & 7) < 2) return; // only the lower part of a spike tile hurts
+    if ((ty & 7) < SPIKE_TOP) return; // only the part of a spike tile from its tips down hurts
     if (this.getTile(this.px, ty) === this.T.SPIKE) return this.die();
     if (this.getTile(u8(this.px + 3), ty) === this.T.SPIKE) return this.die();
   }

@@ -16,6 +16,7 @@
         .setcpu "6502"
         .export start
         .export frame_end                       ; breakpoint target for tools/headless.py
+        .exportzp tr_t, tr_l, tr_r, tr_row, tr_c
         .exportzp px, py, state, jt, bn, hop, hdir, rkind, fall, score, hiscore, left, lives, level, lvlidx
         .exportzp mode, demo, demo_n, timer, mtimer, frame, drawn, deaths, joy, anim, moved, flash
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
@@ -111,6 +112,11 @@ LAND_FRAMES = 4         ; how long he stays squashed after landing
 BOUNCE_ROWS = 14        ; a trampoline looks this many tile rows up his column for something to bounce him to ...
 BOUNCE_TOP  = 24        ; ... but not above this line (pixel row 24 = tile row 3: a surface higher could not be landed on)
 BOUNCE_JT   = 3         ; a bounce is the jump's last 17 pixels (jump_dy from index 3) after bn frames of 3 pixels each
+FALL_SLOW   = 4         ; falling is slower than rising: the first FALL_SLOW pixels of a fall take a pixel a frame, then up to
+FALL_FAST   = 16        ; FALL_FAST it is 1, 1, 2 pixels on successive frames (a pixel and a third a frame), after that 2
+SPIKE_TOP   = 1         ; a spike tile's tips are on this line of the tile (assets/tiles.txt): feet below it are hurt
+TR_STEPS    = 13        ; the trampoline's mat takes 2 frames on each of these amplitudes (tramp_amp), 26 frames in all
+.assert T_TRAMPOLINE_LR - T_TRAMPOLINE_L = 2, error, "the trampoline's three end caps need consecutive ids"
 
 JOY_UP    = $01
 JOY_DOWN  = $02
@@ -198,6 +204,13 @@ demo_n:   .res 1        ; which level the next attract run uses
 timer:    .res 2        ; frames left (title idle, attract run, game over)
 mtimer:   .res 1        ; frames since the current mode started (saturates at 255)
 fps:      .res 1        ; 60 (NTSC) or 50 (PAL)
+tr_t:     .res 1        ; the trampoline animation: 0 = none, else 1 + frames since the bounce (2 per step of tramp_amp)
+tr_row:   .res 1        ; ... the tile row of the run that is bouncing
+tr_l:     .res 1        ; ... its leftmost and rightmost tile columns
+tr_r:     .res 1
+tr_c:     .res 1        ; ... and the column he landed in (the mat sags deepest there)
+tr_a:     .res 1        ; ... the amplitude being drawn
+tr_i:     .res 1
 frame:    .res 1        ; player sprite frame to draw
 drawn:    .res 1        ; how many lines of it to draw (the spawn animation reveals it)
 dyi:      .res 1        ; index into die_dy
@@ -1206,12 +1219,23 @@ up_air:
         sta bn
         rts
 
-; Falling: 2 pixels a frame, one at a time. He lands on the first surface under his feet, but never inside a solid:
-; if a solid is at the row just above the feet (he rose into a block and is coming back down through it) he keeps
+; Falling: slower than rising, so he floats down. The pixels a frame depend on how far he has fallen (fall counts pixels,
+; so the lethal distance is unchanged): 1 for the first FALL_SLOW, then the pattern 1, 1, 2 (fall bit 1 clear = 2) up to
+; FALL_FAST, then 2. Pixels are moved one at a time. He lands on the first surface under his feet, but never inside a
+; solid: if a solid is at the row just above the feet (he rose into a block and is coming back down through it) he keeps
 ; falling until he is clear.
 air_fall:
-        lda #2
-        sta tmp2
+        lda fall
+        cmp #FALL_FAST
+        bcs @two
+        cmp #FALL_SLOW
+        bcc @one
+        and #2
+        bne @one
+@two:   lda #2
+        bne @speed
+@one:   lda #1
+@speed: sta tmp2
 @step:  jsr ground_below
         bcc @fall
         jsr feet_clear
@@ -1263,7 +1287,16 @@ try_bounce:
         bcc @find
         clc
         rts
-@tramp: lda py
+@tramp: lda tx                  ; the tile he landed on: column and row, for the animation if he bounces
+        lsr a
+        lsr a
+        sta tt_f
+        lda ty
+        lsr a
+        lsr a
+        lsr a
+        sta tt_r
+        lda py
         clc
         adc #SPR_H
         and #$F8
@@ -1303,6 +1336,7 @@ try_bounce:
         sta jt
         lda #0
         sta fall
+        jsr tramp_start
         lda #6                  ; a short "boing"
         sta snd
         lda #$50
@@ -1534,12 +1568,12 @@ check_tiles:
         cpx #6
         bne @next
 
-        lda py                  ; spikes: only the lower part of the tile hurts
+        lda py                  ; spikes: only the part of the tile from its tips down hurts (SPIKE_TOP)
         clc
         adc #15
         sta ty
         and #7
-        cmp #2
+        cmp #SPIKE_TOP
         bcc @safe
         lda px
         sta tx
@@ -1761,6 +1795,7 @@ mode_play:
         jsr arm_under           ; bomb blocks and vanishing blocks under the feet
         jsr eat_dots
         jsr update_timed
+        jsr tramp_anim
         jsr update_pegs
         lda mode
         cmp #M_PLAY
@@ -2576,6 +2611,8 @@ update_fx:
 ; zone, one tile either side and two above, and setting off bomb blocks next to it). A vanishing
 ; block flickers, vanishes, and comes back once the player is out of the way.
 timed_reset:
+        lda #0
+        sta tr_t                ; (the map is freshly copied: no trampoline is mid-bounce)
         ldx #7
         lda #$FF
 @l:     sta tt_ph,x
@@ -2795,6 +2832,150 @@ update_timed:
         bmi @done
         jmp @slot
 @done:  rts
+
+; ---------------------------------------------------------------------------
+; The trampoline's rubber band. When he bounces, the mat of the whole connected run he landed on (tiles of the trampoline
+; family on that row, caps included in the count) sags like a stretched rubber band and wobbles back: every second frame
+; the run's middle tiles are swapped for another picture (TRAMPOLINE_S1..S3, the mat 1 to 3 lines lower, or _TAUT, the
+; band stretched thin), 26 frames in all, then the plain tiles go back. Only that run's screen tiles change (other
+; trampolines do not move, like a vanishing block), the game treats every picture as the trampoline (tile_canon), the end
+; caps are the posts it is anchored to and never change. A new bounce finishes the old animation first; a new level
+; (timed_reset) clears it.
+; The sag of a tile is the smallest of: the amplitude (tramp_amp), one more than its distance from the end of the run
+; (tapering to the posts), and 3 - half its distance from the column he landed in (deepest there, at least 1).
+
+; Begin the animation for the run of the tile at column tt_f, row tt_r (where he has landed).
+tramp_start:
+        lda tr_t
+        beq @idle
+        jsr tramp_restore       ; (another run, or this one again)
+@idle:  lda tt_r
+        sta tr_row
+        lda tt_f
+        sta tr_c
+        jsr tramp_rowptr
+        ldy tr_c                ; the left end of the run
+@left:  tya
+        beq @lend
+        dey
+        lda (ptr),y
+        tax
+        lda tile_canon,x
+        cmp #T_TRAMPOLINE
+        beq @left
+        iny
+@lend:  sty tr_l
+        ldy tr_c                ; the right end
+@right: cpy #39
+        bcs @rend
+        iny
+        lda (ptr),y
+        tax
+        lda tile_canon,x
+        cmp #T_TRAMPOLINE
+        beq @right
+        dey
+@rend:  sty tr_r
+        lda #1
+        sta tr_t
+        rts
+
+; ptr -> the first byte of row tr_row of the screen.
+tramp_rowptr:
+        ldx tr_row
+        lda row_lo,x
+        sta ptr
+        lda row_hi,x
+        sta ptr+1
+        rts
+
+; One frame of the animation (called every frame of play).
+tramp_anim:
+        lda tr_t
+        beq @rts
+        sec
+        sbc #1
+        lsr a
+        tax                     ; the step: 2 frames each
+        lda tramp_amp,x
+        bmi @end
+        sta tr_a
+        lda tr_t
+        lsr a
+        bcc @next               ; the second frame of a step: the picture stays
+        jsr tramp_draw
+@next:  inc tr_t
+@rts:   rts
+@end:   jmp tramp_restore
+
+; Put the plain tiles back and stop.
+tramp_restore:
+        lda #0
+        sta tr_a
+        jsr tramp_draw
+        lda #0
+        sta tr_t
+        rts
+
+; Draw the run (columns tr_l..tr_r of row tr_row) at amplitude tr_a: 0 = plain, 1..3 = sagging, 4 = taut. End caps are left alone.
+tramp_draw:
+        jsr tramp_rowptr
+        lda tr_l
+        sta tr_i
+@col:   ldy tr_i
+        lda (ptr),y
+        sec
+        sbc #T_TRAMPOLINE_L
+        cmp #3
+        bcc @skip               ; an end cap
+        ldx #4
+        lda tr_a
+        cmp #4
+        bcs @put                ; taut: the same for every tile
+        sta tmp                 ; the sag so far: the amplitude
+        lda tr_i                ; distance from the nearer end of the run, plus one
+        sec
+        sbc tr_l
+        sta tmp2
+        lda tr_r
+        sec
+        sbc tr_i
+        cmp tmp2
+        bcs @e
+        sta tmp2
+@e:     inc tmp2
+        lda tmp2
+        cmp tmp
+        bcs @n1
+        sta tmp
+@n1:    lda tr_i                ; distance from where he landed, halved
+        sec
+        sbc tr_c
+        bcs @pos
+        eor #$FF
+        clc
+        adc #1
+@pos:   lsr a
+        sta tmp2
+        lda #3
+        sec
+        sbc tmp2
+        bcc @one
+        bne @have
+@one:   lda #1
+@have:  cmp tmp
+        bcs @n2
+        sta tmp
+@n2:    ldx tmp
+@put:   lda tramp_tile,x
+        ldy tr_i
+        sta (ptr),y
+@skip:  inc tr_i
+        lda tr_i
+        cmp tr_r
+        bcc @col
+        beq @col
+        rts
 
 ; The bomb block of slot X goes off.
 explode:
@@ -3557,6 +3738,13 @@ pow_hi: .byte >10000, >1000, >100, >10, >1
 
 ; Pixels the player rises on each frame of a jump (0 ends the rise).
 jump_dy: .byte 3,3,3,3,3,2,2,2,2,1,1,1,0
+
+; The trampoline's rubber band: the amplitude on each step of the animation (0 plain, 1..3 sag, 4 taut), $FF ends it:
+; down, hold, back up, spring past plain (taut), a smaller sag, taut again, settled.
+tramp_amp:  .byte 1,2,3,3,2,1,4,4,1,2,1,4,0,$FF
+.assert * - tramp_amp = TR_STEPS + 1, error, "TR_STEPS is the length of tramp_amp"
+; ... and the tile for each amplitude.
+tramp_tile: .byte T_TRAMPOLINE, T_TRAMPOLINE_S1, T_TRAMPOLINE_S2, T_TRAMPOLINE_S3, T_TRAMPOLINE_TAUT
 
 ; Extra full-speed frames of a trampoline bounce to clear a surface k tiles up (index k, 1..BOUNCE_ROWS):
 ; the smallest n with 17 + 3n >= 8k + 8, i.e. ceil((8k - 9) / 3), at least 0.

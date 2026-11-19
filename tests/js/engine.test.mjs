@@ -2,7 +2,7 @@
 // input on the 6502 code and on this engine and compares them.) Run with: node --test tests/js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { JOY, MODE, STATE, FRAME, BOUNCE_N } from '../../web/engine.js';
+import { JOY, MODE, STATE, FRAME, BOUNCE_N, TRAMP_AMP } from '../../web/engine.js';
 import { room, play, run, tables, vertical } from './helpers.mjs';
 
 const T = tables.T;
@@ -44,6 +44,47 @@ test('a jump rises 26 pixels and lands again', () => {
   }
   assert.equal(FLOOR_Y - top, 26);
   assert.deepEqual([g.py, g.state], [FLOOR_Y, STATE.GROUND]);
+});
+
+test('he floats down slower than he rises (a pixel a frame to begin with) and `fall` still counts pixels', () => {
+  const g = play(room());
+  g.step(JOY.FIRE);
+  const ys = [g.py];
+  const falls = [g.fall];
+  while (g.state === STATE.AIR) {
+    g.step(0);
+    ys.push(g.py);
+    falls.push(g.fall);
+  }
+  const apex = ys.indexOf(Math.min(...ys));
+  const down = ys.slice(apex);
+  const steps = down.slice(1).map((y, i) => y - down[i]).filter((d) => d); // (not the frame at the apex, nor the landing one)
+  assert.equal(steps.reduce((a, b) => a + b), 26);
+  assert.ok(steps.every((d) => d === 1 || d === 2) && steps[0] === 1, `1 pixel a frame to begin with, never more than 2: ${steps}`);
+  assert.ok(steps.length >= apex + 4, `${apex} frames up, ${steps.length} down`);
+  assert.equal(falls[falls.length - 1], 0, 'and is zero again on the ground');
+});
+
+test('a fall of 64 pixels is survived, 65 kills (the lethal distance is in pixels, not frames)', () => {
+  for (const [dist, dies] of [[64, false], [65, true]]) {
+    const g = play(room({ '8,2': '###' }));
+    g.px = 8;
+    g.py = FLOOR_Y - dist;
+    g.state = STATE.AIR;
+    g.jt = 0xff;
+    run(g, 80);
+    assert.equal(g.deaths, dies ? 1 : 0, `${dist} pixels`);
+  }
+});
+
+test('a spike hurts from the line its tips are on (line 1 of the tile) down, not above it', () => {
+  for (const [line, dies] of [[0, false], [1, true], [7, true]]) {
+    const g = play(room({ '10,22': '^' }));
+    g.px = 88;
+    g.py = 10 * 8 + line - 15;
+    g.checkTiles();
+    assert.equal(g.mode, dies ? MODE.DYING : MODE.PLAY, `feet on line ${line}`);
+  }
 });
 
 test('holding fire does not jump again until it is pressed afresh', () => {
@@ -663,4 +704,34 @@ test('the table of bounce lengths gives the least rise that clears the surface b
     assert.ok(rise >= 8 * k + 8, `k=${k}`);
     if (BOUNCE_N[k] > 0) assert.ok(rise - 3 < 8 * k + 8, `k=${k} is not higher than it needs to be`);
   }
+});
+
+test('a trampoline run sags like a rubber band across its span, caps stay, and the plain tiles come back', () => {
+  const g = play(room({ '23,5': 'TTTTTTTT', '23,20': 'TTTT', '18,6': '########' }));
+  const row = () => Array.from(g.map.slice(23 * 40 + 5, 23 * 40 + 13));
+  const other = () => Array.from(g.map.slice(23 * 40 + 20, 23 * 40 + 24));
+  const plain = row();
+  const plainOther = other();
+  const [L, M, R] = [T.TRAMPOLINE_L, T.TRAMPOLINE, T.TRAMPOLINE_R];
+  assert.deepEqual(plain, [L, M, M, M, M, M, M, R]);
+  g.px = 32; // column 8
+  g.step(JOY.FIRE);
+  const frames = [];
+  for (let i = 0; i < 110; i++) {
+    g.step(0);
+    frames.push(row());
+    assert.deepEqual(other(), plainOther, 'another trampoline does not move');
+  }
+  assert.ok(frames.every((f) => f[0] === L && f[7] === R), 'the posts never change');
+  const moving = frames.filter((f) => f.join() !== plain.join()).length;
+  assert.equal(moving, TRAMP_AMP.filter((a) => a).length * 2, 'two frames a step (the last, plain step shows nothing)');
+  for (let c = 1; c < 7; c++) assert.ok(frames.some((f) => f[c] !== M), `tile ${c} moves`);
+  const rank = [M, T.TRAMPOLINE_S1, T.TRAMPOLINE_S2, T.TRAMPOLINE_S3];
+  const deepest = frames.find((f) => f[3] === T.TRAMPOLINE_S3);
+  assert.ok(rank.indexOf(deepest[3]) > rank.indexOf(deepest[1]) && rank.indexOf(deepest[3]) > rank.indexOf(deepest[6]), 'deepest where he landed');
+  assert.ok(frames.some((f) => f[2] === T.TRAMPOLINE_TAUT), 'and springs back past plain');
+  assert.deepEqual(frames.at(-1), plain);
+  assert.equal(g.tr.t, 0);
+  assert.deepEqual([g.py, g.state], [18 * 8 - 16, STATE.GROUND]);
+  for (const b of [T.TRAMPOLINE_S1, T.TRAMPOLINE_S2, T.TRAMPOLINE_S3, T.TRAMPOLINE_TAUT]) assert.equal(g.canon[b], T.TRAMPOLINE, 'a frame is a trampoline to every rule');
 });

@@ -824,6 +824,31 @@ class RealAssets(unittest.TestCase):
         self.assertEqual(flags[26], ba.F_SOLID)
         self.assertEqual([canon[b] for b in (27, 28, 29)], [26, 26, 26], "the game treats an end cap as the plain tile")
 
+    def test_the_trampoline_mat_is_just_the_mat_and_its_sag_frames_are_the_trampoline_to_the_game(self) -> None:
+        tiles = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
+        by_name = {t["name"]: t for t in tiles}
+        self.assertEqual(by_name["TRAMPOLINE"]["rows"], ["1111", "1111"] + ["0000"] * 6, "a middle tile is the mat only")
+        self.assertTrue(any(r != "0000" for r in by_name["TRAMPOLINE_L"]["rows"][2:]), "the end caps keep their legs")
+        flags, canon = ba.tile_tables(tiles)
+        for n in ("S1", "S2", "S3", "TAUT"):
+            frame = by_name[f"TRAMPOLINE_{n}"]
+            self.assertEqual((frame["frame_of"], frame["char"], frame["byte"]), ("TRAMPOLINE", None, frame["id"]))
+            self.assertEqual((canon[frame["byte"]], flags[frame["byte"]]), (26, ba.F_SOLID), "solid, and the plain trampoline to every rule")
+        sag = [next(i for i, r in enumerate(by_name[f"TRAMPOLINE_S{k}"]["rows"]) if r != "0000") for k in (1, 2, 3)]
+        self.assertEqual(sag, [1, 2, 3], "the mat sags a line deeper each time")
+
+    def test_a_frame_line_needs_a_known_tile_and_an_unused_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tiles.txt"
+            body = "\n".join(["0000"] * 8)
+            base = f"tile 0 EMPTY .\n{body}\ntile 1 BRICK #\n{body}\n"
+            for extra in ("frame 2 NOPE F\n", "frame 1 BRICK F\n", "frame 2 BRICK f\n"):
+                path.write_text(base + extra + body + "\n")
+                with self.assertRaises(ba.AssetError, msg=extra):
+                    ba.parse_tiles(path)
+            path.write_text(base + "frame 2 BRICK F\n" + body + "\n")
+            self.assertEqual(ba.tile_tables(ba.parse_tiles(path))[1][2], 1)
+
     def test_belt_caps_sit_at_the_ids_the_game_animates(self) -> None:
         by_name = {t["name"]: t["id"] for t in ba.parse_tiles(ROOT / "assets" / "tiles.txt")}
         belts = ["CONV_R_SLOW", "CONV_R", "CONV_R_FAST", "CONV_R_ACC", "CONV_L_SLOW", "CONV_L", "CONV_L_FAST", "CONV_L_ACC"]
