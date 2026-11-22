@@ -157,6 +157,13 @@ class Base(unittest.TestCase):
     def wait_for(self, mode: int, limit: int = 400) -> None:
         self.g.run_until(lambda g: g.mode == mode, limit=limit, every=2)
 
+    def pokey(self) -> bytes:
+        """The eight bytes last written to AUDF1..AUDC4 (the chip does not read back)."""
+        return self.g.mem(self.g.labels["sndhw"], 256)[:8]
+
+    def rom(self, label: str, n: int) -> bytes:
+        return self.g.mem(self.g.labels[label], 256)[:n]
+
     def kill(self) -> None:
         """Drop the player from far above so the landing kills."""
         g = self.g
@@ -171,6 +178,23 @@ class Base(unittest.TestCase):
 # ---------------------------------------------------------------------------
 @needs_emulator
 class TitleScreen(Base):
+    def test_the_splash_plays_the_stomper(self) -> None:
+        """Happy Pokey Stomper runs on the title, and fire still starts the game."""
+        g = self.g
+        self.assertEqual(g.mem(0xA400, 256)[:4], b"RMT4", "the song module is loaded")
+        self.assertEqual(g.mem(0x9E70, 256)[:3], bytes([0x4C, 0x7F, 0x9E]), "the player init entry")
+        pos = g.mem(0xB3F7, 256)[0]
+        g.idle(120)
+        self.assertEqual(g.mode, TITLE, "two seconds of the song leaves the title up")
+        self.assertEqual(g.mem(0xA400, 256)[:4], b"RMT4", "the player does not write over its module")
+        self.assertGreater(g.mem(0xB3F7, 256)[0], pos, "the tune steps forward through the track")
+        freqs = g.mem(0xB3E8, 256)[:4]
+        self.assertTrue(any(freqs), f"the tune has a pitch, not just a beep ({list(freqs)})")
+        ptr = int.from_bytes(g.mem(0xD1, 256)[:2], "little")
+        self.assertTrue(0xA400 <= ptr < 0xB343, f"the song pointer left the module (${ptr:04X})")
+        g.step(FIRE)
+        self.assertEqual(g.mode, SPAWN)
+
     def test_boots_to_the_title_screen(self) -> None:
         g = self.g
         self.assertEqual((g.mode, g.demo), (TITLE, 0))
@@ -496,6 +520,25 @@ class GameLogic(Base):
         self.assertEqual(min(ys), SPAWN_Y - 26)  # nothing above him stops the rise (row 18's bricks are just overlaid)
         self.assertEqual((g.py, g.state), (SPAWN_Y, GROUND))
 
+    def test_a_jump_leaps_up_in_pitch(self) -> None:
+        """Fire on the ground plays a low rising fifth. Two frames later the spare voices echo it, flatter and quieter."""
+        g = self.g
+        fx = self.rom("jump_fx", 48)
+        self.assertEqual(fx[1] & 0xF0, 0xA0)
+        self.assertEqual(fx[3] & 0xF0, 0xA0)
+        self.assertGreater(fx[2], fx[0])  # the second voice sits below the lead
+        self.assertGreater(fx[0], fx[16])  # two frames on, the lead has risen
+        self.assertEqual(fx[5] | fx[7], 0)  # the echo has not started
+        self.assertEqual(fx[16 + 5] & 0xF0, 0xA0)  # voice 3 answers in pure tone
+        self.assertGreater(fx[16 + 4], fx[0])  # ... a step flat of the note that opened the jump
+        self.assertLess(fx[16 + 5] & 0x0F, fx[1] & 0x0F)
+        g.step(FIRE)
+        self.assertEqual(g.state, AIR)
+        self.assertEqual((g.sndk, g.sndp), (3, 1))
+        self.assertEqual(self.pokey(), fx[:8])
+        g.idle(2)
+        self.assertEqual(self.pokey(), fx[16:24])
+
     def test_holding_fire_does_not_bunny_hop(self) -> None:
         g = self.g
         g.step(FIRE, 80)
@@ -570,6 +613,30 @@ class GameLogic(Base):
         self.assertGreaterEqual(g.px, 4)
 
     # ---- items ----
+    def test_an_item_pops_on_four_voices(self) -> None:
+        """The item is a short rise on two pure tones an octave apart, then a buzz crack and a high ring."""
+        g = self.g
+        fx = self.rom("item_fx", 48)
+        self.assertEqual(len(fx), 48)
+        rise, pop = fx[0:8], fx[24:32]
+        self.assertEqual(rise[1] & 0xF0, 0xA0)  # voice 1, pure
+        self.assertEqual(rise[3] & 0xF0, 0xA0)  # voice 2, pure, and lower: a bigger period
+        self.assertGreater(rise[2], rise[0])
+        self.assertEqual(rise[5] | rise[7], 0)  # the crack and the ring wait for the pop
+        self.assertEqual(pop[5] & 0xF0, 0xC0)  # the pop is a 4-bit buzz
+        self.assertGreater(pop[5] & 0x0F, 0)
+        self.assertGreater(rise[0], pop[0])  # the lead has snapped up (a smaller period)
+        self.assertGreater(pop[7] & 0x0F, 0)  # and a high pure tone rings
+        for _ in range(80):
+            if g.score16:
+                break
+            g.step(RIGHT)
+        self.assertEqual(g.score16, 10)
+        self.assertEqual((g.sndk, g.sndp), (2, 1))
+        self.assertEqual(self.pokey(), rise)
+        g.idle(3)  # frames 1, 2 and 3: this is the pop
+        self.assertEqual(self.pokey(), pop)
+
     def test_collects_an_item(self) -> None:
         g = self.g
         self.walk_to(14 * 4 - 2)
@@ -668,7 +735,21 @@ class GameLogic(Base):
         render = int(re.search(r"^PLAYER_FLOAT = (\d+)", (ROOT / "tools" / "render_level.py").read_text(), re.M).group(1))
         self.assertEqual((asm, js, render), (PLAYER_FLOAT,) * 3)
         self.assertIn(PLAYER_FLOAT, (1, 2), "a pixel or two")
-        table = [int(v) for v in re.search(r"^bob_float:\n((?:\s+\.byte [\d,]+\n)+)", (ROOT / "src" / "main.s").read_text(), re.M).group(1).replace(".byte", "").replace("\n", ",").split(",") if v.strip()]
+        asm = (ROOT / "src" / "main.s").read_text()
+        cuts = [int(re.search(rf"^{name}\s*=\s*(\d+)", asm, re.M).group(1)) for name in ("BOB_3", "BOB_2", "BOB_1", "BOB_BACK")]
+
+        def bob(i: int) -> int:
+            if i < cuts[0]:
+                return 2
+            if i < cuts[1]:
+                return 3
+            if i < cuts[2]:
+                return 2
+            if i < cuts[3]:
+                return 1
+            return 2
+
+        table = [bob(i) for i in range(64)]
         self.assertEqual(len(table), 64)
         self.assertEqual((min(table), max(table)), BOB_RANGE, "the bob stays within 1 to 3 lines above the surface")
         self.assertTrue(all(abs(a - b) <= 1 for a, b in zip(table, table[1:] + table[:1])), "smooth: one line at a time")
@@ -753,21 +834,17 @@ class DeathAndLives(Base):
         self.assertEqual(g.score16, 10)
         self.die_on_spikes()
         self.assertEqual((g.mode, g.deaths, g.lives), (DYING, 1, 3), "a life is lost when the animation ends")
-        self.assertGreater(g.flash, 0)
+        self.assertEqual(g.flash, 0, "dying does not flash the screen")
 
-    def test_the_player_hops_up_then_falls_off_the_screen(self) -> None:
+    def test_the_player_pops_in_place(self) -> None:
         g = self.g
         self.die_on_spikes()
-        ys, frames = [], set()
-        for _ in range(60):
+        py, frames = g.py, set()
+        for _ in range(30):
             g.idle()
-            ys.append(g.py)
             frames.add(g.frame)
-        top = ys.index(min(ys))
-        self.assertLess(min(ys), SPAWN_Y - 12, "rises first")
-        self.assertEqual(ys[top:], sorted(ys[top:]), "then only falls")
-        self.assertGreaterEqual(ys[-1], 200, "ends below the screen")
-        self.assertEqual(frames, {FR_DIE_A, FR_DIE_A + 1}, "tumbles between the two death frames")
+            self.assertEqual(g.py, py, "he stays where he popped")
+        self.assertEqual(frames, {FR_DIE_A, FR_DIE_A + 1}, "the two pop frames")
 
     def test_dying_player_cannot_be_steered_or_pick_things_up(self) -> None:
         g = self.g
@@ -985,7 +1062,9 @@ class LevelClear(Base):
         g = self.g
         self.finish_level()
         self.assertEqual(g.score16, 10 + 100)
-        self.assertGreater(g.flash, 0)
+        g.idle(2)  # the wipe plants the bubble, then covers the first playfield row
+        self.assertEqual(g.mem(g.screen_addr + COLS, 256)[:COLS], bytes([127]) * COLS, "suds, not a green flash")
+        self.assertEqual(g.mem(0x63F8, 256)[:8], bytes([0x14, 0x69, 0x92, 0x82, 0x69, 0x14, 0, 0]), "the bubble glyph")
         self.assertEqual(g.left, 0)
         px = g.px
         g.step(LEFT, 10)
@@ -1038,6 +1117,47 @@ class Dots(Base):
         self.assertGreater(len(dotted), 20)
         self.assertEqual(g.left, len(dotted) + len(self.cells(T_ITEM)))
         self.assertEqual(g.left, LEVEL_ITEMS[0])
+
+    def test_dots_alternate_a_tick_and_a_tock_with_an_echo(self) -> None:
+        """Each dot is one short pure tone, and the next dot is the other one. Voice 2 answers two frames later,
+        the same pitch made a step flat and quieter."""
+        g = self.start()
+        pitches = self.rom("dot_pitch", 2)
+        lead = self.rom("dot_lead", 6)
+        echo = self.rom("dot_echo", 6)
+        self.assertEqual(len(set(pitches)), 2)
+        self.assertEqual(echo[0], 0)
+        self.assertGreater(echo[2], 0)
+        self.assertGreater(lead[0], echo[2])
+
+        def eat() -> None:
+            score = g.score16
+            for _ in range(40):
+                if g.score16 != score:
+                    return
+                before = g.px
+                g.step(RIGHT)
+                self.assertNotEqual(g.px, before, f"stuck at {g.px}")
+            self.fail(f"no dot within 40 steps (score {g.score16})")
+
+        eat()
+        self.assertEqual(g.score16, 1)
+        tone = pitches[g.sndalt]
+        heard = self.pokey()
+        self.assertEqual(g.sndk, 1)
+        self.assertEqual(heard[0], tone)
+        self.assertEqual(heard[1], 0xA0 | lead[0])
+        self.assertEqual(heard[3] & 0x0F, 0)  # the echo has not come in yet
+        g.idle(2)  # play the next two frames; the second of them is the echo
+        heard = self.pokey()
+        self.assertEqual(heard[2], (tone + 1) & 0xFF)
+        self.assertEqual(heard[3], 0xA0 | echo[2])
+        while g.sndk:
+            g.idle()
+        eat()
+        self.assertEqual(g.score16, 2)
+        self.assertEqual(self.pokey()[0], pitches[g.sndalt])
+        self.assertNotEqual(pitches[g.sndalt], tone)
 
     def test_walking_over_dots_eats_them_one_point_each(self) -> None:
         g = self.start()

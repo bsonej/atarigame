@@ -470,8 +470,9 @@ twin 124 SLIDE_L
 0220
 0220
 
-# A trampoline: a solid platform you walk over like any other (no dots in it), but land on it from the air and it
-# bounces you straight back up, just high enough to land on the next thing above you (see try_bounce in main.s).
+# A trampoline: always exactly 6 tiles wide. A solid platform you walk over like any other (no dots in it), but land
+# on it from a jump and it bounces you straight back up, just high enough to land on the next thing above you
+# (see try_bounce in main.s).
 # A middle tile is only the mat (a rubber band, two lines thick); the end caps are the posts it is anchored to, with
 # the spring legs. When he bounces the mat of the whole run sags and wobbles in the frames below (tramp_anim in main.s).
 tile 26 TRAMPOLINE T solid

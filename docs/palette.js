@@ -13,7 +13,7 @@ export const GROUPS = [
       { kind: 'tile', name: 'PLATFORM', tip: 'Thin platform: one-way. Jump up through it, land on top. Has dots too' },
       { kind: 'tile', name: 'ICE', tip: 'Ice: slow to start, slow to stop, slides far' },
       { kind: 'tile', name: 'ROLLER', tip: 'Roller: like ice, but grips sooner' },
-      { kind: 'tile', name: 'TRAMPOLINE', tip: 'Trampoline: walk over it as over any platform (no dots), but JUMP onto it (walking or falling onto it does nothing) and it bounces you straight up, just high enough to land on the next surface above you in your column (up to 14 tiles; nothing there, no bounce)' },
+      { kind: 'tile', name: 'TRAMPOLINE', tip: 'Trampoline: always exactly 6 tiles wide. Walk over it as over any platform (no dots), but JUMP onto it (walking or falling onto it does nothing) and it bounces you straight up, just high enough to land on the next surface above you in your column (up to 14 tiles; nothing there, no bounce)' },
     ],
   },
   {
@@ -85,7 +85,7 @@ export const STAMPS = [
   { label: 'Belt left', cells: row('CONV_L', 8), tip: '8 belt tiles moving left' },
   { label: 'Ice', cells: row('ICE', 8), tip: '8 ice tiles' },
   { label: 'Roller', cells: row('ROLLER', 8), tip: '8 roller tiles' },
-  { label: 'Trampoline', cells: row('TRAMPOLINE', 3), tip: '3 trampoline tiles: jump onto them and they bounce you up to the platform above' },
+  { label: 'Trampoline', cells: row('TRAMPOLINE', 6), tip: '6 trampoline tiles, the only size: jump onto them and they bounce you up to the platform above' },
   { label: 'Teleport', cells: row('TELEPORT', 3), tip: '3 teleport tiles = one teleporter. You need at least two teleporters in a level (a second stamp elsewhere); tiles that touch are one teleporter' },
   { label: 'One-use teleport', cells: row('TELEPORT_ONCE', 3), tip: '3 one-use teleport tiles = one teleporter that turns into brick after you leave by it' },
   { label: 'Bombs', cells: row('EXPLOSIVE', 4), tip: '4 bomb blocks: setting one off chains to its neighbours' },

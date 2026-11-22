@@ -24,7 +24,7 @@ standing places: from any tile of a teleporter the player can reach the first ti
 that are gone are skipped by the game, which this does not follow), so a place that can only be reached by a second trip
 may be reported unreachable, but nothing impossible is claimed. A teleporter group that mixes the two kinds, a level with
 only one teleporter group, one without room to stand on its first tile, or one bigger than 64 tiles is a problem.
-Exit status is 1 if any item, dot or the door (or the start) is unreachable or a chute is laid out wrongly.
+Exit status is 1 if any item, dot or the door (or the start) is unreachable, a chute is laid out wrongly, or a trampoline is not exactly 6 tiles wide.
 """
 
 from __future__ import annotations
@@ -270,6 +270,7 @@ def check_rows(rows: list[str]) -> list[str]:
             if ch == "^" and any(lv.solid(col + dc, r - 3) for dc in (-2, -1, 0, 1, 2)):
                 problems.append(f"the spike at column {col}, row {r} has too little headroom to jump over")
     problems += chute_problems(lv.rows)
+    problems += trampoline_problems(lv.rows)
     kinds = {(c, r): TELEPORTS[ch] for r, line in enumerate(lv.rows) for c, ch in enumerate(line) if ch in TELEPORTS}
     problems += ba.teleport_problems(kinds, lambda c, r: lv.solid(c, r) or lv.t(c, r) == "^")
     cells = lv.reachable()
@@ -280,6 +281,24 @@ def check_rows(rows: list[str]) -> list[str]:
         if not any((c + d, r) in cells for d in (-1, 0, 1)):
             problems.append(f"the dot on the platform at column {c}, row {r} looks unreachable")
     return problems
+
+
+def trampoline_problems(rows: list[str]) -> list[str]:
+    """A trampoline is one size: a horizontal run of exactly 6 `T` tiles. Any other width is a problem."""
+    out = []
+    for r, row in enumerate(rows):
+        c = 0
+        while c < len(row):
+            if row[c] != TRAMPOLINE:
+                c += 1
+                continue
+            start = c
+            while c < len(row) and row[c] == TRAMPOLINE:
+                c += 1
+            width = c - start
+            if width != 6:
+                out.append(f"the trampoline at column {start}, row {r} is {width} tiles wide: a trampoline is always 6 tiles")
+    return out
 
 
 def chute_problems(rows: list[str]) -> list[str]:

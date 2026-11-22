@@ -313,11 +313,20 @@ class Project:
         if name not in names:
             raise ApiError(404, f"save {name} first: the game only knows saved levels")
         task = shutil.which("task")
-        if not task:
-            raise ApiError(501, "the `task` command is not installed, so the server cannot build the game for you")
+        atari = shutil.which("atari800")
+        if not task or not atari:
+            raise ApiError(501, "the `task` and `atari800` commands are needed to build and run the game")
         index = names.index(name) + 1
-        subprocess.Popen(  # noqa: S603 - fixed arguments, index is an int
-            [task, "run-map", "--", str(index)],
+        # Build first, so a failure (the program no longer fits, a typo) is reported instead of vanishing.
+        built = subprocess.run(  # noqa: S603 - fixed arguments, index is an int
+            [task, "build-map", "--", str(index)],
+            cwd=self.root, capture_output=True, text=True,
+        )
+        if built.returncode != 0:
+            lines = [ln.strip() for ln in (built.stderr or built.stdout).splitlines() if ln.strip()]
+            raise ApiError(500, lines[-1] if lines else "the build failed")
+        subprocess.Popen(  # noqa: S603 - the emulator keeps running after the request returns
+            [atari, "-xl", "-nobasic", "-run", str(self.root / "build" / "atarigame-map.xex")],
             cwd=self.root,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

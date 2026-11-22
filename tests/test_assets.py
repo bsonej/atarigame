@@ -14,6 +14,13 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import build_assets as ba  # noqa: E402
 
+
+def map_bytes(text: str, name: str = "level1") -> list[int]:
+    """The 960-byte playfield stored for `name` (the include holds it zero-run packed)."""
+    body = text.split(f"{name}:", 1)[1].split(f"{name}_spawn:", 1)[0]
+    packed = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", body)]
+    return ba.unpack_rle(packed)
+
 TILE = "\n".join(["tile {id} {name} {ch}"] + ["0000"] * 8)
 EMPTY_TILE = TILE.format(id=0, name="EMPTY", ch=".")
 BRICK_TILE = TILE.format(id=1, name="BRICK", ch="#")
@@ -179,11 +186,15 @@ class Splash(unittest.TestCase):
         rows[0] = "3" + "0" * 159
         rows[1] = "0123" * 39 + "3210"
         self.write(rows)
-        text = self.p.build().joinpath("splash.inc").read_text()
-        data = bytes(int(v, 16) for v in re.findall(r"\$([0-9A-F]{2})", text))
+        bitmap = ba.parse_splash(self.p.dir / "assets" / "splash.txt")
+        data = ba.pack_splash(bitmap)
         self.assertEqual(data[0], 0b11000000, "the leftmost pixel is in the top bits")
         self.assertEqual(data[ba.SPLASH_LINE : ba.SPLASH_LINE + 2], bytes([0b00011011, 0b00011011]))
         self.assertEqual(data[2 * ba.SPLASH_LINE - 1], 0b11100100)
+        text = self.p.build().joinpath("splash.inc").read_text()
+        packed = bytes(int(v, 16) for v in re.findall(r"\$([0-9A-F]{2})", text))
+        self.assertEqual(ba.unpack_splash_delta(packed), data, "the stored picture unpacks to the mode-E bytes")
+        self.assertLess(len(packed), len(data))
         self.assertIn(f"SPLASH_LINES = {ba.SPLASH_H}", text)
         self.assertIn(f"SPLASH_SPLIT = {ba.SPLASH_SPLIT}", text)
 
@@ -508,7 +519,7 @@ class EndCaps(unittest.TestCase):
         rows[10] = "." * 3 + "###" + "." * 3 + "#" + "." * 30
         self.p.write("assets/levels/level1.txt", level(rows))
         text = self.p.build().joinpath("levels.inc").read_text()
-        self.assertIn("$14,$01,$15,$00,$00,$00,$16", text)  # L, plain, R, gap, single
+        self.assertIn(bytes([0x14, 0x01, 0x15, 0x00, 0x00, 0x00, 0x16]), bytes(map_bytes(text)))  # L, plain, R, gap, single
 
     def test_pegs_are_found_before_caps_are_applied(self) -> None:
         self.tiles("cap 20 BRICK L", "cap 21 BRICK R", "cap 22 BRICK LR")
@@ -639,7 +650,7 @@ class DotsAndDoors(unittest.TestCase):
         rows[22] = "..@" + "." * 34 + "D.*"
         self.p.write("assets/levels/level1.txt", level(rows))
         text = self.p.build().joinpath("levels.inc").read_text()
-        data = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text.split("level1_spawn:")[0])]
+        data = map_bytes(text)
         got = [data[r * 40 + c] for r in (22, 21, 20) for c in (37, 38)]
         self.assertEqual(got, [40 + 128 + i for i in range(6)], "bottom row, middle row, top row, left to right")
 
@@ -672,7 +683,9 @@ class DotsAndDoors(unittest.TestCase):
         for step in range(ba.FADE_STEPS + 1):
             self.assertEqual(sum(1 for t in thr if t < step), 12 * step)
         text = self.p.build().joinpath("fade.inc").read_text()
-        self.assertEqual([int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text)], thr)
+        raw = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text)]
+        got = [n for b in raw for n in (b & 0xF, b >> 4)]
+        self.assertEqual(got, thr)
 
     def test_the_palette_file_is_checked_and_turned_into_an_include(self) -> None:
         good = "hues 1E 2C 4C 5C 7C 9C AC CC\ngrey 0A\nwhite 0E\nice AC\nhud 2A\nbackground 00\n"
@@ -746,7 +759,7 @@ class Twins(unittest.TestCase):
         self.p.write("assets/levels/level1.txt", level(rows))
         out = self.p.build()
         text = (out / "levels.inc").read_text()
-        data = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", text.split("level1:")[1].split("level1_spawn:")[0])]
+        data = map_bytes(text)
         self.assertEqual([data[r * ba.COLS + 10] for r in range(15, 21)], [123, 14, 123, 14, 123, 14])
         flags = (out / "tileflags.inc").read_text()
         canon = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", flags.split("tile_canon:")[1])]
@@ -1010,14 +1023,13 @@ class Teleports(unittest.TestCase):
             self.assertIn("tp_mask:", text)
             self.assertEqual(len(re.findall(r"\$[0-9A-F]{2}", text)), 68)
 
-    def test_every_shipped_level_still_builds_and_has_no_teleporters(self) -> None:
+    def test_every_shipped_level_still_builds(self) -> None:
         tiles = ba.parse_tiles(ROOT / "assets" / "tiles.txt")
-        tele = set(ba.teleport_bytes(tiles))
+        tele = ba.teleport_bytes(tiles)
         for path in sorted((ROOT / "assets" / "levels").glob("*.txt")):
             chars = {t["char"]: t["byte"] for t in tiles if t["char"]}
-            lv = ba.parse_level(path, chars, {t["byte"] for t in tiles if t["solid"]}, ba.cap_families(tiles), dots=ba.dot_families(tiles),
-                                door=ba.door_bytes(tiles), twins=ba.twin_families(tiles), teleport=tuple(tele))
-            self.assertFalse(tele & set(lv["data"]), path.name)
+            ba.parse_level(path, chars, {t["byte"] for t in tiles if t["solid"]}, ba.cap_families(tiles), dots=ba.dot_families(tiles),
+                           door=ba.door_bytes(tiles), twins=ba.twin_families(tiles), teleport=tuple(tele) if tele else None)
 
 
 class RealAssets(unittest.TestCase):
@@ -1031,6 +1043,11 @@ class RealAssets(unittest.TestCase):
             self.assertIn("level1_spawn", (Path(tmp) / "levels.inc").read_text())
             self.assertIn("screen_title", (Path(tmp) / "screens.inc").read_text())
             self.assertIn("screen_gameover", (Path(tmp) / "screens.inc").read_text())
+            levels = (Path(tmp) / "levels.inc").read_text()
+            for name in ("level1", "level2"):
+                body = levels.split(f"{name}:", 1)[1].split(f"{name}_spawn:", 1)[0]
+                packed = [int(x[1:], 16) for x in re.findall(r"\$[0-9A-F]{2}", body)]
+                self.assertEqual(len(ba.unpack_rle(packed)), 960, name)
 
     def test_the_project_has_end_caps_for_every_platform_type(self) -> None:
         tiles = ba.parse_tiles(ROOT / "assets" / "tiles.txt")

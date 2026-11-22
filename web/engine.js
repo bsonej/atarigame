@@ -56,7 +56,6 @@ const JUMP_DY = [3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 0];
 export const BOUNCE_N = [0, 0, 3, 5, 8, 11, 13, 16, 19, 21, 24, 27, 29, 32, 35];
 // The trampoline's rubber band: the amplitude on each step (2 frames) of the animation, 0 plain, 1..3 sag, 4 taut (see trampDraw).
 export const TRAMP_AMP = [1, 2, 3, 3, 2, 1, 4, 4, 1, 2, 1, 4, 0];
-const DIE_DY = [0xfc, 0xfc, 0xfd, 0xfd, 0xfe, 0xfe, 0xff, 0xff, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
 const CONV_DIR = [0, 0, 0, 0, 1, 1, 1, 1];
 const CONV_SPD = [8, 16, 32, 0, 8, 16, 32, 0];
 const SLICK_ACC = [2, 4];
@@ -466,15 +465,7 @@ export class Game {
 
   modeDying() {
     this.incMtimer();
-    if (this.py < 200) {
-      let v = 6; // after the hop: a steady fall
-      if (this.dyi < DIE_DY.length) v = DIE_DY[this.dyi++];
-      if (v & 0x80) {
-        const sum = this.py + v; // negative step: do not wrap above the top of the screen
-        this.py = sum > 255 ? sum & 255 : 0;
-      } else this.py = u8(this.py + v);
-    }
-    this.frame = FRAME.DIE_A + ((this.mtimer >> 2) & 1);
+    this.frame = FRAME.DIE_A + ((this.mtimer >> 2) & 1); // he pops in place: the two pop frames, and he stays where he was
     if (this.mtimer >= DIE_FRAMES) this.deathDone();
   }
 

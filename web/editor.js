@@ -3,7 +3,7 @@
 
 import { COLS, ROWS, makeTables, parseLevelText, compileLevel, serializeLevel, titleOf, blankRows, applyCaps, applyDots, applyTwins } from './model.js';
 import { Game, MODE, JOY, STATE } from './engine.js';
-import { Atlas, COLORS, applyPlayerColours, bobFloat, cellSize, drawMap, drawTile, drawSprite, drawPlayer, drawHud, dissolveFrame, PEG_SHAPE } from './render.js';
+import { Atlas, COLORS, applyPlayerColours, bobFloat, cellSize, drawMap, drawTile, drawSprite, drawPlayer, drawHud, dissolveFrame, drawSuds, PEG_SHAPE } from './render.js';
 import { GROUPS, STAMPS, DOOR_NAMES, DOOR_CELLS, SCENE_W, SCENE_H, sceneFor } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -795,14 +795,7 @@ function drawPlay() {
     drawPlayer(ctx, dissolveFrame(sprites[g.frame] || sprites[0], tables.dissolve, g.tpS4), g.px, g.py, cell, colour, g.drawn, COLORS.eye, bobFloat(p.tick)); // he bobs, 1 to 3 lines above his box
   }
   drawHud(ctx, cell, { score: g.score, level: p.level, lives: g.lives, left: g.left });
-  if (g.mode === MODE.CLEAR) {
-    ctx.fillStyle = `rgba(80,255,120,${0.25 * (1 - g.mtimer / 60)})`;
-    ctx.fillRect(0, cell, COLS * cell, (ROWS - 1) * cell);
-  }
-  if (g.mode === MODE.DYING && g.mtimer < 12) {
-    ctx.fillStyle = `rgba(255,50,40,${0.3 * (1 - g.mtimer / 12)})`;
-    ctx.fillRect(0, cell, COLS * cell, (ROWS - 1) * cell);
-  }
+  if (g.mode === MODE.CLEAR) drawSuds(ctx, cell, g.mtimer);
   if (p.overlay) {
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(0, (ROWS / 2 - 3) * cell, COLS * cell, 6 * cell);

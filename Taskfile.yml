@@ -18,9 +18,12 @@ tasks:
     desc: Convert assets/*.txt into src/gen/*.inc
     cmds:
       - python3 tools/build_assets.py
+      - python3 tools/build_song.py
     sources:
       - assets/**/*.txt
+      - assets/music/**
       - tools/build_assets.py
+      - tools/build_song.py
     generates:
       - src/gen/tiles.inc
       - src/gen/tileflags.inc
@@ -31,6 +34,8 @@ tasks:
       - src/gen/font.inc
       - src/gen/screens.inc
       - src/gen/splash.inc
+      - src/gen/stomper_player.bin
+      - src/gen/stomper_module.bin
 
   check-levels:
     desc: Check that every item in assets/levels/*.txt can be reached (an approximation)
@@ -48,7 +53,7 @@ tasks:
         -Ln {{.BUILD_DIR}}/{{.NAME}}.lbl {{.BUILD_DIR}}/main.o
       - >-
         python3 tools/mkxex.py -o {{.BUILD_DIR}}/{{.NAME}}.xex --labels {{.BUILD_DIR}}/{{.NAME}}.lbl
-        0x2000={{.BUILD_DIR}}/code.bin 0x6000={{.BUILD_DIR}}/charset.bin 0x6400={{.BUILD_DIR}}/dlist.bin 0x8000={{.BUILD_DIR}}/splash.bin
+        0x0700={{.BUILD_DIR}}/levels.bin 0x2000={{.BUILD_DIR}}/code.bin 0x6000={{.BUILD_DIR}}/charset.bin 0x9C00={{.BUILD_DIR}}/song.bin 0xB600={{.BUILD_DIR}}/splash.bin
 
   build-test:
     desc: Build build/atarigame-test.xex, which reads its joystick from RAM (for tools/headless.py)
@@ -60,7 +65,7 @@ tasks:
         ld65 -C cfg/atari-xex-test.cfg -Ln {{.BUILD_DIR}}/test/{{.NAME}}.lbl {{.BUILD_DIR}}/test/main.o
       - >-
         python3 tools/mkxex.py -o {{.BUILD_DIR}}/{{.NAME}}-test.xex --labels {{.BUILD_DIR}}/test/{{.NAME}}.lbl
-        0x2000={{.BUILD_DIR}}/test/code.bin 0x6000={{.BUILD_DIR}}/test/charset.bin 0x6400={{.BUILD_DIR}}/test/dlist.bin 0x8000={{.BUILD_DIR}}/test/splash.bin
+        0x0700={{.BUILD_DIR}}/test/levels.bin 0x2000={{.BUILD_DIR}}/test/code.bin 0x6000={{.BUILD_DIR}}/test/charset.bin 0x9C00={{.BUILD_DIR}}/test/song.bin 0xB600={{.BUILD_DIR}}/test/splash.bin
 
   run:
     desc: Run in the atari800 emulator (XL/XE, 64 KB)
@@ -68,17 +73,25 @@ tasks:
     cmds:
       - atari800 -xl -nobasic -run {{.BUILD_DIR}}/{{.NAME}}.xex
 
-  run-map:
-    desc: "Run with games starting on map N, e.g. `task run-map -- 4` (its own .xex, build/atarigame-map.xex)"
+  build-map:
+    desc: "Assemble build/atarigame-map.xex, which starts on map N (`task build-map -- 4`)"
     deps: [assets]
+    vars:
+      MAP: '{{.CLI_ARGS}}'
     cmds:
       - mkdir -p {{.BUILD_DIR}}/map
-      - ca65 -D START_MAP={{.CLI_ARGS}} -I src -o {{.BUILD_DIR}}/map/main.o src/main.s
+      - ca65 -D START_MAP={{.MAP}} -I src -o {{.BUILD_DIR}}/map/main.o src/main.s
       - >-
         ld65 -C cfg/atari-xex.cfg -Ln {{.BUILD_DIR}}/map/{{.NAME}}.lbl {{.BUILD_DIR}}/map/main.o
       - >-
         python3 tools/mkxex.py -o {{.BUILD_DIR}}/{{.NAME}}-map.xex --labels {{.BUILD_DIR}}/map/{{.NAME}}.lbl
-        0x2000={{.BUILD_DIR}}/code.bin 0x6000={{.BUILD_DIR}}/charset.bin 0x6400={{.BUILD_DIR}}/dlist.bin 0x8000={{.BUILD_DIR}}/splash.bin
+        0x0700={{.BUILD_DIR}}/levels.bin 0x2000={{.BUILD_DIR}}/code.bin 0x6000={{.BUILD_DIR}}/charset.bin 0x9C00={{.BUILD_DIR}}/song.bin 0xB600={{.BUILD_DIR}}/splash.bin
+
+  run-map:
+    desc: "Run with games starting on map N, e.g. `task run-map -- 4` (its own .xex, build/atarigame-map.xex)"
+    cmds:
+      - task: build-map
+        vars: {MAP: '{{.CLI_ARGS}}'}
       - atari800 -xl -nobasic -run {{.BUILD_DIR}}/{{.NAME}}-map.xex
 
   editor:

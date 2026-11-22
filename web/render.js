@@ -14,7 +14,7 @@ export const COLORS = {
   player: '#ffbcc4', // Atari $4E until the palette file is read
   eye: '#ffffff',
   third: '#4941ae', // Atari $86: the ice blue, shared with his pupils and grin
-  peg: '#ff5a4a',
+  peg: atariColour(0x0e), // a white bath towel (PCOLR1)
   hud: '#f4f4f4',
 };
 
@@ -240,7 +240,33 @@ export function dissolveFrame(frame, masks, s4) {
   return { ...frame, rows: m(frame.rows), eyes: m(frame.eyes), thirdPx: frame.thirdPx ? m(frame.thirdPx) : frame.thirdPx };
 }
 
-export const PEG_SHAPE = [0x60, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0x90];
+// A bath towel: folded top, a tuck, a stripe, a fringe. Same bytes as peg_shape in src/main.s.
+export const PEG_SHAPE = [0x7c, 0x7c, 0x38, 0x7c, 0x54, 0x7c, 0x7c, 0x54];
+
+/**
+ * The bubble-bath wipe between levels. Playfield rows 1..n are covered in suds, one new row every two frames
+ * (the same timing as bath_wipe in src/main.s). Row 0, the score, stays.
+ */
+export function drawSuds(ctx, cell, mtimer) {
+  const n = Math.min(ROWS - 1, mtimer >> 1);
+  if (n < 1) return;
+  ctx.fillStyle = '#f6d0d8';
+  ctx.fillRect(0, cell, COLS * cell, n * cell);
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const x = c * cell + cell * 0.5;
+      const y = cell + r * cell + cell * 0.42;
+      ctx.beginPath();
+      ctx.arc(x, y, cell * 0.3, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x - cell * 0.08, y - cell * 0.08, cell * 0.07, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    }
+  }
+}
 
 /** HUD text as the game shows it, in row 0. */
 export function drawHud(ctx, cell, { score, level, lives, left }) {

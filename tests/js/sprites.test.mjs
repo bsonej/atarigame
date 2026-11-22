@@ -256,8 +256,9 @@ test('the bob stays within 1 to 3 lines above the surface and agrees with the ta
   assert.equal(Math.max(...BOB_FLOAT), 3);
   assert.ok(BOB_FLOAT.every((v, i) => Math.abs(v - BOB_FLOAT[(i + 1) % 64]) <= 1), 'one line at a time');
   const asm = fs.readFileSync(path.join(ROOT, 'src/main.s'), 'utf8');
-  const body = /^bob_float:\n((?:\s+\.byte [\d,]+\n)+)/m.exec(asm)[1];
-  assert.deepEqual([...body.matchAll(/\d+/g)].map((m) => Number(m[0])), [...BOB_FLOAT]);
+  const cuts = ['BOB_3', 'BOB_2', 'BOB_1', 'BOB_BACK'].map((name) => Number(new RegExp(`^${name}\\s*=\\s*(\\d+)`, 'm').exec(asm)[1]));
+  const bob = (i) => (i < cuts[0] ? 2 : i < cuts[1] ? 3 : i < cuts[2] ? 2 : i < cuts[3] ? 1 : 2);
+  assert.deepEqual(Array.from({ length: 64 }, (_, i) => bob(i)), [...BOB_FLOAT]);
 });
 
 test('the third colour is free: any single pixel can be o, painted and erased one at a time', () => {

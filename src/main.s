@@ -20,11 +20,13 @@
         .exportzp fps, tp_t, tp_lock, tp_k, tp_c, tp_r, tp_dc, tp_dr, tp_s4
         .exportzp px, py, state, jt, bn, jumped, hop, hdir, rkind, fall, score, hiscore, left, lives, level, lvlidx
         .exportzp mode, demo, demo_n, timer, mtimer, frame, drawn, deaths, joy, anim, moved, flash
+        .exportzp sndk, sndp, sndalt
         .exportzp ai_have, ai_ic, ai_ir, ai_goal
         .exportzp under, vx, vfrac, cfrac, cacc, gtick, pg_n, joyprev, cacc_t, fcount, cdir, pfloat
         .export tp_a, tp_b, tp_n, tp_hr, tp_hc
         .export tt_col, tt_row, tt_t, tt_ph, tt_kind, tt_orig, pg_x, pg_y, pg_min, pg_max, pg_dir, pg_wait, cph
         .export pal0, pal1, pal2, pal3, dli_row, dli_n, ai_kind, door_open, door_dir, door_phase, door_art, face
+        .export dot_pitch, dot_lead, dot_echo, item_fx, jump_fx, sndhw
 
         .include "gen/tiles.inc"
         .include "gen/font.inc"                 ; .charmap: .byte "TEXT" gives glyph ids
@@ -73,9 +75,21 @@ SIZEP0  = $D008
 SIZEM   = $D00C
 GRACTL  = $D01D
 PAL     = $D014         ; bits 1-3 are zero on a PAL machine
-AUDF1   = $D200
+AUDF1   = $D200         ; the four POKEY voices, frequency then control, in order
 AUDC1   = $D201
+AUDF2   = $D202
+AUDC2   = $D203
+AUDF3   = $D204
+AUDC3   = $D205
+AUDF4   = $D206
+AUDC4   = $D207
 PMBASE  = $D407
+; Happy Pokey Stomper (Roland Voss / Triace, 2014). tools/build_song.py places the RMT player
+; at $9C00 and the module at $A400. The player keeps its pointers in a_best..tt_j ($CB-$DD).
+RMT_INIT   = $9E70
+RMT_PLAY   = $9E73
+RMT_STOP   = $9E79
+RMT_MODULE = $A400
 
 ; ---- memory layout (must match cfg/atari-xex.cfg) --------------------------
 CHARSET_ADDR = $6000
@@ -87,7 +101,7 @@ PM_YOFF = 32            ; PM byte index of the first playfield scan line
 PM0Y    = PM0 + PM_YOFF
 PLAYER_FLOAT = 2        ; he is a bubble: drawn this many scan lines above the surface he stands on (purely visual;
                         ; the physics box is unchanged). Keep equal to FLOAT in web/spritemodel.js and tools/headless.py.
-                        ; On top of that he bobs: bob_float holds the actual float for each of 64 frames (1 to 3 lines,
+                        ; On top of that he bobs: bob_at gives the float for each of 64 frames (1 to 3 lines,
                         ; PLAYER_FLOAT +/- 1, a slow sine), indexed by the OS frame counter (RTCLOK+2) and kept in pfloat.
 PM3Y    = PM0Y + $300     ; Player 3: the eyes
 MISSY   = PMAREA + $0300 + PM_YOFF      ; the missiles: 2 bits a line each, M0 in bits 1-0 ... M3 in bits 7-6
@@ -179,6 +193,12 @@ CLEAR_FRAMES = 60
 TITLE_IDLE_SECS = 10
 DEMO_SECS    = 30
 OVER_SECS    = 10
+SFX_DOT      = 1        ; sndk: the dot's tick-tock, the item's pop, the jump (0 is an ordinary one-voice tone)
+SFX_ITEM     = 2
+SFX_JUMP     = 3
+DOT_FRAMES   = 6
+ITEM_FRAMES  = 6
+JUMP_FRAMES  = 6
 
         .export SCREEN, PM0, M_TITLE, M_PLAY, M_DYING, M_SPAWN, M_CLEAR, M_OVER, M_TELE
 
@@ -228,11 +248,11 @@ tr_a:     .res 1        ; ... the amplitude being drawn
 tr_i:     .res 1
 frame:    .res 1        ; player sprite frame to draw
 drawn:    .res 1        ; how many lines of it to draw (the spawn animation reveals it)
-dyi:      .res 1        ; index into die_dy
+dyi:      .res 1        ; unused (the death used to be a hop); kept so later addresses stay put
 newhi:    .res 1
 deaths:   .res 1        ; counts deaths, for the tests
-snd:      .res 1        ; sound timer / volume
-sndf:     .res 1        ; sound pitch
+snd:      .res 1        ; plain-tone timer: its volume, counting down once a frame
+sndf:     .res 1        ; ... and its pitch
 flash:    .res 1        ; background flash timer
 flashc:   .res 1        ; background flash colour
 ptr:      .res 2
@@ -288,6 +308,10 @@ tp_mr:    .res 1        ; flood fill: the first tile (reading order) found, row 
 tp_mc:    .res 1
 tcx:      .res 1        ; flood fill: the tile being looked at
 tcy:      .res 1
+pk:       .res 1        ; scratch for the masked sprite rows and for counting picture lines while unpacking
+sndk:     .res 1        ; 0 = the plain tone on voice 1 (snd/sndf); SFX_DOT, SFX_ITEM or SFX_JUMP plays a pattern
+sndp:     .res 1        ; the frame of that pattern
+sndalt:   .res 1        ; which of the two dot tones is in front; it flips each dot
 
         .segment "BSS"
 tt_col:   .res 8        ; timed tiles (bomb blocks and vanishing blocks that have been stepped on)
@@ -374,6 +398,8 @@ start:
         sta hjoy
         sta hprev
         sta snd
+        sta sndk
+        sta sndalt
         sta flash
         sta oldpy
         sta frame
@@ -409,6 +435,8 @@ start:
         lda #4
         sta cacc
         jsr clear_pm
+        jsr build_dlists        ; the display lists are filled here, not stored
+        jsr unpack_splash       ; the title picture is stored packed and expanded to $8000
         lda #<dlist
         sta SDLSTL
         lda #>dlist
@@ -769,6 +797,7 @@ update_player:
         inc jumped              ; (0 on the ground)
         lda #S_AIR
         sta state
+        jsr sfx_jump            ; the leap; walking off a ledge stays silent
         jmp do_horiz
 @surface:
         jsr surface_drift       ; belts carry you; sets `under`
@@ -1393,10 +1422,7 @@ try_bounce:
         lda #0
         sta fall
         jsr tramp_start
-        lda #6                  ; a short "boing"
-        sta snd
-        lda #$50
-        sta sndf
+        jsr sfx_jump            ; the same leap as a jump
         sec
         rts
 
@@ -1649,29 +1675,23 @@ check_tiles:
 
 ; An item is picked up (it is already off the screen).
 pickup:
-        lda #8
-        sta snd
-        lda #$28
-        sta sndf
+        jsr sfx_item
         lda #ITEM_POINTS
         jmp collected
 
 ; A dot is eaten.
 pickup_dot:
-        lda #2
-        sta snd
-        lda #$40
-        sta sndf
+        jsr sfx_dot
         lda #DOT_POINTS
 collected:
         jsr add_score
         dec left
         bne @rts
         jsr open_doors          ; that was the last one: the exit opens
-        lda #14
-        sta snd
         lda #$20
         sta sndf
+        lda #14
+        jsr sfx_note            ; the door's tone replaces the dot or the item that opened it
         lda #$A8                ; cyan flash
         sta flashc
         lda #12
@@ -1691,10 +1711,6 @@ level_clear:
         sta door_dir            ; ... which fades away behind him
         lda #FR_STAND
         sta frame
-        lda #$C8                ; green flash
-        sta flashc
-        lda #25
-        sta flash
         rts
 
 ; Everything is collected: the exit door fades in.
@@ -1725,7 +1741,7 @@ door_draw:
         lda d_b
         and #$C0
         sta d_t                 ; the pixel, in bits 7-6
-        lda door_thr,y
+        jsr door_step           ; the fade step of this pixel (door_thr holds two per byte)
         cmp door_phase
         bcs @hidden             ; not yet its turn
         lda d_t
@@ -1824,15 +1840,12 @@ die:
         sta mtimer
         sta dyi
         sta moved
+        sta sndk                ; cut off a dot or an item; the pop starts next frame
         lda #16
         sta drawn
         lda #FR_DIE_A
         sta frame
         inc deaths
-        lda #$34                ; red flash
-        sta flashc
-        lda #20
-        sta flash
 @rts:   rts
 
 ; ---------------------------------------------------------------------------
@@ -1864,28 +1877,12 @@ mode_play:
 @draw:  jsr draw_player
         jmp draw_hud
 
-; Death: the player hops, tumbles off the bottom of the screen, then we respawn or end the game.
+; Death: he pops in place (the two pop frames), then we respawn or end the game. He does not hop or fall.
 mode_dying:
         jsr inc_mtimer
-        lda py
-        cmp #200
-        bcs @drawn              ; fallen out of sight
-        ldx dyi
-        cpx #DIE_LEN
-        bcs @fast
-        inc dyi
-        lda die_dy,x
-        bpl @add
-        clc                     ; negative: do not wrap above the top of the screen
-        adc py
-        bcs @set
-        lda #0
-        beq @set
-@fast:  lda #6
-@add:   clc
-        adc py
-@set:   sta py
-@drawn: lda mtimer              ; tumble between the two frames, flicker the colour
+        lda #0                  ; the pop replaces a dot or an item that was still sounding
+        sta sndk
+        lda mtimer              ; the two pop frames, and his colour flickers
         lsr a
         lsr a
         and #1
@@ -1899,8 +1896,8 @@ mode_dying:
         bne @c2
 @c1:    lda #PAL_PLAYER
 @c2:    sta PCOLR0
-        lda mtimer              ; falling pitch
-        cmp #44
+        lda mtimer              ; a short pop
+        cmp #18
         bcs @quiet
         lda #5
         sta snd
@@ -1930,6 +1927,8 @@ mode_spawn:
         lda hjoy                ; keep joy current so a held button is not a fresh press later
         sta joy
         jsr inc_mtimer
+        lda #0
+        sta sndk
         lda mtimer
         cmp #SPAWN_FRAMES/3*2
         bcs @blink
@@ -1985,6 +1984,8 @@ mode_tele:
         lda hjoy                ; keep joy current so a held button is not a fresh press later
         sta joy
         jsr inc_mtimer
+        lda #0
+        sta sndk
         lda mtimer
         cmp #TP_FRAMES/2+1
         bne @nomove
@@ -2021,9 +2022,11 @@ mode_tele:
         sta tp_lock             ; he stands on a teleporter: step off before it charges again
 @rts:   rts
 
-; Level cleared: flash and play a rising arpeggio, then on to the next level.
+; Level cleared: a rising arpeggio while a bubble bath wipes the screen, then on to the next level.
 mode_clear:
         jsr inc_mtimer
+        lda #0
+        sta sndk
         jsr door_fade
         lda mtimer
         lsr a
@@ -2034,8 +2037,7 @@ mode_clear:
         sta sndf
         lda #4
         sta snd
-        lda #2
-        sta flash
+        jsr bath_wipe
         jsr draw_player
         jsr draw_hud
         lda mtimer
@@ -2056,7 +2058,50 @@ mode_clear:
 @go:    jmp begin_level
 @r:     rts
 
+; The change of level is a bubble bath, not a colour flash. Glyph 127 is a soap bubble (a bright glint, a hollow
+; middle), and every other frame one more playfield row turns into bubbles. The score row is left alone. The
+; bubble scrolls up so the suds move. The next level is drawn over them when this mode ends.
+bath_wipe:
+        lda mtimer
+        cmp #1
+        bne @rows               ; the first frame plants the bubble in the character set
+        ldx #7
+@art:   lda bubble,x
+        sta CHARSET_ADDR + 127 * 8,x
+        dex
+        bpl @art
+@rows:  lda mtimer
+        lsr a
+        beq @spin               ; 0 is the score row
+        cmp #24
+        bcs @spin
+        tax
+        lda row_lo,x
+        sta ptr
+        lda row_hi,x
+        sta ptr+1
+        ldy #39
+        lda #127
+@cell:  sta (ptr),y
+        dey
+        bpl @cell
+@spin:  lda mtimer
+        and #3
+        bne @rts
+        lda CHARSET_ADDR + 127 * 8
+        sta tmp
+        ldx #0
+@up:    lda CHARSET_ADDR + 127 * 8 + 1,x
+        sta CHARSET_ADDR + 127 * 8,x
+        inx
+        cpx #7
+        bcc @up
+        lda tmp
+        sta CHARSET_ADDR + 127 * 8 + 7
+@rts:   rts
+
 mode_title:
+        jsr RMT_PLAY
         lda RTCLOK+2
         and #$20
         beq @off
@@ -2070,6 +2115,20 @@ mode_title:
         bne @rts
         jmp enter_attract
 @rts:   rts
+
+; Silence the title song. Its pointers live in a_best..tt_j, which gameplay uses for other
+; things, so those are cleared too. The player's own stop routine puts POKEY back to the
+; plain 64 kHz channels the sound effects expect.
+        .assert a_best = $CB, error, "the title song's pointers must stay at $CB"
+        .assert tt_j = $DD, error, "the title song's pointers must stay through $DD"
+tune_off:
+        jsr RMT_STOP
+        ldx #(tt_j - a_best)
+        lda #0
+@c:     sta a_best,x
+        dex
+        bpl @c
+        rts
 
 mode_over:
         jsr inc_mtimer
@@ -2110,6 +2169,11 @@ enter_title:
         sta mtimer
         sta flash
         sta snd
+        sta sndk                ; the title song has the whole POKEY from here
+        lda #0                  ; song line 0
+        ldx #<RMT_MODULE
+        ldy #>RMT_MODULE
+        jsr RMT_INIT
         jsr hide_player
         ; The picture's colours (shadow registers) and the title's display list are both taken over by the next vertical
         ; blank, together, and so is the display-list interrupt that goes with it (vbi_hook): the swap is clean. The text
@@ -2118,11 +2182,7 @@ enter_title:
         jsr set_dl_title
         jsr vwait
         jsr splash_text_colors
-        lda #<screen_title
-        sta ptr
-        lda #>screen_title
-        sta ptr+1
-        jsr copy_map
+        jsr draw_title
         lda hiscore
         sta dn
         lda hiscore+1
@@ -2194,11 +2254,7 @@ enter_gameover:
         sta hiscore+1
         lda #1
         sta newhi
-@nohi:  lda #<screen_gameover
-        sta ptr
-        lda #>screen_gameover
-        sta ptr+1
-        jsr copy_map
+@nohi:  jsr draw_gameover
         jsr title_colors
         lda #$44
         sta COLOR3              ; red "game over"
@@ -2220,15 +2276,16 @@ enter_gameover:
         lda newhi
         beq @s
         PUTSTR str_newhi, 15, 12
-@s:     lda #14
-        sta snd
-        lda #$B0
+@s:     lda #$B0
         sta sndf
+        lda #14
+        jsr sfx_note
         lda #OVER_SECS
         jmp set_timer_secs
 
 ; Load the map for lvlidx, put the player at its start and play the "come to life" animation.
 begin_level:
+        jsr tune_off            ; leaving the title (a new game, or the demo) lets the tune go
         ldx lvlidx
         lda level_lo,x
         sta ptr
@@ -2292,22 +2349,281 @@ begin_level:
         jsr set_dl_play         ; (from the title this is the change of display list: it happens at the next vertical blank)
         jmp game_colors
 
-; Copy 1 KB from ptr to the screen.
+; Expand the zero-run map at ptr into the 960-byte screen. A 0 is followed by the number of zeros to write
+; (1-255); any other byte is one tile. Stops after exactly 960 bytes, which is the whole playfield.
 copy_map:
         lda #<SCREEN
         sta ptr2
         lda #>SCREEN
         sta ptr2+1
-        ldx #4
-@page:  ldy #0
-@copy:  lda (ptr),y
-        sta (ptr2),y
-        iny
-        bne @copy
+        lda #$C0
+        sta tmp                 ; 960 bytes still to write
+        lda #$03
+        sta tmp2
+@next:  ldy #0
+        lda (ptr),y
+        jsr adv_ptr
+        cmp #0
+        beq @run
+        jsr map_put
+        jmp @next
+@run:   ldy #0
+        lda (ptr),y
+        jsr adv_ptr
+        tax
+@zero:  lda #0
+        jsr map_put
+        dex
+        bne @zero
+        jmp @next
+
+adv_ptr:
+        inc ptr
+        bne @ok
         inc ptr+1
+@ok:    rts
+
+; Write A to the screen and count it. The 960th byte returns from copy_map itself.
+map_put:
+        ldy #0
+        sta (ptr2),y
+        inc ptr2
+        bne @p
+        inc ptr2+1
+@p:     lda tmp
+        bne @d
+        dec tmp2
+@d:     dec tmp
+        lda tmp
+        ora tmp2
+        beq @last
+        rts
+@last:  pla
+        pla
+        rts
+
+; The fade step (0-15) of door pixel Y. door_thr stores two of them per byte, the even index in the low nibble.
+door_step:
+        tya
+        lsr a
+        tay
+        lda door_thr,y
+        bcc @lo
+        lsr a
+        lsr a
+        lsr a
+        lsr a
+@lo:    and #$0F
+        rts
+
+; Blank the 1 KB screen.
+clear_screen:
+        lda #<SCREEN
+        sta ptr2
+        lda #>SCREEN
+        sta ptr2+1
+        ldx #4
+        lda #0
+@page:  ldy #0
+@b:     sta (ptr2),y
+        iny
+        bne @b
         inc ptr2+1
         dex
         bne @page
+        rts
+
+; The title's text rows. The picture covers rows 0-21, so only HI-SCORE (row 23) is stored, and the digits are
+; written just after this by enter_title. Row 22 is the blinking PRESS FIRE.
+draw_title:
+        jsr clear_screen
+        PUTSTR str_hiscore, 23, 13
+        rts
+
+; The game-over card: a brick frame (rows 1 and 23 solid, the rows between framed at the edges) and its three
+; labels. The score digits, the hi-score digits and NEW HIGH SCORE are written over it by enter_gameover.
+draw_gameover:
+        jsr clear_screen
+        ldx #39
+        lda #T_BRICK
+@bar:   sta SCREEN + 40,x
+        sta SCREEN + 23 * 40,x
+        dex
+        bpl @bar
+        ldx #2
+@side:  lda row_lo,x
+        sta ptr
+        lda row_hi,x
+        sta ptr+1
+        ldy #0
+        lda #T_BRICK
+        sta (ptr),y
+        ldy #39
+        sta (ptr),y
+        inx
+        cpx #23
+        bne @side
+        PUTSTR str_over, 7, 15
+        PUTSTR str_score, 10, 13
+        PUTSTR str_hiscore, 12, 13
+        rts
+
+; Fill the two display lists. They are the same bytes the ROM used to hold: 24 blank lines, then the picture or
+; the playfield, then a jump back to the top.
+build_dlists:
+        jsr build_play_dl
+        jmp build_title_dl
+
+build_play_dl:
+        lda #$70
+        sta dlist
+        sta dlist+1
+        sta dlist+2
+        lda #$C4
+        sta dlist+3
+        lda #<SCREEN
+        sta dlist+4
+        lda #>SCREEN
+        sta dlist+5
+        ldx #21
+        lda #$84
+@m:     sta dlist+6,x
+        dex
+        bpl @m
+        lda #$04
+        sta dlist+28
+        lda #$41
+        sta dlist+29
+        lda #<dlist
+        sta dlist+30
+        lda #>dlist
+        sta dlist+31
+        rts
+
+build_title_dl:
+        lda #<dlist_title
+        sta ptr2
+        lda #>dlist_title
+        sta ptr2+1
+        lda #$70
+        jsr dl_emit
+        jsr dl_emit
+        jsr dl_emit
+        lda #$4E
+        jsr dl_emit
+        lda #<splash
+        jsr dl_emit
+        lda #>splash
+        jsr dl_emit
+        ldx #SPLASH_SPLIT-1
+        lda #$0E
+        jsr dl_emit_x
+        lda #$4E
+        jsr dl_emit
+        lda #<splash_b
+        jsr dl_emit
+        lda #>splash_b
+        jsr dl_emit
+        ldx #SPLASH_LINES - SPLASH_SPLIT - 2
+        lda #$0E
+        jsr dl_emit_x
+        lda #$8E
+        jsr dl_emit
+        lda #$44
+        jsr dl_emit
+        lda #<(SCREEN + SPLASH_TEXT * 40)
+        jsr dl_emit
+        lda #>(SCREEN + SPLASH_TEXT * 40)
+        jsr dl_emit
+        lda #$04
+        jsr dl_emit
+        lda #$41
+        jsr dl_emit
+        lda #<dlist_title
+        jsr dl_emit
+        lda #>dlist_title
+        jmp dl_emit
+
+dl_emit_x:
+        jsr dl_emit
+        dex
+        bne dl_emit_x
+        rts
+
+dl_emit:
+        ldy #0
+        sta (ptr2),y
+        inc ptr2
+        bne @e
+        inc ptr2+1
+@e:     rts
+
+; Expand splash_pack over the picture RAM. Each row is five groups of eight bytes: a flag byte (bit 0 is the
+; leftmost; set = the next source byte, clear = the byte in the row above) and then just those source bytes.
+; Line SPLASH_SPLIT is written at splash_b, the next 4 KB boundary, and the 16 bytes in between stay zero.
+unpack_splash:
+        lda #<splash_pack
+        sta ptr
+        lda #>splash_pack
+        sta ptr+1
+        lda #<splash
+        sta ptr2
+        lda #>splash
+        sta ptr2+1
+        lda #0
+        sta sptr
+        sta sptr+1
+        sta pk
+@line:  lda pk
+        cmp #SPLASH_SPLIT
+        bne @go
+        lda #<splash_b
+        sta ptr2
+        lda #>splash_b
+        sta ptr2+1
+@go:    lda ptr2
+        pha
+        lda ptr2+1
+        pha
+        ldx #5                  ; 40 bytes a line, eight at a time
+@grp:   ldy #0
+        lda (ptr),y
+        jsr adv_ptr
+        sta tmp
+        lda #8
+        sta tmp2
+@bit:   lsr tmp
+        bcc @copy
+        ldy #0
+        lda (ptr),y
+        jsr adv_ptr
+        jmp @put
+@copy:  lda sptr+1
+        beq @nil
+        ldy #0
+        lda (sptr),y
+        jmp @put
+@nil:   lda #0
+@put:   ldy #0
+        sta (ptr2),y
+        inc ptr2
+        bne @d1
+        inc ptr2+1
+@d1:    inc sptr
+        bne @d2
+        inc sptr+1
+@d2:    dec tmp2
+        bne @bit
+        dex
+        bne @grp
+        pla
+        sta sptr+1
+        pla
+        sta sptr
+        inc pk
+        lda pk
+        cmp #SPLASH_LINES
+        bne @line
         rts
 
 ; The play screen's colours: the score row has its own, every other row gets a hue from pal_hues (stepping
@@ -2344,8 +2660,8 @@ game_colors:
         sta PCOLR0              ; pink bubble
         lda #PAL_EYES
         sta PCOLR3              ; white eyes
-        lda #$46
-        sta PCOLR1              ; red pegs
+        lda #$0E
+        sta PCOLR1              ; white towels
         sta PCOLR2
         rts
 
@@ -2652,7 +2968,7 @@ draw_player:
         lda RTCLOK+2            ; the bubble drifts up and down: 1 to 3 lines above his box, a period of 64 frames
         and #63
         tax
-        lda bob_float,x
+        jsr bob_at
         sta pfloat
         lda py
         sec
@@ -2668,31 +2984,94 @@ draw_player:
         sta ptr
         lda spr_hi,x
         sta ptr+1
+        ldx oldpy
+        ldy #0
+@body:  cpy drawn
+        bcs @eyes
+        lda (ptr),y
+        sta PM0Y,x
+        inx
+        iny
+        cpy #SPR_H
+        bne @body
+@eyes:  ldx frame                  ; the eyes and the third colour are stored as a mask plus the lines that have pixels
         lda spr_elo,x
-        sta ptr2
+        sta sptr
         lda spr_ehi,x
-        sta ptr2+1
+        sta sptr+1
+        lda #<PM3Y
+        sta mask_put+1
+        lda #>PM3Y
+        sta mask_put+2
+        jsr draw_mask
+        ldx frame
         lda spr_tlo,x
         sta sptr
         lda spr_thi,x
         sta sptr+1
-        ldx oldpy
-        ldy #0
-@draw:  cpy drawn
-        bcs @rts
-        lda (ptr),y
-        sta PM0Y,x
-        lda (ptr2),y
-        sta PM3Y,x
-        lda (sptr),y
-        sta MISSY,x
-        inx
-        iny
-        cpy #SPR_H
-        bne @draw
+        lda #<MISSY
+        sta mask_put+1
+        lda #>MISSY
+        sta mask_put+2
+        jsr draw_mask
         lda tp_s4
         bne tp_mask_player      ; teleporting: dissolve what was drawn
 @rts:   rts
+
+; Draw one masked sprite (eyes or missiles) at oldpy. sptr points at a 16-bit mask, low byte first, bit 0 of it the
+; top row, then the bytes of the rows whose bit is set. mask_put is the sta absolute,x the caller points at the page.
+; The code runs from RAM, so patching those two address bytes is the one copy of this loop serving both pages.
+draw_mask:
+        ldy #0
+        lda (sptr),y
+        sta tmp
+        iny
+        lda (sptr),y
+        sta tmp2
+        iny
+        ldx #0
+dm_row: cpx drawn
+        bcs dm_rts
+        lsr tmp2
+        ror tmp
+        bcc dm_zero
+        lda (sptr),y
+        iny
+        bne dm_put
+dm_zero:
+        lda #0
+dm_put: pha
+        stx pk
+        txa
+        clc
+        adc oldpy
+        tax
+        pla
+mask_put:
+        sta a:$0000,x           ; absolute,x (forced): the caller overwrites the two address bytes
+        ldx pk
+        inx
+        cpx #SPR_H
+        bne dm_row
+dm_rts: rts
+
+; X = frame 0..63. A = how many lines he floats above his box: 2, then 3, then 2, then 1, then 2.
+; BOB_3, BOB_2, BOB_1 and BOB_BACK are the frames where it changes. The editor's BOB_FLOAT is the same series.
+bob_at:
+        lda #2
+        cpx #BOB_3
+        bcc @done
+        lda #3
+        cpx #BOB_2
+        bcc @done
+        lda #2
+        cpx #BOB_1
+        bcc @done
+        lda #1
+        cpx #BOB_BACK
+        bcc @done
+        lda #2
+@done:  rts
 
 ; AND the 16 lines just drawn with the dissolve step's mask (tp_mask, see build_assets.py): a row's byte is the mask
 ; of the body and the eyes, and rotated left by two bits it is the mask of the missiles (their bits are laid out in
@@ -2825,6 +3204,37 @@ draw_hud:
         ldx #3
         jmp put_dec
 
+; A plain tone on voice 1. A is how many frames it lasts (and its volume, which falls by one a frame);
+; the pitch is already in sndf. A dot or item pattern that is still playing is cut off.
+sfx_note:
+        sta snd
+        lda #0
+        sta sndk
+        rts
+
+; The next dot. The two tones take turns in front; the other details are in sfx_dot_play.
+sfx_dot:
+        lda sndalt
+        eor #1
+        sta sndalt
+        lda #SFX_DOT
+        bne sfx_begin           ; (always)
+
+; An item: the bubble pop in item_fx.
+sfx_item:
+        lda #SFX_ITEM
+        bne sfx_begin           ; (always)
+
+; A jump: the rising leap in jump_fx.
+sfx_jump:
+        lda #SFX_JUMP
+sfx_begin:
+        sta sndk
+        lda #0
+        sta sndp
+        sta snd                 ; the pattern owns the voices; a plain tone must not also play
+        rts
+
 ; Background flash and sound effects.
 update_fx:
         lda flash
@@ -2838,17 +3248,137 @@ update_fx:
         bne @setbg
         lda #PAL_SPLASH_BG      ; the title: the picture's pink (COLBK also colours the text rows and the border)
 @setbg: sta COLOR4
-@snd:   lda snd
+@snd:   lda sndk
+        beq @plain
+        jmp sfx_play
+@plain: lda snd
         beq @off
         dec snd
         and #$0F
         ora #$A0                ; pure tone
-        sta AUDC1
+        sta sndhw+1
         lda sndf
-        sta AUDF1
+        sta sndhw
+        lda #0                  ; a plain tone does not leave an echo or a pop ringing
+        sta sndhw+3
+        sta sndhw+5
+        sta sndhw+7
+        jmp sfx_commit
+@off:   lda mode
+        beq @rts                ; the title tune is using the POKEY; a game sound effect is not
+        ldx #7
+        lda #0
+@clr:   sta sndhw,x
+        dex
+        bpl @clr
+        jmp sfx_commit
+@rts:   rts
+
+; One frame of a dot, an item or a jump. The frame count lives in sndp.
+sfx_play:
+        lda sndk
+        cmp #SFX_DOT
+        beq sfx_dot_play
+        cmp #SFX_JUMP
+        beq sfx_jump_play
+sfx_item_play:
+        ldx sndp
+        cpx #ITEM_FRAMES
+        bcs sfx_stop
+        inc sndp
+        txa
+        asl a
+        asl a
+        asl a                   ; 8 bytes a frame: freq, control, for each of the four voices
+        tax
+        ldy #0
+@b:     lda item_fx,x
+        sta sndhw,y
+        inx
+        iny
+        cpy #8
+        bcc @b
+        jmp sfx_commit
+
+sfx_jump_play:
+        ldx sndp
+        cpx #JUMP_FRAMES
+        bcs sfx_stop
+        inc sndp
+        txa
+        asl a
+        asl a
+        asl a
+        tax
+        ldy #0
+@b:     lda jump_fx,x
+        sta sndhw,y
+        inx
+        iny
+        cpy #8
+        bcc @b
+        jmp sfx_commit
+
+sfx_dot_play:
+        ldx sndp
+        cpx #DOT_FRAMES
+        bcs sfx_stop
+        inc sndp
+        lda sndalt
+        and #1
+        tay
+        lda dot_pitch,y
+        sta tmp                 ; the tone in front this dot
+        clc
+        adc #1                  ; the echo is that same tone, one step flat
+        sta tmp2
+        lda dot_lead,x
+        jsr sfx_v1
+        lda dot_echo,x
+        jsr sfx_v2
+        lda #0                  ; the tick is two voices; a pop's crack must not hang on
+        sta sndhw+5
+        sta sndhw+7
+        jmp sfx_commit
+
+sfx_stop:
+        lda #0
+        sta sndk
+        ldx #7
+@c:     sta sndhw,x
+        dex
+        bpl @c
+        jmp sfx_commit
+
+; Copy sndhw to the four voices. The POKEY registers do not read back, so the copy is what a test reads.
+sfx_commit:
+        ldy #7
+@c:     lda sndhw,y
+        sta AUDF1,y
+        dey
+        bpl @c
         rts
-@off:   lda #0
-        sta AUDC1
+
+; A is a volume, 0 for silence. Voice 1 is pitched from tmp, voice 2 from tmp2, both pure tones.
+; The bytes are staged in sndhw; the caller writes them to the chip.
+sfx_v1:
+        beq @z
+        ora #$A0
+        sta sndhw+1
+        lda tmp
+        sta sndhw
+        rts
+@z:     sta sndhw+1
+        rts
+
+sfx_v2:
+        beq @z
+        ora #$A0
+        sta sndhw+3
+        lda tmp2
+        sta sndhw+2
+        rts
+@z:     sta sndhw+3
         rts
 
 ; ---------------------------------------------------------------------------
@@ -2957,10 +3487,10 @@ arm_cell:
         sta tt_t,x
         lda #PH_FUSE
         sta tt_ph,x
-        lda #3
-        sta snd
-        lda #$60
+        lda #$60                ; the fuse being lit
         sta sndf
+        lda #3
+        jsr sfx_note            ; X is the slot, and sfx_note keeps it
         rts
 
 ; Write tile A into the screen cell of slot X.
@@ -3597,10 +4127,10 @@ explode:
         sta tt_t,x
         lda #T_BOOM
         jsr set_cell
-        lda #14
-        sta snd
         lda #$28
         sta sndf
+        lda #14
+        jsr sfx_note            ; X is the slot
         lda #$28                ; orange flash
         sta flashc
         lda #5
@@ -4329,12 +4859,14 @@ ai_ground:
         rts
 
 ; ---------------------------------------------------------------------------
+        .segment "LEVELS"           ; the maps live at $0700 (free RAM: no DOS). They no longer fit beside the code.
+
+        .include "gen/levels.inc"       ; the maps and the level tables
+
         .segment "RODATA"
 
         .include "gen/sprites.inc"      ; defines SPR_COUNT and spr_frames
-        .include "gen/levels.inc"       ; the maps and the level tables
-        .include "gen/screens.inc"      ; screen_title, screen_gameover
-        .include "gen/fade.inc"         ; door_thr: when each pixel of the exit door shows
+        .include "gen/fade.inc"         ; door_thr: when each pixel of the exit door shows (two steps a byte)
         .include "gen/dissolve.inc"     ; tp_mask: the teleport dissolve's masks
         .include "gen/helix.inc"        ; helix_r, helix_l: the thread of the chutes
         .include "gen/tileflags.inc"    ; tile_flags: bit 0 solid, bit 1 one-way
@@ -4363,18 +4895,58 @@ tramp_tile: .byte T_TRAMPOLINE, T_TRAMPOLINE_S1, T_TRAMPOLINE_S2, T_TRAMPOLINE_S
 ; the smallest n with 17 + 3n >= 8k + 8, i.e. ceil((8k - 9) / 3), at least 0.
 bounce_n: .byte 0,0,3,5,8,11,13,16,19,21,24,27,29,32,35
 
-; Lines he floats above his box on each of 64 frames (index RTCLOK+2 and 63): 2 + round(sin), so 1 to 3.
-bob_float:
-        .byte 2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3
-        .byte 3,3,3,3,3,3,3,3,3,3,3,2,2,2,2,2
-        .byte 2,2,2,2,2,2,1,1,1,1,1,1,1,1,1,1
-        .byte 1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2
+; Lines he floats above his box (bob_at): 2 up to frame BOB_3, 3 up to BOB_2, 2 up to BOB_1, 1 up to BOB_BACK, then 2.
+BOB_3    = 6
+BOB_2    = 27
+BOB_1    = 38
+BOB_BACK = 59
 
-; The death hop: signed pixels per frame, then a steady fall.
-die_dy:  .byte $FC,$FC,$FD,$FD,$FE,$FE,$FF,$FF,0,1,1,2,2,3,3,4,4,5,5
-DIE_LEN = * - die_dy
+; What the four voices were set to this frame (AUDF1, AUDC1, ... AUDC4). Staged here, then copied to the
+; chip: those registers do not read back.
+sndhw:  .byte 0, 0, 0, 0, 0, 0, 0, 0
+
+; The dot. Two pure tones about a fifth apart. sndalt starts at 0 and flips before each dot, so the
+; first dot plays the second byte (the high tick) and the next plays the first (the low tock): a row
+; of them goes tick, tock, tick, tock. dot_lead is the front tone's volume per frame and dot_echo the
+; answer on voice 2: silent until the tick has been heard, then the same pitch a step flat, quieter,
+; dying away. A pure tone in this range, with that late flat repeat, is the short outer-space blip.
+dot_pitch: .byte $2C, $1D
+dot_lead:  .byte 8, 5, 2, 0, 0, 0
+dot_echo:  .byte 0, 0, 4, 3, 1, 0
+        .assert dot_echo - dot_lead = DOT_FRAMES, error, "the dot's front envelope must be DOT_FRAMES"
+        .assert * - dot_echo = DOT_FRAMES, error, "the dot's echo envelope must be DOT_FRAMES"
+
+; The item: a bubble popping. Six frames, eight bytes each, written straight to AUDF1..AUDC4.
+; Voices 1 and 2 are pure tones an octave apart and they rise: the bubble, with a lower voice for
+; body. The third frame starts a 4-bit crack; the fourth snaps the pitch up, the crack is loudest
+; (the pop) and voice 4 rings a high pure tone that is all that is left at the end.
+item_fx:
+        .byte $34, $A8, $69, $A6, $00, $00, $00, $00
+        .byte $22, $AB, $45, $A8, $00, $00, $00, $00
+        .byte $14, $AD, $29, $A9, $02, $C8, $00, $00
+        .byte $0A, $AC, $15, $A6, $03, $CE, $05, $AA
+        .byte $08, $A5, $00, $00, $06, $C5, $09, $A6
+        .byte $00, $00, $00, $00, $00, $00, $0C, $A2
+        .assert * - item_fx = ITEM_FRAMES * 8, error, "the item sound must be ITEM_FRAMES frames of 8 bytes"
+
+; The jump, and a trampoline bounce. Six frames, eight bytes each, written straight to AUDF1..AUDC4.
+; Voices 1 and 2 are pure tones a fifth apart, a minor third lower than the first version of this
+; leap, and they rise. Voices 3 and 4 are the space echo: the lead again, two frames late and a few
+; steps flat, then the same echo once more, later and flatter still, so the spare channels trail off
+; behind the jump.
+jump_fx:
+        .byte $43, $A8, $65, $A6, $00, $00, $00, $00
+        .byte $30, $AB, $49, $A8, $00, $00, $00, $00
+        .byte $1D, $AC, $2C, $A9, $46, $A5, $00, $00
+        .byte $11, $AB, $1A, $A8, $33, $A4, $49, $A3
+        .byte $16, $A6, $21, $A4, $20, $A3, $36, $A2
+        .byte $1B, $A3, $00, $00, $14, $A2, $23, $A1
+        .assert * - jump_fx = JUMP_FRAMES * 8, error, "the jump sound must be JUMP_FRAMES frames of 8 bytes"
 
 clear_notes: .byte $79,$5F,$4B,$3C
+
+; A soap bubble for the level wipe (glyph 127): outline, white glint, hollow middle. Two blank rows sit under it.
+bubble:  .byte $14,$69,$92,$82,$69,$14,$00,$00
 
 ; Belts, by tile id - 64: drift direction, drift speed (0 = accelerating), animation period - 1.
 conv_dir:  .byte 0,0,0,0,1,1,1,1
@@ -4388,7 +4960,8 @@ slick_fric:  .byte 1,2
 slick_fmask: .byte 1,0
 
 probe_dx:  .byte 2,0,3                  ; where under the feet to look: middle, left, right
-peg_shape: .byte $60,$F0,$F0,$F0,$F0,$F0,$F0,$90
+; A bath towel: a folded top, a tucked middle, a stripe, and a fringe. It still sweeps the platform.
+peg_shape: .byte $7C,$7C,$38,$7C,$54,$7C,$7C,$54
 nb_dc:     .byte $FF,1,0,0              ; the four neighbours of a block: left, right, up, down
 nb_dr:     .byte 0,0,$FF,1
 wrap_tab:  .byte LEVEL_COUNT,DEMO_LEVELS
@@ -4397,18 +4970,6 @@ wrap_tab:  .byte LEVEL_COUNT,DEMO_LEVELS
 pt_dx:  .byte 0,3,0,3,0,3
 pt_dy:  .byte 3,3,8,8,13,13
 
-spr_elo: .repeat SPR_COUNT, i
-        .byte <(spr_eyes + SPR_H * i)
-        .endrepeat
-spr_ehi: .repeat SPR_COUNT, i
-        .byte >(spr_eyes + SPR_H * i)
-        .endrepeat
-spr_tlo: .repeat SPR_COUNT, i
-        .byte <(spr_third + SPR_H * i)
-        .endrepeat
-spr_thi: .repeat SPR_COUNT, i
-        .byte >(spr_third + SPR_H * i)
-        .endrepeat
 spr_lo: .repeat SPR_COUNT, i
         .byte <(spr_frames + SPR_H * i)
         .endrepeat
@@ -4427,48 +4988,35 @@ str_left:    STR "LEFT"
 str_press:   STR "PRESS FIRE TO START"
 str_press2:  STR "PRESS FIRE"
 str_newhi:   STR "NEW HIGH SCORE!"
+str_hiscore: STR "HI-SCORE"
+str_over:    STR "game over"
 str_blank5:  BLANK 5
 str_blank10: BLANK 10
 str_blank19: BLANK 19
 
 ; ---------------------------------------------------------------------------
-; The picture (assets/splash.txt, ANTIC mode E): its own load segment of the .xex at $8000 (nothing else uses $8000-$BFFF).
+; The picture is unpacked into this RAM at startup (see unpack_splash). The packed bytes are the PACK segment.
+; splash_b is the second 4 KB block: ANTIC cannot cross a 4 KB boundary in the middle of a mode-E line.
         .segment "SPLASH"
-        .include "gen/splash.inc"
+splash: .res $1B90
 splash_b = splash + $1000
 
+        .segment "PACK"
+        .include "gen/splash.inc"
+
+; The display lists are filled by build_dlists. Keeping them out of the file is what shrinks the ROM; the bytes
+; ANTIC reads are the same ones the file used to contain.
         .segment "DLIST"
-dlist:
-        .byte $70,$70,$70               ; 24 blank scan lines
-        .byte $C4                       ; mode 4 + load memory scan + interrupt
-        .word SCREEN
-        .repeat 22
-        .byte $84                       ; mode 4 + interrupt: sets up the next row's colours
-        .endrepeat
-        .byte $04
-        .byte $41                       ; jump and wait for vertical blank
-        .word dlist
+dlist:       .res 32
+dlist_title: .res 192
 
-; The title: the picture (SPLASH_LINES lines of mode E, 40 bytes each, in two blocks because ANTIC cannot cross a
-; 4 KB boundary within a line: the second block is at the next boundary), then the title's two text rows, which are
-; the last two rows of the screen RAM. The interrupt on the picture's last line switches to the text colours.
-dlist_title:
-        .byte $70,$70,$70               ; 24 blank scan lines (the same top as the game's display list)
-        .byte $4E                       ; mode E + load memory scan
-        .word splash
-        .repeat SPLASH_SPLIT - 1
-        .byte $0E
-        .endrepeat
-        .byte $4E                       ; the next block, at the next 4 KB boundary
-        .word splash_b
-        .repeat SPLASH_LINES - SPLASH_SPLIT - 2
-        .byte $0E
-        .endrepeat
-        .byte $8E                       ; the last line of the picture + interrupt
-        .byte $44                       ; mode 4 text + load memory scan
-        .word SCREEN + SPLASH_TEXT * 40
-        .byte $04
-        .byte $41
-        .word dlist_title
-
+        .segment "CHARSET"
         .include "gen/charset.inc"
+
+; The title song, loaded with the program: the player, then the module on the next page.
+        .segment "SONG"
+        .assert * = $9C00, error, "the stomper player is assembled for $9C00"
+        .incbin "gen/stomper_player.bin"
+        .assert * = $9C00 + $07D1, error, "the stomper player changed size"
+        .res $A400 - $9C00 - $07D1
+        .incbin "gen/stomper_module.bin"

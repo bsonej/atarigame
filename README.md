@@ -490,5 +490,5 @@ the player is a few pixels off from the floor (he should hover 2 lines above it)
 
 ## Memory map
 
-`$2000-$5FFF` code and data (levels, screens, sprites) · `$6000` character set (1 KB aligned) · `$6400` display list ·
-`$6500` screen (40x24) · `$8000-$9B8F` the title picture (mode E bitmap, in its own load segment; `$8000-$BFFF` is free otherwise) · `$7000` player/missile area (2 KB aligned; the missiles, Mr. Bubble's third colour, at `$7300`; player 0 at `$7400`, the pegs are players 1 and 2 and Mr. Bubble's eyes player 3) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).
+`$0700-$1FFF` the level maps (zero-run packed) · `$2000-$5FFF` code and data (sprites) · `$6000` character set (1 KB aligned) · `$6400` display lists (filled at startup) ·
+`$6500` screen (40x24) · `$8000-$9B8F` the title picture once unpacked · `$9C00` the title song (player, module at `$A400`) · `$B600` the packed picture · `$7000` player/missile area (2 KB aligned; the missiles, Mr. Bubble's third colour, at `$7300`; player 0 at `$7400`, the pegs are players 1 and 2 and Mr. Bubble's eyes player 3) · zero page `$80-$F7` · tables for timed tiles, pegs and belt animation at `$0600-$06DF` (the TEST build's joystick bytes are at `$06F0`).

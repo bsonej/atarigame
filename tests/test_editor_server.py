@@ -408,12 +408,14 @@ class RunningTheGame(ServerCase):
         self.assertIn("task", res["error"])
 
     def test_the_map_number_is_its_place_in_the_game(self) -> None:
-        with mock.patch("editor_server.shutil.which", return_value="/usr/local/bin/task"), mock.patch("editor_server.subprocess.Popen") as popen:
+        with mock.patch("editor_server.shutil.which", side_effect=lambda name: f"/usr/local/bin/{name}"), \
+                mock.patch("editor_server.subprocess.run", return_value=mock.Mock(returncode=0, stderr="", stdout="")) as run, \
+                mock.patch("editor_server.subprocess.Popen") as popen:
             status, res = self.req("POST", "/api/run", {"name": "level4"})
         self.assertEqual((status, res["index"]), (200, 4))
-        args, kwargs = popen.call_args
-        self.assertEqual(args[0], ["/usr/local/bin/task", "run-map", "--", "4"])
-        self.assertEqual(Path(kwargs["cwd"]).resolve(), self.tmp.resolve())
+        self.assertEqual(run.call_args[0][0], ["/usr/local/bin/task", "build-map", "--", "4"])
+        self.assertEqual(popen.call_args[0][0][:2], ["/usr/local/bin/atari800", "-xl"])
+        self.assertEqual(Path(popen.call_args.kwargs["cwd"]).resolve(), self.tmp.resolve())
 
 
 if __name__ == "__main__":

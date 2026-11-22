@@ -21,7 +21,8 @@ import build_assets as ba  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 from atari_palette import atari_rgb  # noqa: E402  the emulator's NTSC palette, shared with the editor
 # Mr. Bubble's colours come from assets/palette.txt: player (body), eyes, and ice (his third colour, the missiles)
-PEG = atari_rgb(0x44)  # the red a peg flashes; close to the old hand-picked red
+PEG = atari_rgb(0x0E)  # the white bath towel (PCOLR1)
+PEG_SHAPE = (0x7C, 0x7C, 0x38, 0x7C, 0x54, 0x7C, 0x7C, 0x54)  # peg_shape in src/main.s
 PLAYER_FLOAT = 2  # he is a bubble: drawn this many lines above the surface (PLAYER_FLOAT in src/main.s)
 
 
@@ -86,9 +87,10 @@ def render(level: Path, out: Path, scale: int = 6, root: Path = ROOT, level_inde
                 if colour:
                     pix[min(h - 1, sy + y)][sx - 2 + x] = colour
     for x, y, *_ in lv["pegs"]:
-        for yy in range(8):
-            for xx in range(4):
-                pix[y + yy][x + xx] = PEG
+        for yy, bits in enumerate(PEG_SHAPE):
+            for xx in range(8):
+                if bits & (0x80 >> xx) and 0 <= x + xx < w and 0 <= y + yy < h:
+                    pix[y + yy][x + xx] = PEG
     rows = []
     for y in range(h):
         line = b"".join(bytes(c) * scale for c in pix[y])
